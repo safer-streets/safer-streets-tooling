@@ -5,11 +5,10 @@ from pathlib import Path
 
 import pandas as pd
 import requests
-from safer_streets_core.database import duckdb_connector
-from safer_streets_core.utils import data_dir
+from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets._common import download, write_geoparquet
+from safer_streets_tooling.datasets._common import download, raw_dir
 from safer_streets_tooling.datasets.base import Dataset, ExtractContext
 
 # Isochrones are 10-minute walk catchments over the open_roads network.
@@ -62,14 +61,14 @@ def _download_gias(*, force_download: bool = False) -> Path:
     back to yesterday's if today's has not been published yet.
     """
     src = data_source("schools")
-    matches = sorted(data_dir().glob(src["glob"]))
+    matches = sorted(raw_dir().glob(src["glob"]))
     if matches and not force_download:
         print(f"  Using cached {matches[-1]}")
         return matches[-1]
 
     for day in (date.today(), date.today() - timedelta(days=1)):
         stamp = day.strftime("%Y%m%d")
-        csv_path = data_dir() / src["csv"].format(date=stamp)
+        csv_path = raw_dir() / src["csv"].format(date=stamp)
         try:
             download(src["url"].format(date=stamp), csv_path)
             return csv_path

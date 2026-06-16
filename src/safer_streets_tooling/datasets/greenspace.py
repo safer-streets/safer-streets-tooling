@@ -2,11 +2,10 @@
 
 from zipfile import ZipFile
 
-from safer_streets_core.database import duckdb_connector
-from safer_streets_core.utils import data_dir
+from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets._common import download, write_geoparquet
+from safer_streets_tooling.datasets._common import download, raw_dir
 from safer_streets_tooling.datasets.base import Dataset, ExtractContext
 
 
@@ -21,7 +20,7 @@ def extract(ctx: ExtractContext) -> None:
     yields a ``geom`` column.
     """
     src = data_source("greenspace")
-    zip_path = data_dir() / src["zip"]
+    zip_path = raw_dir() / src["zip"]
     if ctx.force_download or not zip_path.exists():
         download(src["url"], zip_path)
     else:

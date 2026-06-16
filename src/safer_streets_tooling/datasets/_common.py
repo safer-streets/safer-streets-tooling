@@ -1,13 +1,11 @@
 """Shared helpers for dataset extractors.
 
-Downloading, zip-member extraction, geometry-column normalisation, and the parquet read/write
-primitives that move data between the in-memory *extract* phase and the *assemble* phase.
+Downloading, zip-member extraction, and geometry-column normalisation. The parquet read/write
+primitives that move data between the in-memory *extract* phase and the *assemble* phase live in
+``safer_streets_core.database`` (``write_geoparquet`` / ``read_geoparquet``).
 
-Geometry is British National Grid (EPSG:27700) everywhere by convention. The DuckDB GEOMETRY type
-carries no CRS, so its native GeoParquet writer tags written geometry as ``OGC:CRS84``; that label is
-not relied upon — the coordinates are the contract, and ``database.index_geometry_tables`` strips the
-CRS qualifier back to a bare ``GEOMETRY`` on assemble. Sources supplied in another CRS are reprojected
-to BNG inside their extractor before being written.
+Geometry is British National Grid (EPSG:27700) everywhere by convention. Sources supplied in another
+CRS are reprojected to BNG inside their extractor before being written.
 """
 
 import shutil
@@ -16,7 +14,18 @@ from zipfile import ZipFile
 
 import duckdb
 import requests
+from safer_streets_core.utils import data_dir
 from tqdm import tqdm
+
+
+def raw_dir() -> Path:
+    """Directory under the data dir holding raw source files (downloaded or manually placed).
+
+    Created on access so a fresh download always has somewhere to land.
+    """
+    d = data_dir() / "raw"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def download(url: str, dest: Path) -> None:
@@ -60,21 +69,3 @@ def rename_geom_column(con: duckdb.DuckDBPyConnection, table: str) -> None:
     ]
     if geom_cols and geom_cols[0] != "geom":
         con.execute(f'ALTER TABLE "{table}" RENAME COLUMN "{geom_cols[0]}" TO geom;')
-
-
-def write_geoparquet(con: duckdb.DuckDBPyConnection, query: str, out_path: Path) -> None:
-    """Dump ``query`` (a ``geom`` GEOMETRY column is written as GeoParquet WKB) to ``out_path``.
-
-    A temp file is written then moved into place so a crash never leaves a half-written parquet.
-    """
-    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
-    con.execute(f"COPY ({query}) TO '{tmp}' (FORMAT parquet);")
-    tmp.replace(out_path)
-
-
-def read_geoparquet(path: Path) -> str:
-    """SQL reading a dataset parquet back; a ``geom`` column returns as GEOMETRY directly (BNG assumed).
-
-    Wrap in ``CREATE [OR REPLACE] TABLE <name> AS <this>`` to materialise it.
-    """
-    return f"SELECT * FROM read_parquet('{path}')"

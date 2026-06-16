@@ -1,10 +1,9 @@
 """GeoDS Retail Centre Boundaries → ``retail_centres.parquet``."""
 
-from safer_streets_core.database import duckdb_connector
-from safer_streets_core.utils import data_dir
+from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets._common import write_geoparquet
+from safer_streets_tooling.datasets._common import raw_dir
 from safer_streets_tooling.datasets.base import Dataset, ExtractContext
 
 
@@ -18,7 +17,7 @@ def extract(ctx: ExtractContext) -> None:
     nearest-centre lookup measures distances in metres).
     """
     gpkg_name = data_source("retail_centres")["gpkg"]
-    gpkg = data_dir() / gpkg_name
+    gpkg = raw_dir() / gpkg_name
     if not gpkg.exists():
         raise FileNotFoundError(
             f"GeoDS Retail Centre Boundaries GeoPackage not found: {gpkg}\n"

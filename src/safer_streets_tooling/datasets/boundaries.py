@@ -7,18 +7,17 @@ after its final table. The id field is renamed to ``spatial_id`` (matching the H
 """
 
 import requests
-from safer_streets_core.database import duckdb_connector
-from safer_streets_core.utils import data_dir
+from safer_streets_core.database import duckdb_connector, write_geoparquet
 from scripts import ons_boundaries
 
-from safer_streets_tooling.datasets._common import write_geoparquet
+from safer_streets_tooling.datasets._common import raw_dir
 from safer_streets_tooling.datasets.base import Dataset, ExtractContext
 
 
 def _make_extract(layer_key: str, table: str):
     def extract(ctx: ExtractContext) -> None:
         info = ons_boundaries.sources()["layers"][layer_key]
-        gpkg = data_dir() / f"{info['filename']}_bng.gpkg"
+        gpkg = raw_dir() / f"{info['filename']}_bng.gpkg"
         if ctx.force_download or not gpkg.exists():
             session = requests.Session()
             session.headers.update({"User-Agent": "ONS-Boundary-Downloader/1.0"})

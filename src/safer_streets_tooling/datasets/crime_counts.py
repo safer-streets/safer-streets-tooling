@@ -2,13 +2,10 @@
 
 from collections.abc import Callable
 
-from safer_streets_core.database import duckdb_connector
-from safer_streets_core.utils import data_dir
+from safer_streets_core.database import duckdb_connector, read_geoparquet, write_geoparquet
 
-from safer_streets_tooling.datasets._common import read_geoparquet, write_geoparquet
+from safer_streets_tooling.config import H3_RESOLUTIONS
 from safer_streets_tooling.datasets.base import Dataset, ExtractContext
-
-H3_RESOLUTIONS = [8, 9, 10]
 
 
 def _make_extract(size: int) -> Callable[[ExtractContext], None]:
@@ -22,7 +19,7 @@ def _make_extract(size: int) -> Callable[[ExtractContext], None]:
             con.execute(f"""
                 CREATE TABLE crime_counts_h3_{size} AS (
                 WITH c AS (
-                    {read_geoparquet(data_dir() / "build/crime_data.parquet")}
+                    {read_geoparquet(ctx.parquet("crime_data"))}
                 )
                 SELECT
                     lower(hex(h3_latlng_to_cell(latitude, longitude, {size}))) AS spatial_id,

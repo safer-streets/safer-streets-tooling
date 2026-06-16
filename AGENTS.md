@@ -15,19 +15,23 @@ catalogue (`safer_streets_core.utils.data_source`, backed by core's `config/data
 the ONS boundary downloader (`scripts.ons_boundaries`, which lives in core). It adds **no new data
 logic of its own to core** — core stays as-is.
 
-### Two-phase pipeline
+### Three-phase pipeline (extract → transform → load)
 
-The `data` CLI (one entry point, three commands) drives a dataset registry
-(`safer_streets_tooling.datasets.DATASETS`):
+The `data` CLI (`extract`, `transform`, `load`, plus `assemble` = transform+load and `build` = all
+three) drives a dataset registry (`safer_streets_tooling.datasets.DATASETS`):
 
 1. **extract** — each dataset is downloaded and preprocessed in its **own in-memory DuckDB** and dumped
-   to a `<name>.parquet` GeoParquet file under `data_dir()/build`. The extractors run **concurrently**
+   to a `<name>.parquet` GeoParquet file under `data_dir()/extract` (raw source files are cached under
+   `data_dir()/raw`). The extractors run **concurrently**
    as nodes in an `AsyncPipeline`, respecting `depends_on` edges. Each parquet is a durable per-dataset
    cache, so one dataset can be refreshed without rebuilding everything.
-2. **assemble** — present parquet files are imported into a `<name>.staging.db`, geometry tables are
-   repaired and RTree-indexed (`index_geometry_tables`), the H3 transforms run
-   (`transforms.build_all`), and the staging file is **atomically promoted** (`os.replace`) over the
-   live database. Consumers therefore only ever see a complete database.
+2. **transform** — the extracted parquet are loaded into a throwaway in-memory DuckDB, geometry is
+   indexed, and the H3 aggregations run (`transforms.build_all`, `replace=False` so the extracted
+   `crime_counts_h3_*` are kept). Every newly-derived relation (per-cell lookups + `h3_{res}_geogs`) is
+   written out as its own parquet under `data_dir()/transform` — a durable cache, no live DB touched.
+3. **load** — present parquet (extract + transform) are imported into a `<name>.staging.db`, geometry
+   tables are repaired and RTree-indexed (`index_geometry_tables`), and the staging file is
+   **atomically promoted** (`os.replace`) over the live database. Consumers only ever see a complete DB.
 
 ### Key modules
 
@@ -142,8 +146,8 @@ When reviewing a PR or diff, check:
 6. **Coverage** — change keeps total coverage at or above the 65% gate; new code paths have tests.
 7. **No core edits** — the change does not depend on modifying `safer-streets-core`.
 8. **Types & ruff** — precise annotations, no suppressed `select` rules without justification.
-9. **Docs** — if the pipeline, CLI flags, the dataset set, or the extract DAG change, update
-   [README.md](README.md) (including its Extract-DAG mermaid diagram).
+9. **Docs** — if the pipeline, CLI flags, the dataset set, or the extract/transform DAG change, update
+   [README.md](README.md) (including its extract & transform DAG mermaid diagram).
 
 ## QA Rules
 

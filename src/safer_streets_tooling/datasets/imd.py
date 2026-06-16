@@ -11,11 +11,10 @@ same country".
 import duckdb
 import pandas as pd
 import requests
-from safer_streets_core.database import duckdb_connector
-from safer_streets_core.utils import data_dir
+from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets._common import download, write_geoparquet
+from safer_streets_tooling.datasets._common import download, raw_dir
 from safer_streets_tooling.datasets.base import Dataset, ExtractContext
 
 # original IoD column name -> short name; everything except IMD_PASSTHROUGH is percentile-ranked. This
@@ -60,9 +59,9 @@ def _imd_england(*, force_download: bool = False) -> pd.DataFrame:
     IMD_PASSTHROUGH) is replaced by its percentile rank within England (0–1, higher = more deprived).
     """
     src = data_source("imd")
-    matches = sorted(data_dir().glob(src["glob"]))
+    matches = sorted(raw_dir().glob(src["glob"]))
     if force_download or not matches:
-        csv_path = data_dir() / src["csv"]
+        csv_path = raw_dir() / src["csv"]
         download(src["url"], csv_path)
     else:
         csv_path = matches[-1]
@@ -103,7 +102,7 @@ def _imd_wales(ctx: ExtractContext, *, force_download: bool = False) -> pd.DataF
     score (1 = most deprived); ``lad24cd`` is looked up from the boundary parquet by LA name.
     """
     src = data_source("wimd")
-    ods_path = data_dir() / src["ods"]
+    ods_path = raw_dir() / src["ods"]
     if force_download or not ods_path.exists():
         download(src["url"], ods_path)
     else:

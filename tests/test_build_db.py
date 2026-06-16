@@ -9,7 +9,7 @@ import geopandas as gpd
 import pandas as pd
 import pytest
 import requests
-from safer_streets_core.database import duckdb_connector
+from safer_streets_core.database import duckdb_connector, read_geoparquet, write_geoparquet
 from shapely import LineString, Polygon
 
 from safer_streets_tooling import build_db
@@ -39,10 +39,21 @@ def _ctx(tmp_path: Path, *, force_download: bool = False) -> ExtractContext:
     return ExtractContext(staging=tmp_path, force_download=force_download)
 
 
+def _raw(tmp_path: Path) -> Path:
+    """Raw-source dir under the (patched) data dir; created so fixtures can write source files into it.
+
+    Extractors read raw inputs from ``raw_dir()`` (``data_dir()/raw``); patch ``_common.data_dir`` to
+    ``tmp_path`` so the whole pipeline — every module's ``raw_dir`` — resolves here.
+    """
+    d = tmp_path / "raw"
+    d.mkdir(exist_ok=True)
+    return d
+
+
 def _read_parquet(path: Path):
     """Read a dataset parquet back into a fresh connection (geom returns as GEOMETRY)."""
     con = _connect()
-    con.execute(f"CREATE TABLE t AS {_common.read_geoparquet(path)}")
+    con.execute(f"CREATE TABLE t AS {read_geoparquet(path)}")
     return con
 
 
@@ -69,15 +80,15 @@ def _make_greenspace_zip(zip_path: Path, *, layer: str = "GB_GreenspaceSite") ->
 
 def test_greenspace_raises_when_layer_absent(tmp_path, monkeypatch):
     # a cached zip that lacks the GreenspaceSite layer should raise (before touching a connection)
-    monkeypatch.setattr(greenspace, "data_dir", lambda: tmp_path)
-    _make_greenspace_zip(tmp_path / GREENSPACE_ZIP, layer="GB_AccessPoint")
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    _make_greenspace_zip(_raw(tmp_path) / GREENSPACE_ZIP, layer="GB_AccessPoint")
     with pytest.raises(FileNotFoundError, match="GB_GreenspaceSite.shp not found"):
         greenspace.extract(_ctx(tmp_path))
 
 
 def test_greenspace_extracts_to_parquet(tmp_path, monkeypatch):
-    monkeypatch.setattr(greenspace, "data_dir", lambda: tmp_path)
-    _make_greenspace_zip(tmp_path / GREENSPACE_ZIP)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    _make_greenspace_zip(_raw(tmp_path) / GREENSPACE_ZIP)
     _connect().close()  # skip early if extensions unavailable
 
     greenspace.extract(_ctx(tmp_path))  # zip already cached → no download
@@ -92,7 +103,7 @@ def test_greenspace_extracts_to_parquet(tmp_path, monkeypatch):
 
 
 def test_greenspace_downloads_when_zip_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(greenspace, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     called = {"n": 0}
 
     def fake_download(url: str, dest: Path) -> None:
@@ -120,26 +131,36 @@ def _gpkg_in_zip(zip_path: Path, gdf: gpd.GeoDataFrame, arcname: str, *, layer: 
 
 
 def test_land_cover_missing_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(land_cover, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     with pytest.raises(FileNotFoundError, match="Land Cover Map GeoPackage not found"):
         land_cover.extract(_ctx(tmp_path))
 
 
 def test_land_cover_extracts_to_parquet(tmp_path, monkeypatch):
-    monkeypatch.setattr(land_cover, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     gdf = gpd.GeoDataFrame(
-        {"gid": [1, 2], "_mode": [20, 21]},  # 20 = urban, 21 = suburban
-        geometry=[Polygon([(0, 0), (100, 0), (100, 100), (0, 100)]), Polygon([(200, 200), (300, 200), (300, 300)])],
+        # two adjacent urban (20) tiles that should dissolve into one polygon, one suburban (21),
+        # and a non-built-up class (10) that must be dropped
+        {"gid": [1, 2, 3, 4], "_mode": [20, 20, 21, 10]},
+        geometry=[
+            Polygon([(0, 0), (100, 0), (100, 100), (0, 100)]),
+            Polygon([(100, 0), (200, 0), (200, 100), (100, 100)]),
+            Polygon([(200, 200), (300, 200), (300, 300), (200, 300)]),
+            Polygon([(400, 400), (500, 400), (500, 500), (400, 500)]),
+        ],
         crs="EPSG:27700",
     )
-    _gpkg_in_zip(tmp_path / LAND_COVER_ZIP, gdf, "lcm-2024.gpkg")
+    _gpkg_in_zip(_raw(tmp_path) / LAND_COVER_ZIP, gdf, "lcm-2024.gpkg")
     _connect().close()
 
     land_cover.extract(_ctx(tmp_path))
     con = _read_parquet(tmp_path / "land_cover.parquet")
     cols = [d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description]
-    assert {"gid", "_mode", "geom"} <= set(cols)
+    assert {"gid", "urban", "geom"} <= set(cols)
+    # non-built-up class dropped; the two urban tiles dissolve to one polygon, suburban stays one
     assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 2
+    assert con.execute("SELECT COUNT(*) FROM t WHERE urban").fetchone()[0] == 1
+    assert con.execute("SELECT COUNT(*) FROM t WHERE NOT urban").fetchone()[0] == 1
     con.close()
 
 
@@ -147,14 +168,14 @@ def test_land_cover_extracts_to_parquet(tmp_path, monkeypatch):
 
 
 def test_roads_extracts_road_link_layer(tmp_path, monkeypatch):
-    monkeypatch.setattr(roads, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     gdf = gpd.GeoDataFrame(
         {"id": ["R1", "R2"], "road_function": ["Local Road", "A Road"]},
         geometry=[LineString([(0, 0), (100, 100)]), LineString([(0, 100), (100, 0)])],
         crs="EPSG:27700",
     )
     # mirror the real bundle: a gpkg at Data/oproad_gb.gpkg with a 'road_link' layer
-    _gpkg_in_zip(tmp_path / ROADS_ZIP, gdf, "Data/oproad_gb.gpkg", layer="road_link")
+    _gpkg_in_zip(_raw(tmp_path) / ROADS_ZIP, gdf, "Data/oproad_gb.gpkg", layer="road_link")
     _connect().close()
 
     roads.extract(_ctx(tmp_path))  # zip cached → no download
@@ -228,13 +249,13 @@ def test_poi_extracts_filtered_places(tmp_path, monkeypatch):
 
 
 def test_retail_centres_missing_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(retail_centres, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     with pytest.raises(FileNotFoundError, match="Retail Centre Boundaries GeoPackage not found"):
         retail_centres.extract(_ctx(tmp_path))
 
 
 def test_retail_centres_extracts_and_reprojects(tmp_path, monkeypatch):
-    monkeypatch.setattr(retail_centres, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     gdf = gpd.GeoDataFrame(
         {
             "RC_ID": ["RC1", "RC2"],
@@ -254,7 +275,7 @@ def test_retail_centres_extracts_and_reprojects(tmp_path, monkeypatch):
         ],
         crs="EPSG:4326",
     )
-    gdf.to_file(tmp_path / data_source("retail_centres")["gpkg"], driver="GPKG")
+    gdf.to_file(_raw(tmp_path) / data_source("retail_centres")["gpkg"], driver="GPKG")
     _connect().close()
 
     retail_centres.extract(_ctx(tmp_path))
@@ -297,7 +318,7 @@ def _write_square_roads_parquet(path: Path) -> None:
     """Materialise the synthetic square road network as an open_roads parquet (schools' dependency)."""
     con = _connect()
     con.execute(_SQUARE_ROADS)
-    _common.write_geoparquet(con, "SELECT * FROM open_roads", path)
+    write_geoparquet(con, "SELECT * FROM open_roads", path)
     con.close()
 
 
@@ -313,8 +334,8 @@ def test_walk_isochrones_is_convex_hull_of_reachable_nodes():
 
 
 def test_download_gias_uses_cache(tmp_path, monkeypatch):
-    monkeypatch.setattr(schools, "data_dir", lambda: tmp_path)
-    cached = tmp_path / "edubasealldata20990101.csv"
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    cached = _raw(tmp_path) / "edubasealldata20990101.csv"
     _write_gias_csv(cached)
     # a cached file is reused without hitting the network
     monkeypatch.setattr(schools, "download", lambda *a, **k: pytest.fail("should not download"))
@@ -322,7 +343,7 @@ def test_download_gias_uses_cache(tmp_path, monkeypatch):
 
 
 def test_download_gias_downloads_dated_url(tmp_path, monkeypatch):
-    monkeypatch.setattr(schools, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     urls: list[str] = []
 
     def fake_download(url, path):
@@ -332,12 +353,12 @@ def test_download_gias_downloads_dated_url(tmp_path, monkeypatch):
     monkeypatch.setattr(schools, "download", fake_download)
     today = date.today().strftime("%Y%m%d")
     result = schools._download_gias()
-    assert result == tmp_path / f"edubasealldata{today}.csv"
+    assert result == _raw(tmp_path) / f"edubasealldata{today}.csv"
     assert urls == [f"https://ea-edubase-api-prod.azurewebsites.net/edubase/downloads/public/edubasealldata{today}.csv"]
 
 
 def test_download_gias_falls_back_to_yesterday(tmp_path, monkeypatch):
-    monkeypatch.setattr(schools, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
 
     def fake_download(url, path):
@@ -346,27 +367,27 @@ def test_download_gias_falls_back_to_yesterday(tmp_path, monkeypatch):
         _write_gias_csv(path)
 
     monkeypatch.setattr(schools, "download", fake_download)
-    assert schools._download_gias() == tmp_path / f"edubasealldata{yesterday}.csv"
+    assert schools._download_gias() == _raw(tmp_path) / f"edubasealldata{yesterday}.csv"
 
 
 def test_download_gias_failure_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(schools, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(schools, "download", MagicMock(side_effect=requests.ConnectionError("offline")))
     with pytest.raises(FileNotFoundError, match="Could not download the GIAS"):
         schools._download_gias()
 
 
 def test_schools_requires_open_roads_parquet(tmp_path, monkeypatch):
-    monkeypatch.setattr(schools, "data_dir", lambda: tmp_path)
-    _write_gias_csv(tmp_path / "edubasealldata20990101.csv")
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    _write_gias_csv(_raw(tmp_path) / "edubasealldata20990101.csv")
     # no open_roads.parquet in the staging dir → schools cannot build isochrones
     with pytest.raises(RuntimeError, match="require the open_roads parquet"):
         schools.extract(_ctx(tmp_path))
 
 
 def test_schools_builds_isochrones(tmp_path, monkeypatch):
-    monkeypatch.setattr(schools, "data_dir", lambda: tmp_path)
-    _write_gias_csv(tmp_path / "edubasealldata20990101.csv")
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    _write_gias_csv(_raw(tmp_path) / "edubasealldata20990101.csv")
     _connect().close()
     _write_square_roads_parquet(tmp_path / "open_roads.parquet")
 
@@ -429,7 +450,7 @@ def _write_wimd_ods(path: Path) -> None:
 
 def test_imd_england_downloads_when_missing(tmp_path, monkeypatch):
     # with no cached CSV present, the English loader fetches it via download (here faked)
-    monkeypatch.setattr(imd, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(imd, "download", lambda url, path: _write_iod_csv(path))
     monkeypatch.setattr(imd, "_imd_wales", lambda *a, **k: pd.DataFrame(columns=list(imd.IMD_COLUMNS.values())))
     _connect().close()
@@ -437,15 +458,15 @@ def test_imd_england_downloads_when_missing(tmp_path, monkeypatch):
     imd.extract(_ctx(tmp_path))
     con = _read_parquet(tmp_path / "imd_scores_pct.parquet")
     assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 3
-    assert (tmp_path / data_source("imd")["csv"]).exists()  # the (faked) download was cached
+    assert (_raw(tmp_path) / data_source("imd")["csv"]).exists()  # the (faked) download was cached
     con.close()
 
 
 def test_imd_extracts_per_lsoa_percentiles(tmp_path, monkeypatch):
-    monkeypatch.setattr(imd, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     # isolate the English path; the Welsh merge is covered separately
     monkeypatch.setattr(imd, "_imd_wales", lambda *a, **k: pd.DataFrame(columns=list(imd.IMD_COLUMNS.values())))
-    _write_iod_csv(tmp_path / "File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv")
+    _write_iod_csv(_raw(tmp_path) / "File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv")
     _connect().close()
 
     imd.extract(_ctx(tmp_path))
@@ -466,9 +487,9 @@ def test_imd_extracts_per_lsoa_percentiles(tmp_path, monkeypatch):
 
 
 def test_imd_merges_england_and_wales(tmp_path, monkeypatch):
-    monkeypatch.setattr(imd, "data_dir", lambda: tmp_path)
-    _write_iod_csv(tmp_path / "File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv")
-    _write_wimd_ods(tmp_path / data_source("wimd")["ods"])
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    _write_iod_csv(_raw(tmp_path) / "File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv")
+    _write_wimd_ods(_raw(tmp_path) / data_source("wimd")["ods"])
     # the Welsh LA-name→code lookup reads the lad boundary parquet; without it lad24cd is just null
     _connect().close()
 
@@ -493,7 +514,7 @@ def test_imd_welsh_lad_codes_from_boundary_parquet(tmp_path):
         "CREATE TABLE lad AS SELECT * FROM (VALUES "
         "('W06000015','Cardiff'),('W06000011','Swansea')) AS t(spatial_id, lad24nm);"
     )
-    _common.write_geoparquet(con, "SELECT * FROM lad", tmp_path / "local_authority_districts.parquet")
+    write_geoparquet(con, "SELECT * FROM lad", tmp_path / "local_authority_districts.parquet")
     con.close()
 
     codes = imd._welsh_lad_codes(_ctx(tmp_path))
@@ -502,7 +523,7 @@ def test_imd_welsh_lad_codes_from_boundary_parquet(tmp_path):
     assert imd._welsh_lad_codes(_ctx(tmp_path / "empty")) == {}
 
 
-# --- orchestrator: extract / assemble ---
+# --- orchestrator: extract / transform / load ---
 
 
 def test_run_extract_skips_cached_unless_rebuild(tmp_path):
@@ -537,11 +558,38 @@ def test_run_extract_optional_failure_is_skipped_required_propagates(tmp_path):
         build_db.run_extract([required], ctx, rebuild=False)
 
 
-def test_run_assemble_imports_present_parquet(tmp_path, monkeypatch):
-    """run_assemble imports present parquet, skips absent optional, indexes, runs transforms, swaps."""
+def test_run_transform_writes_derived_relations_as_parquet(tmp_path, monkeypatch):
+    """run_transform imports the extract parquet, runs build_all, and writes each newly-created
+    relation (not the imported inputs) out as its own parquet under the transform dir."""
     con = _connect()
-    _common.write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", tmp_path / "req_geom.parquet")
-    _common.write_geoparquet(con, "SELECT 1 AS x", tmp_path / "attr.parquet")
+    write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", tmp_path / "req_geom.parquet")
+    con.close()
+
+    datasets = (Dataset(name="req_geom", table="req_geom", extract=lambda ctx: None, optional=False),)
+    monkeypatch.setattr(build_db, "DATASETS", datasets)
+
+    # stand-in transform: creates one new aggregation table; the imported input must NOT be re-exported
+    def fake_build_all(con, resolutions, replace):
+        con.execute("CREATE TABLE h3_8_geogs AS SELECT 1 AS spatial_id, 2 AS lad24cd;")
+
+    monkeypatch.setattr(build_db.transforms, "build_all", fake_build_all)
+
+    tdir = tmp_path / "transform"
+    tdir.mkdir()
+    build_db.run_transform(tmp_path, tdir, resolutions=[8])
+
+    assert (tdir / "h3_8_geogs.parquet").exists()  # the newly-created relation is written out
+    assert not (tdir / "req_geom.parquet").exists()  # imported inputs are not re-written by transform
+
+
+def test_run_load_imports_extract_and_transform_parquet(tmp_path, monkeypatch):
+    """run_load imports present dataset + transform parquet, skips absent optional, indexes, swaps."""
+    con = _connect()
+    write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", tmp_path / "req_geom.parquet")
+    write_geoparquet(con, "SELECT 1 AS x", tmp_path / "attr.parquet")
+    tdir = tmp_path / "transform"
+    tdir.mkdir()
+    write_geoparquet(con, "SELECT 1 AS spatial_id, 2 AS lad24cd", tdir / "h3_8_geogs.parquet")
     con.close()
 
     datasets = (
@@ -550,24 +598,26 @@ def test_run_assemble_imports_present_parquet(tmp_path, monkeypatch):
         Dataset(name="missing_opt", table="missing_opt", extract=lambda ctx: None),  # absent → skipped
     )
     monkeypatch.setattr(build_db, "DATASETS", datasets)
-    indexed, transformed = [], []
+    indexed = []
     monkeypatch.setattr(build_db, "index_geometry_tables", lambda con: indexed.append(True))
-    monkeypatch.setattr(build_db.transforms, "build_all", lambda con, resolutions: transformed.append(resolutions))
 
     db_path = tmp_path / "out.db"
-    build_db.run_assemble(db_path, tmp_path, resolutions=[8])
+    build_db.run_load(db_path, tmp_path, tdir)
     assert db_path.exists()
-    assert indexed == [True] and transformed == [[8]]
+    assert indexed == [True]
 
     out = duckdb_connector(db_path)
     tables = {r[0] for r in out.execute("SELECT table_name FROM information_schema.tables").fetchall()}
-    assert {"req_geom", "attr"} <= tables and "missing_opt" not in tables
+    # both dataset tables and the transform aggregation are imported; absent optional is skipped
+    assert {"req_geom", "attr", "h3_8_geogs"} <= tables and "missing_opt" not in tables
     out.close()
 
 
-def test_run_assemble_missing_required_raises(tmp_path, monkeypatch):
+def test_run_load_missing_required_raises(tmp_path, monkeypatch):
     _connect().close()
     datasets = (Dataset(name="req", table="req", extract=lambda ctx: None, optional=False),)
     monkeypatch.setattr(build_db, "DATASETS", datasets)
+    tdir = tmp_path / "transform"
+    tdir.mkdir()
     with pytest.raises(FileNotFoundError, match="required dataset 'req' parquet missing"):
-        build_db.run_assemble(tmp_path / "out.db", tmp_path, resolutions=[8])
+        build_db.run_load(tmp_path / "out.db", tmp_path, tdir)

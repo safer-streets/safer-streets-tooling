@@ -1,10 +1,10 @@
 """police.uk street-level crime archive → ``crime_data.parquet``."""
 
-from safer_streets_core.database import duckdb_connector
+from safer_streets_core.database import duckdb_connector, write_geoparquet
 from safer_streets_core.utils import archive_path
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets._common import download, write_geoparquet
+from safer_streets_tooling.datasets._common import download, raw_dir
 from safer_streets_tooling.datasets.base import Dataset, ExtractContext
 
 
@@ -17,7 +17,7 @@ def extract(ctx: ExtractContext) -> None:
     transforming the WGS-84 longitude/latitude to BNG (EPSG:27700); the lon/lat columns are retained
     because the H3 transforms index crimes straight from them.
     """
-    archive = archive_path("latest")
+    archive = raw_dir() / archive_path("latest").name
     if ctx.force_download or not archive.exists():
         download(data_source("crime")["url"], archive)
     else:
