@@ -32,9 +32,13 @@ registry (`safer_streets_tooling.transform.STEPS`):
    it produces (the BTP-filtered `crime_counts_h3_*`, per-cell lookups, `h3_{res}_geogs`) out as its own
    parquet under `data_dir()/transform` — a durable cache; a step whose output parquet already exist is
    skipped unless `--all`. No live DB is touched.
-3. **load** — present parquet (extract + transform) are imported into a `<name>.staging.db`, geometry
-   tables are repaired and RTree-indexed (`index_geometry_tables`), and the staging file is
-   **atomically promoted** (`os.replace`) over the live database. Consumers only ever see a complete DB.
+3. **load** *(optional)* — a **minimal** database is assembled in a `<name>.staging.db` from
+   `crime_counts_h3_{res}` + `h3_{res}_geogs` (joined on `spatial_id`) plus the five ONS boundary tables
+   their codes resolve to (PFA / LAD / MSOA / LSOA / OA, from the extract dir), then **atomically
+   promoted** (`os.replace`) over the live database so consumers only ever see a complete DB. `--include
+   NAME` adds non-default tables (a lookup or a feature layer, looked up in the transform then extract
+   dir); boundary geometry is RTree-indexed. Optional because the parquet are the durable outputs — the
+   DB is a convenience bundle.
 
 ### Key modules
 

@@ -14,11 +14,13 @@ The pipeline has three phases (extract → transform → load):
      ``h3_{res}_geogs``) is written out as its own parquet under ``data_dir()/transform``. No live
      database is touched — the parquet are a durable cache of the aggregations, so they can be rebuilt
      without re-importing or re-extracting.
-  3. **load**       every present parquet (extracted datasets + transform aggregations) is imported
-     into a ``<name>.staging.db``, geometry tables are repaired + RTree-indexed, and the staging file
-     is only promoted over the live database with an atomic ``os.replace`` once every step has
-     succeeded, so read-only consumers always see a complete database — either the old one or the new
-     one, never a half-built file.
+  3. **load**       *(optional)* a minimal consumer database is assembled from the transform parquet —
+     ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined on
+     ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA) —
+     into a ``<name>.staging.db`` that is only promoted over the live database with an atomic
+     ``os.replace`` once every table loaded, so read-only consumers always see a complete database.
+     ``--include NAME`` adds further tables (an intermediate lookup or a feature layer). This step is
+     optional: the parquet are the durable outputs; the database is just a convenience bundle.
 
 ``build`` runs all three phases; ``assemble`` runs transform + load over already-extracted parquet.
 The live database is the standard database (``database_path()``, under ``SAFER_STREETS_DATA_DIR``);
@@ -42,6 +44,7 @@ from safer_streets_core.utils import data_dir, database_path
 
 from safer_streets_tooling.extract import BY_NAME, DATASETS, ExtractContext, run_extract
 from safer_streets_tooling.transform import STEPS, build_all
+from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 
 app = typer.Typer(help="Build the crime + boundaries + H3 DuckDB database from per-dataset parquet intermediates.")
 
@@ -100,28 +103,61 @@ def run_transform(edir: Path, tdir: Path, resolutions: list[int], *, rebuild: bo
     print(f"\n=== Done. H3 aggregation parquet → {tdir} ===")
 
 
-def run_load(db_path: Path, edir: Path, tdir: Path) -> None:
-    """Import every present dataset parquet (``edir``) and H3 aggregation parquet (``tdir``) into a
-    staging DB, index geometry tables, then atomically promote the staging DB over ``db_path``."""
+def _minimal_tables(resolutions: list[int]) -> list[str]:
+    """The relations the minimal consumer database needs:
+
+    - ``crime_counts_h3_{res}`` — per-cell crime counts (keyed by the H3 ``spatial_id``);
+    - ``h3_{res}_geogs`` — per-cell attributes (also keyed by ``spatial_id``);
+    - the ONS boundary tables ``h3_*_geogs`` references by code (PFA / LAD / MSOA / LSOA / OA), so a
+      consumer can resolve a cell's codes to the boundary geometry.
+
+    The intermediate lookups and the other raw extract datasets are build inputs, not part of the output.
+    """
+    counts = [f"crime_counts_h3_{res}" for res in resolutions]
+    geogs = [f"h3_{res}_geogs" for res in resolutions]
+    return counts + geogs + list(GEOGRAPHY_MAPPINGS.values())
+
+
+def run_load(
+    db_path: Path, tdir: Path, resolutions: list[int], *, edir: Path | None = None, include: list[str] | None = None
+) -> None:
+    """Assemble a minimal consumer database from the transform parquet, then atomically promote it.
+
+    By default the ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` parquet (under ``tdir``) plus the ONS
+    boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA, under ``edir``) are imported —
+    the per-cell counts and attributes the app joins on ``spatial_id``, and the boundaries those cells
+    resolve to. ``include`` names further tables to add (each looked up under ``tdir`` then ``edir``) —
+    e.g. an intermediate ``h3_*_lookup`` or a feature layer. The boundary tables' geometry is repaired
+    and RTree-indexed; the counts/geogs carry none. A missing required parquet aborts. The staging DB is
+    only promoted over ``db_path`` with ``os.replace`` once every table loaded, so consumers only ever
+    see a complete database.
+
+    This load step is **optional**: the per-dataset and transform parquet are the durable build outputs;
+    the database is just a convenience bundle for consumers that prefer a single file.
+    """
+    search_dirs = [d for d in (tdir, edir) if d is not None]
+    tables = _minimal_tables(resolutions) + (include or [])
+
     staging = db_path.with_suffix(".staging.db")
     staging.unlink(missing_ok=True)
 
     print(f"\n=== Loading {db_path} (staging: {staging}) ===\n")
     con = duckdb_connector(staging, writeable=True)
     try:
-        imported = _import_datasets(con, edir)
-        transformed = 0
-        for parquet in sorted(tdir.glob("*.parquet")):
-            con.execute(f'CREATE OR REPLACE TABLE "{parquet.stem}" AS {read_geoparquet(parquet)}')
-            transformed += 1
+        for name in tables:
+            parquet = next((d / f"{name}.parquet" for d in search_dirs if (d / f"{name}.parquet").exists()), None)
+            if parquet is None:
+                searched = ", ".join(str(d) for d in search_dirs)
+                raise FileNotFoundError(f"required table '{name}' parquet not found in: {searched}")
+            con.execute(f'CREATE OR REPLACE TABLE "{name}" AS {read_geoparquet(parquet)}')
+            print(f"  {name}: loaded")
 
-        print(f"\nImported {imported} dataset + {transformed} transform table(s); validating + indexing geometry…")
-        index_geometry_tables(con)
+        index_geometry_tables(con)  # no-op for the minimal tables (no geometry); indexes any included layers
     finally:
         con.close()
 
     os.replace(staging, db_path)
-    print(f"\n=== Done. Promoted staging database → {db_path} ===")
+    print(f"\n=== Done. Promoted minimal database ({len(tables)} table(s)) → {db_path} ===")
 
 
 @app.command("extract")
@@ -168,13 +204,18 @@ def transform(
 @app.command("load")
 def load(
     db_path: Path | None = None,
+    resolutions: list[int] = [8, 9, 10],  # noqa: B006
+    include: list[str] | None = None,
 ) -> None:
-    """Build the database from whatever parquet exist (extract + transform), then atomically swap it in.
+    """Assemble a minimal database from the transform parquet, then atomically swap it in.
 
-    Each present dataset and H3 aggregation parquet is imported as a table; geometry tables are repaired
-    and RTree-indexed. A missing *required* dataset (e.g. crime, boundaries) aborts.
+    By default ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined
+    on ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
+    are imported. ``--include NAME`` (repeatable) adds further tables (an intermediate ``h3_*_lookup`` or
+    a feature layer), looked up in the transform then extract dirs. This step is optional — the parquet
+    are the durable outputs; the database is a convenience bundle.
     """
-    run_load(db_path or database_path(), extract_dir(), transform_dir())
+    run_load(db_path or database_path(), transform_dir(), resolutions, edir=extract_dir(), include=include)
 
 
 @app.command("assemble")
@@ -182,10 +223,14 @@ def assemble(
     db_path: Path | None = None,
     resolutions: list[int] = [8, 9, 10],  # noqa: B006
     all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
+    include: list[str] | None = None,
 ) -> None:
-    """Transform then load: build the H3 aggregation parquet, then assemble + promote the database."""
+    """Transform then load: build the H3 aggregation parquet, then assemble + promote the minimal database.
+
+    ``--include NAME`` (repeatable) adds extra tables to the database beyond the minimal set.
+    """
     run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_)
-    run_load(db_path or database_path(), extract_dir(), transform_dir())
+    run_load(db_path or database_path(), transform_dir(), resolutions, edir=extract_dir(), include=include)
 
 
 @app.command("build")
@@ -193,16 +238,18 @@ def build(
     db_path: Path | None = None,
     resolutions: list[int] = [8, 9, 10],  # noqa: B006
     force_download: bool = False,
+    include: list[str] | None = None,
 ) -> None:
     """Full pass: extract any missing parquet (``--force-download`` re-fetches all), then transform + load.
 
     Cached transform parquet are kept; ``--force-download`` (which re-extracts) also rebuilds them so the
-    aggregations reflect the refreshed inputs.
+    aggregations reflect the refreshed inputs. ``--include NAME`` (repeatable) adds extra tables to the
+    database beyond the minimal set.
     """
     ctx = ExtractContext(staging=extract_dir(), force_download=force_download)
     run_extract(list(DATASETS), ctx, rebuild=force_download)
     run_transform(ctx.staging, transform_dir(), resolutions, rebuild=force_download)
-    run_load(db_path or database_path(), ctx.staging, transform_dir())
+    run_load(db_path or database_path(), transform_dir(), resolutions, edir=ctx.staging, include=include)
 
 
 def main() -> None:

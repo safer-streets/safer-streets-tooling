@@ -609,42 +609,59 @@ def test_run_transform_caches_outputs_and_skips_unless_rebuild(tmp_path, monkeyp
     assert calls["crime_counts"] == 2 and calls["geo_lookups"] == 2 and calls["geogs"] == 2
 
 
-def test_run_load_imports_extract_and_transform_parquet(tmp_path, monkeypatch):
-    """run_load imports present dataset + transform parquet, skips absent optional, indexes, swaps."""
+def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch):
+    """run_load imports crime_counts + geogs + the ONS boundary tables by default; --include adds extra
+    tables resolved from the transform then the extract dir."""
     con = _connect()
-    write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", tmp_path / "req_geom.parquet")
-    write_geoparquet(con, "SELECT 1 AS x", tmp_path / "attr.parquet")
+    edir = tmp_path / "extract"
     tdir = tmp_path / "transform"
+    edir.mkdir()
     tdir.mkdir()
-    write_geoparquet(con, "SELECT 1 AS spatial_id, 2 AS lad24cd", tdir / "h3_8_geogs.parquet")
+    # minimal tables (transform outputs, no geometry)
+    write_geoparquet(con, "SELECT 'a' AS spatial_id, 5 AS count", tdir / "crime_counts_h3_8.parquet")
+    write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_geogs.parquet")
+    # the ONS boundary tables (extract, with geometry) the geogs codes resolve to — part of the minimal set
+    boundaries = set(GEOGRAPHY_MAPPINGS.values())
+    for table in boundaries:
+        write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", edir / f"{table}.parquet")
+    # a non-default table: an intermediate lookup (transform), only loaded when included
+    write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_lad24cd_lookup.parquet")
     con.close()
 
-    datasets = (
-        Dataset(name="req_geom", table="req_geom", extract=lambda ctx: None, optional=False),
-        Dataset(name="attr", table="attr", extract=lambda ctx: None, geometry=False),
-        Dataset(name="missing_opt", table="missing_opt", extract=lambda ctx: None),  # absent → skipped
-    )
-    monkeypatch.setattr(build_db, "DATASETS", datasets)
     indexed = []
     monkeypatch.setattr(build_db, "index_geometry_tables", lambda con: indexed.append(True))
 
+    def _tables(db_path):
+        out = duckdb_connector(db_path)
+        names = {
+            r[0]
+            for r in out.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+            ).fetchall()
+        }
+        out.close()
+        return names
+
+    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries
+
     db_path = tmp_path / "out.db"
-    build_db.run_load(db_path, tmp_path, tdir)
+    build_db.run_load(db_path, tdir, [8], edir=edir)
     assert db_path.exists()
     assert indexed == [True]
+    assert _tables(db_path) == minimal  # counts + geogs + boundaries; the lookup is excluded by default
 
-    out = duckdb_connector(db_path)
-    tables = {r[0] for r in out.execute("SELECT table_name FROM information_schema.tables").fetchall()}
-    # both dataset tables and the transform aggregation are imported; absent optional is skipped
-    assert {"req_geom", "attr", "h3_8_geogs"} <= tables and "missing_opt" not in tables
-    out.close()
+    db2 = tmp_path / "out2.db"
+    build_db.run_load(db2, tdir, [8], edir=edir, include=["h3_8_lad24cd_lookup"])
+    assert _tables(db2) == minimal | {"h3_8_lad24cd_lookup"}
 
 
-def test_run_load_missing_required_raises(tmp_path, monkeypatch):
+def test_run_load_missing_required_raises(tmp_path):
     _connect().close()
-    datasets = (Dataset(name="req", table="req", extract=lambda ctx: None, optional=False),)
-    monkeypatch.setattr(build_db, "DATASETS", datasets)
     tdir = tmp_path / "transform"
     tdir.mkdir()
-    with pytest.raises(FileNotFoundError, match="required dataset 'req' parquet missing"):
-        build_db.run_load(tmp_path / "out.db", tmp_path, tdir)
+    # geogs present but crime_counts absent → required minimal table missing
+    con = _connect()
+    write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_geogs.parquet")
+    con.close()
+    with pytest.raises(FileNotFoundError, match="required table 'crime_counts_h3_8' parquet not found"):
+        build_db.run_load(tmp_path / "out.db", tdir, [8])

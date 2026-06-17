@@ -22,9 +22,14 @@ Three phases (extract → transform → load), driven by a dataset registry
    `crime_counts_h3_*` are aggregated from `crime_data`, then every derived relation (those counts, the
    per-cell lookups and `h3_{res}_geogs`) is written out as its own parquet under `data_dir()/transform`
    — a durable cache, so the aggregations can be rebuilt without re-extracting.
-3. **load** — every present parquet (extracted datasets + transform aggregations) is imported into a
-   `<name>.staging.db`, geometry tables are repaired and RTree-indexed, and the staging file is
-   atomically promoted over the live database. Consumers therefore only ever see a complete database.
+3. **load** *(optional)* — a **minimal** consumer database is assembled from the parquet:
+   `crime_counts_h3_{res}` and `h3_{res}_geogs` (the per-cell counts + attributes, joined on
+   `spatial_id`) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA), so a
+   consumer can resolve a cell's codes to boundary geometry. It is built in a `<name>.staging.db` and
+   atomically promoted over the live database, so consumers only ever see a complete file. **This step is
+   optional** — the parquet are the durable build outputs; the database is just a convenience bundle.
+   `--include NAME` adds non-default tables (an intermediate `h3_*_lookup` or a feature layer), looked up
+   in the transform then extract dirs.
 
 ### Extract & transform DAG
 
@@ -72,6 +77,11 @@ flowchart LR
         h3_10_geogs
     end
 
+    subgraph LOAD["Load · optional minimal DB"]
+        direction LR
+        database[("safer-streets DB<br/>crime_counts + geogs")]
+    end
+
     %% extract edges
     open_roads --> schools
     local_authority_districts --> imd_scores_pct
@@ -108,15 +118,32 @@ flowchart LR
     h3_road_network_lookup --> h3_10_geogs
     h3_retail_centres_lookup --> h3_10_geogs
 
+    %% load edges (optional): minimal DB = crime counts + geogs + ONS boundary tables; --include adds more
+    crime_counts_h3_8 -.-> database
+    crime_counts_h3_9 -.-> database
+    crime_counts_h3_10 -.-> database
+    h3_8_geogs -.-> database
+    h3_9_geogs -.-> database
+    h3_10_geogs -.-> database
+    police_force_areas -.-> database
+    local_authority_districts -.-> database
+    msoa_2021 -.-> database
+    lsoa_2021 -.-> database
+    output_areas_2021 -.-> database
+    h3_geogs_lookup -. "--include" .-> database
+
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
+    classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
     class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,retail_centres,open_roads,poi,schools,imd_scores_pct extract;
     class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
+    class database load;
 ```
 
-Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3
-aggregation parquet, and **load** imports both sets into the live database.
+Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3 aggregation
+parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `h3_*_geogs` parquet and the
+five ONS boundary tables into a minimal database (dashed above — `--include` can pull in any other table).
 
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` on load (the coordinates are the contract).
@@ -130,7 +157,8 @@ data extract                     # (re)build only missing parquet intermediates
 data extract --only schools      # refresh one dataset (reads open_roads.parquet from cache)
 data extract --force-download    # re-fetch every source and rebuild
 data transform                   # (re)build the H3 aggregation parquet from the extract parquet
-data load                        # rebuild the DB from whatever parquet exist (extract + transform)
+data load                        # (optional) assemble the minimal DB: crime_counts + geogs + boundaries
+data load --include road_network # …plus any extra table(s) by name
 data assemble                    # transform + load in one step
 ```
 
