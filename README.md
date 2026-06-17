@@ -45,42 +45,34 @@ geography / overlap / retail lookups all draw their cell set from `crime_counts_
 
 ```mermaid
 flowchart LR
-    subgraph EXTRACT["Extract · one parquet per dataset"]
-        direction LR
-        crime_data
-        police_force_areas
-        local_authority_districts
-        msoa_2021
-        lsoa_2021
-        output_areas_2021
-        open_greenspace
-        land_cover
-        retail_centres
-        open_roads
-        poi
-        schools
-        imd_scores_pct
-    end
+   crime_data
+   police_force_areas
+   local_authority_districts
+   msoa_2021
+   lsoa_2021
+   output_areas_2021
+   open_greenspace
+   land_cover
+   retail_centres
+   open_roads
+   poi
+   schools
+   imd_scores_pct
 
-    subgraph TRANSFORM["Transform · fast H3 lookup tables"]
-        direction LR
-        crime_counts_h3_8
-        crime_counts_h3_9
-        crime_counts_h3_10
-        h3_geogs_lookup
-        h3_greenspace_lookup
-        h3_land_cover_lookup
-        h3_road_network_lookup
-        h3_retail_centres_lookup
-        h3_8_geogs
-        h3_9_geogs
-        h3_10_geogs
-    end
+   crime_counts_h3_8
+   crime_counts_h3_9
+   crime_counts_h3_10
+   h3_geogs_lookup
+   h3_greenspace_lookup
+   h3_land_cover_lookup
+   h3_road_network_lookup
+   h3_retail_centres_lookup
+   h3_8_geogs
+   h3_9_geogs
+   h3_10_geogs
 
-    subgraph LOAD["Load · optional minimal DB"]
-        direction LR
-        database[("safer-streets DB<br/>crime_counts + geogs")]
-    end
+   direction LR
+   database[("safer-streets DB<br/>crime_counts + geogs + features")]
 
     %% extract edges
     open_roads --> schools
@@ -118,7 +110,7 @@ flowchart LR
     h3_road_network_lookup --> h3_10_geogs
     h3_retail_centres_lookup --> h3_10_geogs
 
-    %% load edges (optional): minimal DB = crime counts + geogs + ONS boundary tables; --include adds more
+    %% load edges (optional): minimal DB = crime counts + geogs + ONS boundary tables + feature layers; --include adds more
     crime_counts_h3_8 -.-> database
     crime_counts_h3_9 -.-> database
     crime_counts_h3_10 -.-> database
@@ -130,7 +122,9 @@ flowchart LR
     msoa_2021 -.-> database
     lsoa_2021 -.-> database
     output_areas_2021 -.-> database
-    h3_geogs_lookup -. "--include" .-> database
+    schools -.-> database
+    poi -.-> database
+    imd_scores_pct -.-> database
 
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
@@ -142,8 +136,9 @@ flowchart LR
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3 aggregation
-parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `h3_*_geogs` parquet and the
-five ONS boundary tables into a minimal database (dashed above — `--include` can pull in any other table).
+parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `h3_*_geogs` parquet, the
+five ONS boundary tables and the `schools` / `poi` / `imd_scores_pct` feature layers into a minimal
+database (dashed above — `--include` can pull in any other table).
 
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` on load (the coordinates are the contract).
@@ -157,7 +152,7 @@ data extract                     # (re)build only missing parquet intermediates
 data extract --only schools      # refresh one dataset (reads open_roads.parquet from cache)
 data extract --force-download    # re-fetch every source and rebuild
 data transform                   # (re)build the H3 aggregation parquet from the extract parquet
-data load                        # (optional) assemble the minimal DB: crime_counts + geogs + boundaries
+data load                        # (optional) assemble the minimal DB: crime_counts + geogs + boundaries + features
 data load --include road_network # …plus any extra table(s) by name
 data assemble                    # transform + load in one step
 ```

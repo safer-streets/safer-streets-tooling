@@ -16,7 +16,8 @@ The pipeline has three phases (extract → transform → load):
      without re-importing or re-extracting.
   3. **load**       *(optional)* a minimal consumer database is assembled from the transform parquet —
      ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined on
-     ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA) —
+     ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
+     and the schools / poi / imd_scores_pct feature layers —
      into a ``<name>.staging.db`` that is only promoted over the live database with an atomic
      ``os.replace`` once every table loaded, so read-only consumers always see a complete database.
      ``--include NAME`` adds further tables (an intermediate lookup or a feature layer). This step is
@@ -103,19 +104,24 @@ def run_transform(edir: Path, tdir: Path, resolutions: list[int], *, rebuild: bo
     print(f"\n=== Done. H3 aggregation parquet → {tdir} ===")
 
 
+# Feature layers included in the database by default (extract datasets, loaded from ``edir``).
+DEFAULT_FEATURE_TABLES: tuple[str, ...] = ("schools", "poi", "imd_scores_pct")
+
+
 def _minimal_tables(resolutions: list[int]) -> list[str]:
     """The relations the minimal consumer database needs:
 
     - ``crime_counts_h3_{res}`` — per-cell crime counts (keyed by the H3 ``spatial_id``);
     - ``h3_{res}_geogs`` — per-cell attributes (also keyed by ``spatial_id``);
     - the ONS boundary tables ``h3_*_geogs`` references by code (PFA / LAD / MSOA / LSOA / OA), so a
-      consumer can resolve a cell's codes to the boundary geometry.
+      consumer can resolve a cell's codes to the boundary geometry;
+    - the ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / imd_scores_pct).
 
     The intermediate lookups and the other raw extract datasets are build inputs, not part of the output.
     """
     counts = [f"crime_counts_h3_{res}" for res in resolutions]
     geogs = [f"h3_{res}_geogs" for res in resolutions]
-    return counts + geogs + list(GEOGRAPHY_MAPPINGS.values())
+    return counts + geogs + list(GEOGRAPHY_MAPPINGS.values()) + list(DEFAULT_FEATURE_TABLES)
 
 
 def run_load(
@@ -124,9 +130,11 @@ def run_load(
     """Assemble a minimal consumer database from the transform parquet, then atomically promote it.
 
     By default the ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` parquet (under ``tdir``) plus the ONS
-    boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA, under ``edir``) are imported —
-    the per-cell counts and attributes the app joins on ``spatial_id``, and the boundaries those cells
-    resolve to. ``include`` names further tables to add (each looked up under ``tdir`` then ``edir``) —
+    boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA, under ``edir``) and the
+    ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / imd_scores_pct, under ``edir``) are
+    imported — the per-cell counts and attributes the app joins on ``spatial_id``, the boundaries those
+    cells resolve to, and the feature layers. ``include`` names further tables to add (each looked up
+    under ``tdir`` then ``edir``) —
     e.g. an intermediate ``h3_*_lookup`` or a feature layer. The boundary tables' geometry is repaired
     and RTree-indexed; the counts/geogs carry none. A missing required parquet aborts. The staging DB is
     only promoted over ``db_path`` with ``os.replace`` once every table loaded, so consumers only ever
@@ -211,9 +219,10 @@ def load(
 
     By default ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined
     on ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
-    are imported. ``--include NAME`` (repeatable) adds further tables (an intermediate ``h3_*_lookup`` or
-    a feature layer), looked up in the transform then extract dirs. This step is optional — the parquet
-    are the durable outputs; the database is a convenience bundle.
+    and the schools / poi / imd_scores_pct feature layers are imported. ``--include NAME`` (repeatable)
+    adds further tables (an intermediate ``h3_*_lookup`` or a feature layer), looked up in the transform
+    then extract dirs. This step is optional — the parquet are the durable outputs; the database is a
+    convenience bundle.
     """
     run_load(db_path or database_path(), transform_dir(), resolutions, edir=extract_dir(), include=include)
 

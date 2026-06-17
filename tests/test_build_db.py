@@ -624,6 +624,10 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
     boundaries = set(GEOGRAPHY_MAPPINGS.values())
     for table in boundaries:
         write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", edir / f"{table}.parquet")
+    # the default feature layers (extract) — included by default
+    features = set(build_db.DEFAULT_FEATURE_TABLES)
+    for table in features:
+        write_geoparquet(con, "SELECT 'a' AS spatial_id, 1 AS v", edir / f"{table}.parquet")
     # a non-default table: an intermediate lookup (transform), only loaded when included
     write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_lad24cd_lookup.parquet")
     con.close()
@@ -642,7 +646,7 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
         out.close()
         return names
 
-    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries
+    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries | features
 
     db_path = tmp_path / "out.db"
     build_db.run_load(db_path, tdir, [8], edir=edir)
