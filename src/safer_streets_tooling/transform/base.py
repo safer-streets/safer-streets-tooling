@@ -25,13 +25,17 @@ class TransformStep:
 
     ``build(con, resolutions, replace)`` creates the step's relations; ``outputs(con, resolutions)``
     returns the relation names it produces (used to cache them as parquet and skip rebuilds).
-    ``depends_on`` lists the names of steps whose relations this one reads.
+    ``depends_on`` lists the names of steps whose relations this one reads. ``extract_inputs`` lists the
+    extract dataset names this step reads (their parquet live in the extract dir); together with the
+    output parquet of its ``depends_on`` steps they are the step's inputs for staleness checks — the
+    cached output is reused only when it exists *and* is newer than every input.
     """
 
     name: str
     build: Callable[[duckdb.DuckDBPyConnection, list[int], bool], None]
     outputs: Callable[[duckdb.DuckDBPyConnection, list[int]], list[str]]
     depends_on: tuple[str, ...] = field(default_factory=tuple)
+    extract_inputs: tuple[str, ...] = field(default_factory=tuple)
 
 
 def create_clause(kind: str, name: str, *, replace: bool) -> str:

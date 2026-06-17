@@ -17,8 +17,11 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     Built by LEFT JOINing the per-geography lookup views on ``spatial_id``, starting from
     the broadest-coverage geography so cells outside England & Wales are still retained. For
     each overlap feature whose data is present (greenspace, land cover, road network), a
-    ``{prefix}_ids`` list of overlapping features is added; when retail centres are present, the
-    nearest centre's ``retail_centre_id`` and ``retail_centre_distance`` are added.
+    ``{prefix}_ids`` list of overlapping features is added along with an aggregate overlap measure:
+    ``{prefix}_overlap_area`` (m²) is the *largest* single overlap for the polygon layers (greenspace,
+    land cover) — overlapping polygons of different types would double-count if summed — while
+    ``road_overlap_length`` (m) is the *total* road length within the cell. When retail centres are
+    present, the nearest centre's ``retail_centre_id`` and ``retail_centre_distance`` are added.
     """
     base = _BASE_KEY if _BASE_KEY in GEOGRAPHY_MAPPINGS else next(iter(GEOGRAPHY_MAPPINGS))
     others = [key for key in GEOGRAPHY_MAPPINGS if key != base]
@@ -35,10 +38,12 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
         extra_joins: list[str] = []
         for f in present:
             ctes.append(
-                f"{f.cte} AS (SELECT spatial_id, LIST({f.prefix}_id) AS {f.prefix}_ids "
+                f"{f.cte} AS (SELECT spatial_id, LIST({f.prefix}_id) AS {f.prefix}_ids, "
+                f"{f.agg_fn}({f.overlap_alias}) AS {f.prefix}_{f.overlap_alias} "
                 f"FROM h3_{res}_{f.name}_lookup GROUP BY spatial_id)"
             )
             extra_cols.append(f"{f.cte}.{f.prefix}_ids")
+            extra_cols.append(f"{f.cte}.{f.prefix}_{f.overlap_alias}")
             extra_joins.append(f"LEFT JOIN {f.cte} USING (spatial_id)")
         if has_retail:
             ctes.append(

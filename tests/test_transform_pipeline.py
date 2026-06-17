@@ -1,12 +1,14 @@
 """Tests for the H3 transform phase (AsyncPipeline wiring), mirroring test_extract_pipeline."""
 
 import asyncio
+import os
 
 import duckdb
 import pytest
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
-from safer_streets_tooling.transform import STEPS, TransformNode, TransformStep, build_all, build_pipeline
+from safer_streets_tooling.transform import STEPS, TransformNode, TransformStep, build_all, build_pipeline, geogs
+from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 
 
 def _connect():
@@ -17,8 +19,8 @@ def _connect():
         pytest.skip(f"extension download unavailable: {e}")
 
 
-def _step(name, build, *, outputs=lambda con, res: [], depends_on=()):
-    return TransformStep(name=name, build=build, outputs=outputs, depends_on=depends_on)
+def _step(name, build, *, outputs=lambda con, res: [], depends_on=(), extract_inputs=()):
+    return TransformStep(name=name, build=build, outputs=outputs, depends_on=depends_on, extract_inputs=extract_inputs)
 
 
 def test_pipeline_wires_data_dependencies():
@@ -82,7 +84,7 @@ def test_node_builds_and_writes_output_parquet(tmp_path):
         calls.append("built")
         cur.execute('CREATE TABLE "foo" AS SELECT 1 AS spatial_id, 2 AS v')
 
-    node = TransformNode(_step("n", build, outputs=lambda con, res: ["foo"]), con, [8], tmp_path)
+    node = TransformNode(_step("n", build, outputs=lambda con, res: ["foo"]), [], con, [8], None, tmp_path)
     asyncio.run(node())
 
     assert calls == ["built"]
@@ -102,10 +104,10 @@ def test_node_skips_build_and_reloads_cached_parquet(tmp_path):
     def build(cur, resolutions, replace):
         calls.append("built")
 
-    node = TransformNode(_step("n", build, outputs=lambda con, res: ["foo"]), con, [8], tmp_path)
+    node = TransformNode(_step("n", build, outputs=lambda con, res: ["foo"]), [], con, [8], None, tmp_path)
     asyncio.run(node())
 
-    assert calls == []  # cached → build skipped
+    assert calls == []  # exists, no inputs → fresh → build skipped
     assert con.execute('SELECT v FROM "foo"').fetchone()[0] == 99  # reloaded into the catalog
 
 
@@ -122,7 +124,100 @@ def test_node_rebuild_ignores_cache(tmp_path):
         calls.append("built")
         cur.execute('CREATE TABLE "foo" AS SELECT 1 AS spatial_id, 2 AS v')
 
-    node = TransformNode(_step("n", build, outputs=lambda con, res: ["foo"]), con, [8], tmp_path, rebuild=True)
+    node = TransformNode(
+        _step("n", build, outputs=lambda con, res: ["foo"]), [], con, [8], None, tmp_path, rebuild=True
+    )
     asyncio.run(node())
 
     assert calls == ["built"]
+
+
+def test_node_rebuilds_when_input_is_newer(tmp_path):
+    """A cached output older than one of its inputs is rebuilt (Make-style staleness)."""
+    edir = tmp_path / "extract"
+    tdir = tmp_path / "transform"
+    edir.mkdir()
+    tdir.mkdir()
+    seed = _connect()
+    write_geoparquet(seed, "SELECT 1 AS spatial_id, 1 AS v", tdir / "foo.parquet")  # output
+    write_geoparquet(seed, "SELECT 1 AS x", edir / "bar.parquet")  # input
+    seed.close()
+    newer = (tdir / "foo.parquet").stat().st_mtime + 10  # input mtime > output mtime
+    os.utime(edir / "bar.parquet", (newer, newer))
+
+    con = _connect()
+    calls = []
+
+    def build(cur, resolutions, replace):
+        calls.append("built")
+        cur.execute('CREATE TABLE "foo" AS SELECT 1 AS spatial_id, 2 AS v')
+
+    step = _step("n", build, outputs=lambda con, res: ["foo"], extract_inputs=("bar",))
+    node = TransformNode(step, [], con, [8], edir, tdir)
+    asyncio.run(node())
+
+    assert calls == ["built"]  # input newer than output → stale → rebuilt
+
+
+def test_node_keeps_cache_when_output_is_newer(tmp_path):
+    """A cached output newer than all its inputs is reused (build skipped)."""
+    edir = tmp_path / "extract"
+    tdir = tmp_path / "transform"
+    edir.mkdir()
+    tdir.mkdir()
+    seed = _connect()
+    write_geoparquet(seed, "SELECT 1 AS x", edir / "bar.parquet")  # input
+    write_geoparquet(seed, "SELECT 1 AS spatial_id, 99 AS v", tdir / "foo.parquet")  # output
+    seed.close()
+    newer = (edir / "bar.parquet").stat().st_mtime + 10  # output mtime > input mtime
+    os.utime(tdir / "foo.parquet", (newer, newer))
+
+    con = _connect()
+    calls = []
+
+    def build(cur, resolutions, replace):
+        calls.append("built")
+
+    step = _step("n", build, outputs=lambda con, res: ["foo"], extract_inputs=("bar",))
+    node = TransformNode(step, [], con, [8], edir, tdir)
+    asyncio.run(node())
+
+    assert calls == []  # output newer than input → fresh → reused
+    assert con.execute('SELECT v FROM "foo"').fetchone()[0] == 99
+
+
+def test_geogs_folds_overlap_area_and_road_length():
+    """h3_geogs carries the largest overlap area per area layer (greenspace, land cover) — summing would
+    double-count overlapping polygons — and the total road length. Hand-built lookups (geogs.build is
+    pure SQL)."""
+    con = duckdb.connect()
+    # source-table presence drives which overlap features / retail centres are folded in
+    for table in ("open_greenspace", "land_cover", "open_roads", "retail_centres"):
+        con.execute(f"CREATE TABLE {table}(x INTEGER)")
+    # one row per ONS geography lookup for cell 'a'
+    for key in GEOGRAPHY_MAPPINGS:
+        con.execute(f"CREATE TABLE h3_8_{key}_lookup AS SELECT 'a' AS spatial_id, 'X' AS {key}")
+    # two greenspace polygons (largest 10), one land-cover polygon (7), two road segments (sum 150)
+    con.execute(
+        "CREATE TABLE h3_8_greenspace_lookup AS SELECT * FROM "
+        "(VALUES ('a', 1, 'park', 10.0), ('a', 2, 'wood', 5.0)) t(spatial_id, greenspace_id, function, overlap_area)"
+    )
+    con.execute(
+        "CREATE TABLE h3_8_land_cover_lookup AS SELECT * FROM "
+        "(VALUES ('a', 1, 'urban', 7.0)) t(spatial_id, land_cover_id, urban, overlap_area)"
+    )
+    con.execute(
+        "CREATE TABLE h3_8_road_network_lookup AS SELECT * FROM "
+        "(VALUES ('a', 1, 'A', 100.0), ('a', 2, 'B', 50.0)) t(spatial_id, road_id, type, overlap_length)"
+    )
+    con.execute(
+        "CREATE TABLE h3_8_retail_centre_lookup AS SELECT 'a' AS spatial_id, 'rc1' AS retail_centre_id, 9.0 AS distance"
+    )
+
+    geogs.build(con, [8], True)
+
+    row = con.execute(
+        "SELECT greenspace_overlap_area, land_cover_overlap_area, road_overlap_length "
+        "FROM h3_8_geogs WHERE spatial_id = 'a'"
+    ).fetchone()
+    assert tuple(float(v) for v in row or ()) == (10.0, 7.0, 150.0)

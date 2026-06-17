@@ -48,4 +48,10 @@ def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]
     return [f"h3_{res}_{key}_lookup" for res in resolutions for key in GEOGRAPHY_MAPPINGS]
 
 
-STEP = TransformStep(name="geo_lookups", build=build, outputs=outputs, depends_on=("crime_counts",))
+STEP = TransformStep(
+    name="geo_lookups",
+    build=build,
+    outputs=outputs,
+    depends_on=("crime_counts",),
+    extract_inputs=tuple(GEOGRAPHY_MAPPINGS.values()),
+)

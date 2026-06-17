@@ -32,4 +32,4 @@ def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]
     return [f"crime_counts_h3_{res}" for res in resolutions]
 
 
-STEP = TransformStep(name="crime_counts", build=build, outputs=outputs)
+STEP = TransformStep(name="crime_counts", build=build, outputs=outputs, extract_inputs=("crime_data",))

@@ -85,15 +85,16 @@ def run_transform(edir: Path, tdir: Path, resolutions: list[int], *, rebuild: bo
     (validity repair + RTree, so the spatial joins are correct and fast). The H3 transforms then run:
     the BTP-filtered ``crime_counts_h3_*`` are aggregated from ``crime_data``, then the per-cell lookups
     and ``h3_{res}_geogs`` are built off them. Each transform node owns its output parquet under ``tdir``
-    (a durable cache the *load* step imports): a node whose outputs already exist is skipped unless
-    ``rebuild`` is True. No live database is touched.
+    (a durable cache the *load* step imports): a node reuses its cached output only while it is newer than
+    its inputs (the extract parquet it reads + its upstream steps' outputs), else rebuilds; ``rebuild``
+    forces every step. No live database is touched.
     """
     print(f"\n=== Transforming (extract: {edir} → transform: {tdir}){' [rebuild]' if rebuild else ''} ===\n")
     con = duckdb_connector(writeable=True)  # in-memory; discarded once the parquet are written
     try:
         _import_datasets(con, edir)
         index_geometry_tables(con)
-        build_all(STEPS, con, resolutions=resolutions, replace=False, rebuild=rebuild, tdir=tdir)
+        build_all(STEPS, con, resolutions=resolutions, replace=False, rebuild=rebuild, edir=edir, tdir=tdir)
     finally:
         con.close()
     print(f"\n=== Done. H3 aggregation parquet → {tdir} ===")

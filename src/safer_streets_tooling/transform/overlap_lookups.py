@@ -20,6 +20,9 @@ class OverlapFeature:
     id_alias: str = ""  # prefix for the {prefix}_id / {prefix}_ids columns (defaults to `name`)
     overlap_fn: str = "ST_Area"  # ST_Area for polygons, ST_Length for line layers (e.g. roads)
     overlap_alias: str = "overlap_area"  # name of the overlap-measure column in the lookup view
+    # how h3_geogs folds the per-cell overlap measure into one value. MAX for area layers (polygons of
+    # different types can overlap each other, so summing double-counts); SUM for line length (additive).
+    agg_fn: str = "MAX"
 
     @property
     def prefix(self) -> str:
@@ -41,6 +44,7 @@ OVERLAP_FEATURES: tuple[OverlapFeature, ...] = (
         id_alias="road",
         overlap_fn="ST_Length",
         overlap_alias="overlap_length",
+        agg_fn="SUM",
     ),
 )
 
@@ -81,4 +85,10 @@ def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]
     return [f"h3_{res}_{f.name}_lookup" for f in OVERLAP_FEATURES if table_exists(con, f.table) for res in resolutions]
 
 
-STEP = TransformStep(name="overlap_lookups", build=build, outputs=outputs, depends_on=("crime_counts",))
+STEP = TransformStep(
+    name="overlap_lookups",
+    build=build,
+    outputs=outputs,
+    depends_on=("crime_counts",),
+    extract_inputs=tuple(f.table for f in OVERLAP_FEATURES),
+)

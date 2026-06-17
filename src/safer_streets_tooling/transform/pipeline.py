@@ -29,10 +29,12 @@ class TransformNode(AsyncNode[None, None]):
     """Pipeline node that builds one :class:`TransformStep` against the shared DuckDB (in a worker thread).
 
     Each node owns the parquet for the relations its step produces (``step.outputs``), mirroring how
-    ``DatasetExtractNode`` owns its dataset parquet. When ``tdir`` is given and every output parquet is
-    already present (and ``rebuild`` is False), the build is skipped and the cached parquet are loaded
-    back as tables instead — so a downstream node (e.g. ``geogs``) can still read this step's relations
-    from the in-memory catalog. Otherwise the step is built and each output is written out as parquet.
+    ``DatasetExtractNode`` owns its dataset parquet. When ``tdir`` is given, the cached output is reused
+    (loaded back as tables instead of rebuilt) only when every output parquet exists *and* is newer than
+    every input — the step's ``extract_inputs`` parquet under ``edir`` plus the output parquet of its
+    upstream ``depends_on`` steps under ``tdir``. A stale or missing output triggers a rebuild, and the
+    fresh write bumps the output mtime so downstream steps see it and rebuild in turn. Reloading rather
+    than rebuilding still leaves the step's relations in the in-memory catalog for downstream nodes.
 
     All DB work runs on this node's own ``con.cursor()`` so concurrent steps don't collide on a single
     connection (the cursors share the one in-memory catalog). With ``tdir=None`` nothing is cached or
@@ -43,16 +45,20 @@ class TransformNode(AsyncNode[None, None]):
     def __init__(
         self,
         step: TransformStep,
+        upstream: Sequence[TransformStep],
         con: duckdb.DuckDBPyConnection,
         resolutions: list[int],
+        edir: Path | None,
         tdir: Path | None,
         *,
         replace: bool = True,
         rebuild: bool = False,
     ) -> None:
         self._step = step
+        self._upstream = upstream
         self._con = con
         self._resolutions = resolutions
+        self._edir = edir
         self._tdir = tdir
         self._replace = replace
         self._rebuild = rebuild
@@ -62,15 +68,33 @@ class TransformNode(AsyncNode[None, None]):
         await asyncio.to_thread(self._run)
         return Ok(None)
 
+    def _input_paths(self, cur: duckdb.DuckDBPyConnection) -> list[Path]:
+        """Parquet this step reads: its ``extract_inputs`` (edir) + each upstream step's outputs (tdir)."""
+        paths: list[Path] = []
+        if self._edir is not None:
+            paths += [self._edir / f"{name}.parquet" for name in self._step.extract_inputs]
+        if self._tdir is not None:
+            for up in self._upstream:
+                paths += [self._tdir / f"{out}.parquet" for out in up.outputs(cur, self._resolutions)]
+        return [p for p in paths if p.exists()]
+
+    def _is_fresh(self, output_paths: list[Path], input_paths: list[Path]) -> bool:
+        """True when every output exists and none is older than the newest input (Make-style)."""
+        if not all(p.exists() for p in output_paths):
+            return False
+        oldest_output = min(p.stat().st_mtime for p in output_paths)
+        newest_input = max((p.stat().st_mtime for p in input_paths), default=0.0)
+        return oldest_output >= newest_input
+
     def _run(self) -> None:
         cur = self._con.cursor()
         names = self._step.outputs(cur, self._resolutions) if self._tdir is not None else []
         paths = {n: self._tdir / f"{n}.parquet" for n in names} if self._tdir is not None else {}
 
-        if names and not self._rebuild and all(p.exists() for p in paths.values()):
+        if names and not self._rebuild and self._is_fresh(list(paths.values()), self._input_paths(cur)):
             for name, path in paths.items():
                 cur.execute(f'CREATE OR REPLACE TABLE "{name}" AS {read_geoparquet(path)}')
-            print(f"[transform] {self._step.name}: cached output kept ({len(names)} relation(s))")
+            print(f"[transform] {self._step.name}: cached output up to date ({len(names)} relation(s))")
             return
 
         self._step.build(cur, self._resolutions, self._replace)
@@ -87,17 +111,24 @@ def build_pipeline(
     resolutions: list[int] = H3_RESOLUTIONS,
     replace: bool = True,
     rebuild: bool = False,
+    edir: Path | None = None,
     tdir: Path | None = None,
     verbose: bool = False,
 ) -> AsyncPipeline:
     """Wire ``steps`` into an :class:`AsyncPipeline`; ``depends_on`` become the graph edges.
 
-    When ``tdir`` is given, each node caches its outputs there: a node whose output parquet all already
-    exist is skipped (reloaded from disk) unless ``rebuild`` is True. With ``tdir=None`` the relations
-    are built in ``con`` only (no caching)."""
+    When ``tdir`` is given, each node caches its outputs there and reuses them only while they are newer
+    than the step's inputs (``extract_inputs`` parquet under ``edir`` + the upstream steps' outputs under
+    ``tdir``); a stale or missing output is rebuilt, unless ``rebuild`` forces every step. With
+    ``tdir=None`` the relations are built in ``con`` only (no caching)."""
+    by_name = {step.name: step for step in steps}
     pipeline = AsyncPipeline(verbose=verbose)
     for step in steps:
-        pipeline.add(step.name, TransformNode(step, con, resolutions, tdir, replace=replace, rebuild=rebuild))
+        upstream = [by_name[dep] for dep in step.depends_on if dep in by_name]
+        pipeline.add(
+            step.name,
+            TransformNode(step, upstream, con, resolutions, edir, tdir, replace=replace, rebuild=rebuild),
+        )
     return pipeline
 
 
@@ -108,6 +139,7 @@ def build_all(
     resolutions: list[int] = H3_RESOLUTIONS,
     replace: bool = True,
     rebuild: bool = False,
+    edir: Path | None = None,
     tdir: Path | None = None,
     verbose: bool = False,
 ) -> None:
@@ -116,13 +148,13 @@ def build_all(
     The independent lookup steps run concurrently (each on its own ``con.cursor()``); ``geogs`` waits for
     them. As in ``extract.run_extract``, ``AsyncNode.__call__`` captures any exception as ``Err`` so the
     pipeline never aborts mid-flight; each node's result is then unwrapped here, re-raising the first
-    failure. When ``tdir`` is given, a node whose output parquet already exist is skipped unless
-    ``rebuild`` is True (see :class:`TransformNode`); each built node writes its outputs to ``tdir``.
-    When ``replace`` is False, existing tables/views are left untouched (``CREATE ... IF NOT EXISTS``)
-    rather than rebuilt (``CREATE OR REPLACE``).
+    failure. When ``tdir`` is given, a node reuses its cached output only while it is newer than the
+    step's inputs (see :class:`TransformNode`), unless ``rebuild`` is True; each rebuilt node writes its
+    outputs to ``tdir``. When ``replace`` is False, existing tables/views are left untouched
+    (``CREATE ... IF NOT EXISTS``) rather than rebuilt (``CREATE OR REPLACE``).
     """
     pipeline = build_pipeline(
-        steps, con, resolutions=resolutions, replace=replace, rebuild=rebuild, tdir=tdir, verbose=verbose
+        steps, con, resolutions=resolutions, replace=replace, rebuild=rebuild, edir=edir, tdir=tdir, verbose=verbose
     )
     asyncio.run(pipeline())
     for node_id in pipeline.nodes:
