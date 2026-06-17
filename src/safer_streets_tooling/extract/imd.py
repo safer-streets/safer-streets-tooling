@@ -14,8 +14,8 @@ import requests
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets._common import download, raw_dir
-from safer_streets_tooling.datasets.base import Dataset, ExtractContext
+from safer_streets_tooling.extract._common import download, raw_dir
+from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # original IoD column name -> short name; everything except IMD_PASSTHROUGH is percentile-ranked. This
 # is also the column set of the merged table, so the Welsh side maps onto the same short names.

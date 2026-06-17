@@ -13,8 +13,6 @@ from typing import Any
 
 from safer_streets_core.utils import data_dir
 
-H3_RESOLUTIONS = [8, 9, 10]
-
 
 def data_sources_path() -> Path:
     """Location of the data_sources.json catalogue (data-dir override first, else the repo default)."""

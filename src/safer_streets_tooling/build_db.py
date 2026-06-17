@@ -3,16 +3,17 @@ Build the production DuckDB database from modular, per-dataset parquet intermedi
 
 The pipeline has three phases (extract → transform → load):
 
-  1. **extract**    each dataset (``safer_streets_tooling.datasets.DATASETS``) is downloaded and
+  1. **extract**    each dataset (``safer_streets_tooling.extract.DATASETS``) is downloaded and
      preprocessed in its own in-memory DuckDB and dumped to a ``<name>.parquet`` GeoParquet file under
      ``data_dir()/extract``. The extractors run concurrently as nodes in an ``AsyncPipeline`` (see
-     ``safer_streets_tooling.extract``), respecting ``depends_on`` edges. The parquet files are a
-     durable, per-dataset cache: a single dataset can be refreshed without touching the others.
+     ``safer_streets_tooling.extract.pipeline``), respecting ``depends_on`` edges. The parquet files are
+     a durable, per-dataset cache: a single dataset can be refreshed without touching the others.
   2. **transform**  the extracted parquet are loaded into a throwaway in-memory DuckDB, geometry is
-     indexed, and the H3 aggregations (``safer_streets_tooling.transforms``) are built; every derived
-     relation (the per-cell lookups and ``h3_{res}_geogs``) is written out as its own parquet under
-     ``data_dir()/transform``. No live database is touched — the parquet are a durable cache of the
-     aggregations, so they can be rebuilt without re-importing or re-extracting.
+     indexed, and the H3 aggregation steps (``safer_streets_tooling.transform.STEPS``) are built; every
+     derived relation (the BTP-filtered ``crime_counts_h3_*``, the per-cell lookups and
+     ``h3_{res}_geogs``) is written out as its own parquet under ``data_dir()/transform``. No live
+     database is touched — the parquet are a durable cache of the aggregations, so they can be rebuilt
+     without re-importing or re-extracting.
   3. **load**       every present parquet (extracted datasets + transform aggregations) is imported
      into a ``<name>.staging.db``, geometry tables are repaired + RTree-indexed, and the staging file
      is only promoted over the live database with an atomic ``os.replace`` once every step has
@@ -23,8 +24,8 @@ The pipeline has three phases (extract → transform → load):
 The live database is the standard database (``database_path()``, under ``SAFER_STREETS_DATA_DIR``);
 pass ``--db-path`` to override.
 
-Adding a dataset: write a module under ``safer_streets_tooling/datasets/`` exposing a ``DATASET`` and
-register it in ``safer_streets_tooling/datasets/__init__.py``. Then ``data extract --only <name>``
+Adding a dataset: write a module under ``safer_streets_tooling/extract/`` exposing a ``DATASET`` and
+register it in ``safer_streets_tooling/extract/__init__.py``. Then ``data extract --only <name>``
 and ``data assemble``.
 """
 
@@ -36,13 +37,11 @@ from safer_streets_core.database import (
     duckdb_connector,
     index_geometry_tables,
     read_geoparquet,
-    write_geoparquet,
 )
 from safer_streets_core.utils import data_dir, database_path
 
-from safer_streets_tooling import transforms
-from safer_streets_tooling.datasets import BY_NAME, DATASETS, ExtractContext
-from safer_streets_tooling.extract import run_extract
+from safer_streets_tooling.extract import BY_NAME, DATASETS, ExtractContext, run_extract
+from safer_streets_tooling.transform import STEPS, build_all
 
 app = typer.Typer(help="Build the crime + boundaries + H3 DuckDB database from per-dataset parquet intermediates.")
 
@@ -79,40 +78,25 @@ def _import_datasets(con, sdir: Path) -> int:
     return imported
 
 
-def _relations(con) -> set[str]:
-    """Names of all tables and views in the ``main`` schema."""
-    return {
-        row[0]
-        for row in con.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
-        ).fetchall()
-    }
-
-
-def run_transform(edir: Path, tdir: Path, resolutions: list[int]) -> None:
+def run_transform(edir: Path, tdir: Path, resolutions: list[int], *, rebuild: bool = False) -> None:
     """Build the H3 aggregation parquet under ``tdir`` from the extracted dataset parquet in ``edir``.
 
     The extracted base tables are imported into a throwaway in-memory DuckDB and geometry is indexed
-    (validity repair + RTree, so the spatial joins are correct and fast). The H3 transforms then run
-    with ``replace=False``, which keeps the already-extracted ``crime_counts_h3_*`` (its BTP-filtered
-    counts are the canonical ones) and only creates the per-cell lookups and ``h3_{res}_geogs``. Every
-    relation the transforms newly create is written out as its own parquet — a durable cache the
-    *load* step imports. No live database is touched here.
+    (validity repair + RTree, so the spatial joins are correct and fast). The H3 transforms then run:
+    the BTP-filtered ``crime_counts_h3_*`` are aggregated from ``crime_data``, then the per-cell lookups
+    and ``h3_{res}_geogs`` are built off them. Each transform node owns its output parquet under ``tdir``
+    (a durable cache the *load* step imports): a node whose outputs already exist is skipped unless
+    ``rebuild`` is True. No live database is touched.
     """
-    print(f"\n=== Transforming (extract: {edir} → transform: {tdir}) ===\n")
+    print(f"\n=== Transforming (extract: {edir} → transform: {tdir}){' [rebuild]' if rebuild else ''} ===\n")
     con = duckdb_connector(writeable=True)  # in-memory; discarded once the parquet are written
     try:
         _import_datasets(con, edir)
         index_geometry_tables(con)
-        before = _relations(con)
-        transforms.build_all(con, resolutions=resolutions, replace=False)
-        derived = sorted(_relations(con) - before)
-        for name in derived:
-            write_geoparquet(con, f'SELECT * FROM "{name}"', tdir / f"{name}.parquet")
-            print(f"  {name}: written")
+        build_all(STEPS, con, resolutions=resolutions, replace=False, rebuild=rebuild, tdir=tdir)
     finally:
         con.close()
-    print(f"\n=== Done. Wrote {len(derived)} H3 aggregation parquet → {tdir} ===")
+    print(f"\n=== Done. H3 aggregation parquet → {tdir} ===")
 
 
 def run_load(db_path: Path, edir: Path, tdir: Path) -> None:
@@ -168,14 +152,16 @@ def extract(
 @app.command("transform")
 def transform(
     resolutions: list[int] = [8, 9, 10],  # noqa: B006
+    all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
 ) -> None:
     """Build the H3 aggregation parquet under ``data_dir()/transform`` from the extracted parquet.
 
     Loads the extracted datasets into a throwaway in-memory DuckDB, runs the H3 transforms, and writes
-    each derived relation (lookups + ``h3_{res}_geogs``) out as its own parquet. No live database is
-    touched; ``load`` imports the result.
+    each derived relation (lookups + ``h3_{res}_geogs``) out as its own parquet. By default a node whose
+    output parquet already exist is skipped; ``--all`` rebuilds them all. No live database is touched;
+    ``load`` imports the result.
     """
-    run_transform(extract_dir(), transform_dir(), resolutions)
+    run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_)
 
 
 @app.command("load")
@@ -194,9 +180,10 @@ def load(
 def assemble(
     db_path: Path | None = None,
     resolutions: list[int] = [8, 9, 10],  # noqa: B006
+    all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
 ) -> None:
     """Transform then load: build the H3 aggregation parquet, then assemble + promote the database."""
-    run_transform(extract_dir(), transform_dir(), resolutions)
+    run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_)
     run_load(db_path or database_path(), extract_dir(), transform_dir())
 
 
@@ -206,10 +193,14 @@ def build(
     resolutions: list[int] = [8, 9, 10],  # noqa: B006
     force_download: bool = False,
 ) -> None:
-    """Full pass: extract any missing parquet (``--force-download`` re-fetches all), then transform + load."""
+    """Full pass: extract any missing parquet (``--force-download`` re-fetches all), then transform + load.
+
+    Cached transform parquet are kept; ``--force-download`` (which re-extracts) also rebuilds them so the
+    aggregations reflect the refreshed inputs.
+    """
     ctx = ExtractContext(staging=extract_dir(), force_download=force_download)
     run_extract(list(DATASETS), ctx, rebuild=force_download)
-    run_transform(ctx.staging, transform_dir(), resolutions)
+    run_transform(ctx.staging, transform_dir(), resolutions, rebuild=force_download)
     run_load(db_path or database_path(), ctx.staging, transform_dir())
 
 

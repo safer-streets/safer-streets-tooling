@@ -6,7 +6,7 @@ name, whether it carries geometry, what upstream parquet it needs). The orchestr
 ``scripts.build_db`` iterates the registry rather than hard-coding per-dataset control flow, so a
 new source is added by writing one module and appending its ``Dataset`` to ``DATASETS``.
 
-All geometry is British National Grid (EPSG:27700) by convention; see ``safer_streets_tooling.datasets._common``.
+All geometry is British National Grid (EPSG:27700) by convention; see ``safer_streets_tooling.extract._common``.
 """
 
 from collections.abc import Callable

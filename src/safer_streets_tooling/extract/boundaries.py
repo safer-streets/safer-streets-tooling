@@ -10,8 +10,8 @@ import requests
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 from scripts import ons_boundaries
 
-from safer_streets_tooling.datasets._common import raw_dir
-from safer_streets_tooling.datasets.base import Dataset, ExtractContext
+from safer_streets_tooling.extract._common import raw_dir
+from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 
 def _make_extract(layer_key: str, table: str):
@@ -46,7 +46,7 @@ def _datasets() -> tuple[Dataset, ...]:
             name=info["table"],
             table=info["table"],
             extract=_make_extract(layer_key, info["table"]),
-            optional=False,  # the H3 geography lookups in transforms.py require every boundary table
+            optional=False,  # the H3 geography lookups in transform/geo_lookups.py require every boundary table
         )
         for layer_key, info in ons_boundaries.sources()["layers"].items()
     )

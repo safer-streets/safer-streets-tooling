@@ -7,8 +7,8 @@ import pytest
 from safer_streets_tooling import build_db
 from safer_streets_tooling.async_node import AsyncNode
 from safer_streets_tooling.async_pipeline import AsyncPipeline
-from safer_streets_tooling.datasets.base import Dataset, ExtractContext
 from safer_streets_tooling.extract import build_pipeline, run_extract
+from safer_streets_tooling.extract.base import Dataset, ExtractContext
 from safer_streets_tooling.result import Err, Ok
 
 

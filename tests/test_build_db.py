@@ -1,4 +1,5 @@
 import tempfile
+from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -14,8 +15,10 @@ from shapely import LineString, Polygon
 
 from safer_streets_tooling import build_db
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets import _common, greenspace, imd, land_cover, poi, retail_centres, roads, schools
-from safer_streets_tooling.datasets.base import Dataset, ExtractContext
+from safer_streets_tooling.extract import _common, greenspace, imd, land_cover, poi, retail_centres, roads, schools
+from safer_streets_tooling.extract.base import Dataset, ExtractContext
+from safer_streets_tooling.transform import TransformStep
+from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 
 # source filenames now live in config/data_sources.json (read via data_source); fetch the ones the
 # fixtures need so tests stay in step with the catalogue
@@ -558,9 +561,9 @@ def test_run_extract_optional_failure_is_skipped_required_propagates(tmp_path):
         build_db.run_extract([required], ctx, rebuild=False)
 
 
-def test_run_transform_writes_derived_relations_as_parquet(tmp_path, monkeypatch):
-    """run_transform imports the extract parquet, runs build_all, and writes each newly-created
-    relation (not the imported inputs) out as its own parquet under the transform dir."""
+def test_run_transform_caches_outputs_and_skips_unless_rebuild(tmp_path, monkeypatch):
+    """run_transform writes each node's output parquet (not the imported inputs). A second run skips
+    nodes whose output parquet already exist (build fn not re-called); ``rebuild`` forces re-execution."""
     con = _connect()
     write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", tmp_path / "req_geom.parquet")
     con.close()
@@ -568,18 +571,42 @@ def test_run_transform_writes_derived_relations_as_parquet(tmp_path, monkeypatch
     datasets = (Dataset(name="req_geom", table="req_geom", extract=lambda ctx: None, optional=False),)
     monkeypatch.setattr(build_db, "DATASETS", datasets)
 
-    # stand-in transform: creates one new aggregation table; the imported input must NOT be re-exported
-    def fake_build_all(con, resolutions, replace):
-        con.execute("CREATE TABLE h3_8_geogs AS SELECT 1 AS spatial_id, 2 AS lad24cd;")
+    # stand-in transform steps: each creates the relations it declares as outputs; the overlap/retail
+    # steps have no outputs here (so the imported input is never re-written by the transform phase)
+    calls: Counter[str] = Counter()
 
-    monkeypatch.setattr(build_db.transforms, "build_all", fake_build_all)
+    def fake_step(name, *output_names, depends_on=()):
+        def build(con, resolutions, replace):
+            calls[name] += 1
+            for out in output_names:
+                con.execute(f'CREATE TABLE "{out}" AS SELECT 1 AS spatial_id, 2 AS v')
+
+        return TransformStep(name=name, build=build, outputs=lambda con, res: list(output_names), depends_on=depends_on)
+
+    steps = (
+        fake_step("crime_counts", "crime_counts_h3_8"),
+        fake_step("geo_lookups", *(f"h3_8_{key}_lookup" for key in GEOGRAPHY_MAPPINGS), depends_on=("crime_counts",)),
+        fake_step("overlap_lookups", depends_on=("crime_counts",)),
+        fake_step("retail_centre_lookups", depends_on=("crime_counts",)),
+        fake_step("geogs", "h3_8_geogs", depends_on=("geo_lookups", "overlap_lookups", "retail_centre_lookups")),
+    )
+    monkeypatch.setattr(build_db, "STEPS", steps)
 
     tdir = tmp_path / "transform"
     tdir.mkdir()
-    build_db.run_transform(tmp_path, tdir, resolutions=[8])
 
-    assert (tdir / "h3_8_geogs.parquet").exists()  # the newly-created relation is written out
-    assert not (tdir / "req_geom.parquet").exists()  # imported inputs are not re-written by transform
+    build_db.run_transform(tmp_path, tdir, resolutions=[8])
+    assert (tdir / "crime_counts_h3_8.parquet").exists()  # crime_counts step (now in transform) wrote its output
+    assert (tdir / "h3_8_geogs.parquet").exists()  # geogs step wrote its output
+    assert (tdir / "h3_8_lad24cd_lookup.parquet").exists()  # a derived lookup is written
+    assert not (tdir / "req_geom.parquet").exists()  # imported inputs are not written by transform
+    assert calls["crime_counts"] == 1 and calls["geo_lookups"] == 1 and calls["geogs"] == 1
+
+    build_db.run_transform(tmp_path, tdir, resolutions=[8])  # outputs present → skipped (reloaded)
+    assert calls["crime_counts"] == 1 and calls["geo_lookups"] == 1 and calls["geogs"] == 1
+
+    build_db.run_transform(tmp_path, tdir, resolutions=[8], rebuild=True)  # forced → rebuilt
+    assert calls["crime_counts"] == 2 and calls["geo_lookups"] == 2 and calls["geogs"] == 2
 
 
 def test_run_load_imports_extract_and_transform_parquet(tmp_path, monkeypatch):

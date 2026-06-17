@@ -4,7 +4,7 @@ from overturemaps import core as overture
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets.base import Dataset, ExtractContext
+from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # Overture Maps places (POI), streamed from S3 via the overturemaps reader (no API key). The bounding
 # box (England & Wales, WGS-84 xmin/ymin/xmax/ymax) and the kept categories live in

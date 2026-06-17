@@ -14,7 +14,7 @@ from pathlib import Path
 
 from safer_streets_tooling.async_node import AsyncNode
 from safer_streets_tooling.async_pipeline import AsyncPipeline
-from safer_streets_tooling.datasets import Dataset, ExtractContext
+from safer_streets_tooling.extract.base import Dataset, ExtractContext
 from safer_streets_tooling.result import Ok, Result
 
 

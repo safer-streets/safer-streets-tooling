@@ -8,8 +8,8 @@ import requests
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.datasets._common import download, raw_dir
-from safer_streets_tooling.datasets.base import Dataset, ExtractContext
+from safer_streets_tooling.extract._common import download, raw_dir
+from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # Isochrones are 10-minute walk catchments over the open_roads network.
 WALK_TRIP_MINUTES = 10

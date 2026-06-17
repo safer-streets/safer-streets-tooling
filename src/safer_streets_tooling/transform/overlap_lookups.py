@@ -1,0 +1,84 @@
+"""``h3_{res}_{name}_lookup`` — every overlapping feature (greenspace, land cover, roads) per H3 cell."""
+
+from dataclasses import dataclass
+
+import duckdb
+
+from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
+
+
+@dataclass(frozen=True)
+class OverlapFeature:
+    """A many-to-many geometry layer overlapped per H3 cell and folded into h3_geogs as a list."""
+
+    table: str  # source table with a `geom` column (may be absent → feature skipped)
+    name: str  # view name h3_{res}_{name}_lookup
+    id_col: str  # id column in the source table
+    extra_col: str  # an extra descriptive column carried in the lookup view
+    extra_alias: str  # alias for that extra column in the lookup view
+    cte: str  # short CTE alias used when folding the list into h3_geogs
+    id_alias: str = ""  # prefix for the {prefix}_id / {prefix}_ids columns (defaults to `name`)
+    overlap_fn: str = "ST_Area"  # ST_Area for polygons, ST_Length for line layers (e.g. roads)
+    overlap_alias: str = "overlap_area"  # name of the overlap-measure column in the lookup view
+
+    @property
+    def prefix(self) -> str:
+        return self.id_alias or self.name
+
+
+# optional geometry layers folded into h3_geogs, each skipped if its table is absent. Loaded by
+# build_db: open_greenspace (OS Open Greenspace), land_cover (UKCEH LCM), road_network (OS Open Roads).
+OVERLAP_FEATURES: tuple[OverlapFeature, ...] = (
+    OverlapFeature("open_greenspace", "greenspace", "id", "function", "function", "gs"),
+    OverlapFeature("land_cover", "land_cover", "gid", "urban", "urban", "lc"),
+    OverlapFeature(
+        "open_roads",
+        "road_network",
+        "id",
+        "road_function",
+        "type",
+        "rn",
+        id_alias="road",
+        overlap_fn="ST_Length",
+        overlap_alias="overlap_length",
+    ),
+)
+
+
+def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
+    """Create ``h3_{res}_{name}_lookup`` views: one row per (H3 cell, overlapping polygon).
+
+    Unlike the single-code geography lookups, a cell keeps *every* feature it intersects, with
+    the overlap measure (area for polygons, length for line layers). Each feature is skipped if
+    its source table is absent (e.g. the greenspace, land-cover or road load was skipped).
+    """
+    for f in OVERLAP_FEATURES:
+        if not table_exists(con, f.table):
+            continue
+        for res in resolutions:
+            con.execute(f"""
+                {create_clause("VIEW", f"h3_{res}_{f.name}_lookup", replace=replace)} AS
+                SELECT
+                    c.spatial_id,
+                    s.{f.id_col} AS {f.prefix}_id,
+                    s.{f.extra_col} AS {f.extra_alias},
+                    {f.overlap_fn}(ST_Intersection(c.cell_geom, s.geom)) AS {f.overlap_alias}
+                FROM (
+                    SELECT DISTINCT
+                        spatial_id,
+                        ST_Transform(
+                            ST_GeomFromText(h3_cell_to_boundary_wkt(spatial_id)),
+                            'EPSG:4326', 'EPSG:27700', always_xy := true
+                        ) AS cell_geom
+                    FROM crime_counts_h3_{res}
+                ) c
+                JOIN {f.table} s ON ST_Intersects(c.cell_geom, s.geom);
+            """)
+
+
+def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+    # only features whose source table is present are built (matching build)
+    return [f"h3_{res}_{f.name}_lookup" for f in OVERLAP_FEATURES if table_exists(con, f.table) for res in resolutions]
+
+
+STEP = TransformStep(name="overlap_lookups", build=build, outputs=outputs, depends_on=("crime_counts",))

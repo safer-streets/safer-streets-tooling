@@ -7,10 +7,9 @@ time). Add a new source by writing a module that exposes a ``DATASET`` (or ``DAT
 it below.
 """
 
-from safer_streets_tooling.datasets import (
+from safer_streets_tooling.extract import (
     boundaries,
     crime,
-    crime_counts,
     greenspace,
     imd,
     land_cover,
@@ -19,11 +18,10 @@ from safer_streets_tooling.datasets import (
     roads,
     schools,
 )
-from safer_streets_tooling.datasets.base import Dataset, ExtractContext
+from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 DATASETS: tuple[Dataset, ...] = (
     crime.DATASET,
-    *crime_counts.DATASETS,
     *boundaries.DATASETS,
     greenspace.DATASET,
     land_cover.DATASET,
@@ -51,4 +49,6 @@ _validate(DATASETS)
 
 BY_NAME: dict[str, Dataset] = {ds.name: ds for ds in DATASETS}
 
-__all__ = ["BY_NAME", "DATASETS", "Dataset", "ExtractContext"]
+from safer_streets_tooling.extract.pipeline import build_pipeline, run_extract  # noqa: E402
+
+__all__ = ["BY_NAME", "DATASETS", "Dataset", "ExtractContext", "build_pipeline", "run_extract"]
