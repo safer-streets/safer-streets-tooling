@@ -27,13 +27,20 @@ The pipeline has three phases (extract → transform → load):
 The live database is the standard database (``database_path()``, under ``SAFER_STREETS_DATA_DIR``);
 pass ``--db-path`` to override.
 
+``sync`` reconciles the extract + transform parquet with the ``phase2`` Azure Blob Storage container
+(account URL from ``SAFER_STREETS_BLOB_STORAGE``); it is independent of the build phases. Most policies
+are upload-only; ``--update newer`` is a two-way sync (upload if local is newer, download if remote is).
+
 Adding a dataset: write a module under ``safer_streets_tooling/extract/`` exposing a ``DATASET`` and
 register it in ``safer_streets_tooling/extract/__init__.py``. Then ``data extract --only <name>``
 and ``data assemble``.
 """
 
 import os
+from collections.abc import Iterable
+from io import BytesIO
 from pathlib import Path
+from typing import Any, Protocol
 
 import typer
 from safer_streets_core.database import (
@@ -41,7 +48,8 @@ from safer_streets_core.database import (
     index_geometry_tables,
     read_geoparquet,
 )
-from safer_streets_core.utils import data_dir, database_path
+from safer_streets_core.file_storage import AzureBlobStorage, UpdatePolicy
+from safer_streets_core.utils import blob_storage_url, data_dir, database_path
 
 from safer_streets_tooling.extract import BY_NAME, DATASETS, ExtractContext, run_extract
 from safer_streets_tooling.transform import STEPS, build_all
@@ -259,6 +267,144 @@ def build(
     run_extract(list(DATASETS), ctx, rebuild=force_download)
     run_transform(ctx.staging, transform_dir(), resolutions, rebuild=force_download)
     run_load(db_path or database_path(), transform_dir(), resolutions, edir=ctx.staging, include=include)
+
+
+# Azure Blob Storage container for the phase-2 parquet. The account URL comes from the
+# SAFER_STREETS_BLOB_STORAGE env var; AzureBlobStorage authenticates with a service principal
+# (AZURE_* credentials — see safer_streets_core.file_storage.AzureBlobStorage).
+AZURE_CONTAINER = "phase2"
+
+# The extract + transform parquet live directly under these data_dir() subdirectories; blob names
+# are the path relative to data_dir() (e.g. "extract/crime_data.parquet").
+SYNC_PREFIXES: tuple[str, ...] = ("extract/", "transform/")
+
+# Treat mtimes within this many seconds as equal: Azure last-modified is second-resolution, so a
+# finer comparison would spuriously re-transfer files that are already in sync.
+_MTIME_TOLERANCE_S = 1.0
+
+
+class _BlobStore(Protocol):
+    """The blob-storage surface the sync helpers use (satisfied structurally by ``AzureBlobStorage``);
+    typing against it keeps the reconcile logic testable with an in-memory fake."""
+
+    def list(self, startswith: str | None = None) -> Iterable[str]: ...
+    def read(self, filename: str) -> BytesIO: ...
+    def metadata(self, filename: str) -> Any: ...
+    def write_file(self, root_path: Path, filename: str, *, overwrite: bool = False) -> bool: ...
+    def needs_update(self, root_path: Path, filename: str, policy: UpdatePolicy) -> bool: ...
+
+
+def _local_parquet(root: Path) -> dict[str, Path]:
+    """Local extract + transform parquet, keyed by blob name (path relative to ``root``)."""
+    return {
+        str(parquet.relative_to(root)): parquet
+        for d in (extract_dir(), transform_dir())
+        for parquet in d.glob("*.parquet")
+    }
+
+
+def _remote_parquet(storage: _BlobStore) -> set[str]:
+    """Names of the parquet blobs under the extract/ + transform/ prefixes."""
+    return {name for prefix in SYNC_PREFIXES for name in storage.list(startswith=prefix) if name.endswith(".parquet")}
+
+
+def _download(storage: _BlobStore, root: Path, name: str, last_modified: float) -> None:
+    """Write the blob ``name`` to ``root / name`` and stamp it with the remote ``last_modified`` time
+    (so a subsequent ``newer`` sync sees the two as in-sync rather than re-transferring)."""
+    dest = root / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(storage.read(name).getvalue())
+    os.utime(dest, (last_modified, last_modified))
+
+
+def _upload(storage: _BlobStore, root: Path, name: str) -> None:
+    """Upload ``root / name`` then align its local mtime to the resulting blob's last-modified time
+    (so a subsequent ``newer`` sync doesn't see the freshly-written remote as newer and pull it back)."""
+    storage.write_file(root, name, overwrite=True)
+    meta = storage.metadata(name)
+    if meta is not None:
+        ts = meta.last_modified.timestamp()
+        os.utime(root / name, (ts, ts))
+
+
+def _sync_newer(storage: _BlobStore, root: Path) -> tuple[int, int, int]:
+    """Two-way reconcile of the extract + transform parquet by modification time: upload local-only
+    and locally-newer files, download remote-only and remotely-newer ones. Returns (up, down, skipped)."""
+    local = _local_parquet(root)
+    remote = _remote_parquet(storage)
+    uploaded = downloaded = skipped = 0
+    for name in sorted(set(local) | remote):
+        meta = storage.metadata(name) if name in remote else None
+        if meta is None:  # local-only
+            _upload(storage, root, name)
+            print(f"  ↑ {name}: uploaded (local only)")
+            uploaded += 1
+        elif name not in local:  # remote-only
+            _download(storage, root, name, meta.last_modified.timestamp())
+            print(f"  ↓ {name}: downloaded (remote only)")
+            downloaded += 1
+        else:
+            delta = local[name].stat().st_mtime - meta.last_modified.timestamp()
+            if delta > _MTIME_TOLERANCE_S:
+                _upload(storage, root, name)
+                print(f"  ↑ {name}: uploaded (local newer)")
+                uploaded += 1
+            elif delta < -_MTIME_TOLERANCE_S:
+                _download(storage, root, name, meta.last_modified.timestamp())
+                print(f"  ↓ {name}: downloaded (remote newer)")
+                downloaded += 1
+            else:
+                print(f"    {name}: skipped (in sync)")
+                skipped += 1
+    return uploaded, downloaded, skipped
+
+
+def _sync_upload(storage: _BlobStore, root: Path, update: UpdatePolicy) -> tuple[int, int]:
+    """Upload local parquet, deferring the overwrite-or-skip decision for existing blobs to ``update``.
+    Returns (uploaded, skipped)."""
+    uploaded = skipped = 0
+    for name in sorted(_local_parquet(root)):
+        if storage.needs_update(root, name, update):
+            storage.write_file(root, name, overwrite=True)
+            print(f"  ↑ {name}: uploaded")
+            uploaded += 1
+        else:
+            print(f"    {name}: skipped")
+            skipped += 1
+    return uploaded, skipped
+
+
+@app.command("sync")
+def sync(
+    update: UpdatePolicy = typer.Option(  # noqa: B008
+        UpdatePolicy.IGNORE, help="How to reconcile parquet that exist on both sides."
+    ),
+) -> None:
+    """Sync the extract + transform parquet with Azure Blob Storage (``phase2`` container).
+
+    Each ``*.parquet`` under ``data_dir()/extract`` and ``data_dir()/transform`` is keyed by its path
+    relative to ``data_dir()`` (e.g. ``extract/crime_data.parquet``). All policies except ``newer`` are
+    upload-only — a blob absent remotely is uploaded, and ``--update`` decides what to do when it already
+    exists. ``newer`` is a **two-way** reconcile (it also pulls down blobs newer than / missing locally):
+
+    \b
+    - ``ignore``    upload-only; skip blobs that already exist (default)
+    - ``newer``     two-way: upload if local is newer, download if remote is newer
+    - ``different`` upload-only; overwrite if the md5 sums differ
+    - ``force``     upload-only; always overwrite
+    """
+    account_url = blob_storage_url()
+    storage = AzureBlobStorage(account_url, AZURE_CONTAINER, readonly=False)
+    root = data_dir()
+
+    arrow = "↔" if update is UpdatePolicy.NEWER else "→"
+    print(f"\n=== Syncing parquet {arrow} {account_url}/{AZURE_CONTAINER} [update={update}] ===\n")
+    if update is UpdatePolicy.NEWER:
+        uploaded, downloaded, skipped = _sync_newer(storage, root)
+        print(f"\n=== Done. {uploaded} uploaded, {downloaded} downloaded, {skipped} skipped → {AZURE_CONTAINER} ===")
+    else:
+        uploaded, skipped = _sync_upload(storage, root, update)
+        print(f"\n=== Done. {uploaded} uploaded, {skipped} skipped → {AZURE_CONTAINER} ===")
 
 
 def main() -> None:

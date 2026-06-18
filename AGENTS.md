@@ -46,7 +46,7 @@ Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
 
 | File | Role |
 | ---- | ---- |
-| [build_db.py](src/safer_streets_tooling/build_db.py) | `data` CLI: `extract` / `assemble` / `build` commands + `run_assemble` |
+| [data_pipeline.py](src/safer_streets_tooling/data_pipeline.py) | `data` CLI: `extract` / `assemble` / `build` commands + `run_assemble` |
 | [extract/pipeline.py](src/safer_streets_tooling/extract/pipeline.py) | Concurrent extract phase: `DatasetExtractNode`, `build_pipeline`, `run_extract` |
 | [transform/pipeline.py](src/safer_streets_tooling/transform/pipeline.py) | Concurrent transform phase: `TransformNode`, `build_pipeline`, `build_all` |
 | [async_pipeline.py](src/safer_streets_tooling/async_pipeline.py) | DAG runner over `AsyncNode`s (`graphlib.TopologicalSorter` + `asyncio.gather`) |
@@ -163,6 +163,10 @@ Overture S3 is unreachable, mirroring the existing tests.
 - **Line length is 120** (`[tool.ruff]`, `E501` ignored). Active ruff rules: `A, B, E, F, I, SIM, UP`
   (`D103` ignored in `tests/`).
 - **No comments explaining what the code does.** Only comment the non-obvious *why*.
+- **Keep documentation in step with the code.** Any change to the pipeline, CLI commands/flags, the
+  dataset or transform-step set, the DAG, or developer-facing behaviour must update the docs in the same
+  change: [README.md](README.md) (including its extract & transform DAG mermaid diagram), this
+  `AGENTS.md`, and the relevant module/CLI docstrings. Docs and code must never drift.
 
 ## Reviewer Checklist
 
@@ -200,7 +204,7 @@ When reviewing a PR or diff, check:
 src/
   safer_streets_tooling/
     __init__.py
-    build_db.py        # `data` CLI: extract / transform / load / assemble / build
+    data_pipeline.py   # `data` CLI: extract / transform / load / assemble / build / sync
     async_pipeline.py  # DAG runner over AsyncNodes
     async_node.py      # AsyncNode base (exception-safe, dependency introspection)
     result.py          # Result / Ok / Err

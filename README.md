@@ -147,15 +147,37 @@ Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParq
 
 ```bash
 uv sync
-data build                       # extract any missing parquet, then transform + load
-data extract                     # (re)build only missing parquet intermediates
-data extract --only schools      # refresh one dataset (reads open_roads.parquet from cache)
-data extract --force-download    # re-fetch every source and rebuild
-data transform                   # (re)build the H3 aggregation parquet from the extract parquet
-data load                        # (optional) assemble the minimal DB: crime_counts + geogs + boundaries + features
-data load --include road_network # …plus any extra table(s) by name
-data assemble                    # transform + load in one step
+uv run data build                       # extract any missing parquet, then transform + load
+uv run data extract                     # (re)build only missing parquet intermediates
+uv run data extract --only schools      # refresh one dataset (reads open_roads.parquet from cache)
+uv run data extract --force-download    # re-fetch every source and rebuild
+uv run data transform                   # (re)build the H3 aggregation parquet from the extract parquet
+uv run data load                        # (optional) assemble the minimal DB: crime_counts + geogs + boundaries + features
+uv run data load --include road_network # …plus any extra table(s) by name
+uv run data assemble                    # transform + load in one step
+uv run data sync                        # upload the extract + transform parquet to Azure Blob (phase2)
+uv run data sync --update newer         # two-way: upload if local newer, download if remote newer
 ```
+
+To get started quickly, just sync your `SAFER_STREETS_DATA_DIR` with the cloud (credentials needed) and build the db:
+
+```sh
+uv run data sync --update newer         # two-way: upload if local newer, download if remote newer
+uv run data load
+```
+
+`data sync` reconciles every `*.parquet` under `data_dir()/extract` and `data_dir()/transform` with the
+`phase2` container, keyed by path relative to `data_dir()` (e.g. `extract/crime_data.parquet`). The
+account URL comes from the `SAFER_STREETS_BLOB_STORAGE` env var and authentication uses a service
+principal (`AZURE_*` credentials); see `safer_streets_core.file_storage`. A blob absent remotely is
+always uploaded; for one that exists on both sides `--update` decides:
+
+- `ignore` *(default)* — upload-only; skip blobs that already exist
+- `newer` — **two-way**: upload if the local file is newer, download if the remote blob is newer (and
+  pull down blobs that exist only remotely). After each transfer the local mtime is aligned to the
+  remote's so repeated runs don't ping-pong.
+- `different` — upload-only; overwrite if the md5 sums differ
+- `force` — upload-only; always overwrite
 
 ## Adding a dataset
 

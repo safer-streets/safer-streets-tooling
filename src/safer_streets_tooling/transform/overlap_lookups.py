@@ -1,4 +1,4 @@
-"""``h3_{res}_{name}_lookup`` — every overlapping feature (greenspace, land cover, roads) per H3 cell."""
+"""``h3_{res}_{name}_lookup`` — every overlapping feature (greenspace, land cover, roads, school isochrones) per H3 cell."""
 
 from dataclasses import dataclass
 
@@ -11,13 +11,14 @@ from safer_streets_tooling.transform.base import TransformStep, create_clause, t
 class OverlapFeature:
     """A many-to-many geometry layer overlapped per H3 cell and folded into h3_geogs as a list."""
 
-    table: str  # source table with a `geom` column (may be absent → feature skipped)
+    table: str  # source table with a geometry column (may be absent → feature skipped)
     name: str  # view name h3_{res}_{name}_lookup
     id_col: str  # id column in the source table
     extra_col: str  # an extra descriptive column carried in the lookup view
     extra_alias: str  # alias for that extra column in the lookup view
     cte: str  # short CTE alias used when folding the list into h3_geogs
     id_alias: str = ""  # prefix for the {prefix}_id / {prefix}_ids columns (defaults to `name`)
+    geom_col: str = "geom"  # geometry column overlapped against each cell (e.g. `isochrone` for schools)
     overlap_fn: str = "ST_Area"  # ST_Area for polygons, ST_Length for line layers (e.g. roads)
     overlap_alias: str = "overlap_area"  # name of the overlap-measure column in the lookup view
     # how h3_geogs folds the per-cell overlap measure into one value. MAX for area layers (polygons of
@@ -30,7 +31,8 @@ class OverlapFeature:
 
 
 # optional geometry layers folded into h3_geogs, each skipped if its table is absent. Loaded by
-# build_db: open_greenspace (OS Open Greenspace), land_cover (UKCEH LCM), road_network (OS Open Roads).
+# data_pipeline: open_greenspace (OS Open Greenspace), land_cover (UKCEH LCM), road_network (OS Open Roads),
+# schools (GIAS, overlapped by their walk-isochrone catchment rather than the point location).
 OVERLAP_FEATURES: tuple[OverlapFeature, ...] = (
     OverlapFeature("open_greenspace", "greenspace", "id", "function", "function", "gs"),
     OverlapFeature("land_cover", "land_cover", "gid", "urban", "urban", "lc"),
@@ -46,6 +48,16 @@ OVERLAP_FEATURES: tuple[OverlapFeature, ...] = (
         overlap_alias="overlap_length",
         agg_fn="SUM",
     ),
+    OverlapFeature(
+        "schools",
+        "schools",
+        "urn",
+        "establishmentname",
+        "school_name",
+        "sc",
+        id_alias="school",
+        geom_col="isochrone",
+    ),
 )
 
 
@@ -53,8 +65,10 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     """Create ``h3_{res}_{name}_lookup`` views: one row per (H3 cell, overlapping polygon).
 
     Unlike the single-code geography lookups, a cell keeps *every* feature it intersects, with
-    the overlap measure (area for polygons, length for line layers). Each feature is skipped if
-    its source table is absent (e.g. the greenspace, land-cover or road load was skipped).
+    the overlap measure (area for polygons, length for line layers). The overlapped geometry is the
+    table's ``geom`` by default, but schools use their walk-isochrone catchment instead. Each feature
+    is skipped if its source table is absent (e.g. the greenspace, land-cover, road or schools load
+    was skipped).
     """
     for f in OVERLAP_FEATURES:
         if not table_exists(con, f.table):
@@ -66,7 +80,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
                     c.spatial_id,
                     s.{f.id_col} AS {f.prefix}_id,
                     s.{f.extra_col} AS {f.extra_alias},
-                    {f.overlap_fn}(ST_Intersection(c.cell_geom, s.geom)) AS {f.overlap_alias}
+                    {f.overlap_fn}(ST_Intersection(c.cell_geom, s.{f.geom_col})) AS {f.overlap_alias}
                 FROM (
                     SELECT DISTINCT
                         spatial_id,
@@ -76,7 +90,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
                         ) AS cell_geom
                     FROM crime_counts_h3_{res}
                 ) c
-                JOIN {f.table} s ON ST_Intersects(c.cell_geom, s.geom);
+                JOIN {f.table} s ON ST_Intersects(c.cell_geom, s.{f.geom_col});
             """)
 
 

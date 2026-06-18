@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-data = "safer_streets_tooling.build_db:main"
+data = "safer_streets_tooling.data_pipeline:main"
 
 [tool.uv.sources]
 safer-streets-core = { path = "../safer-streets-core", editable = true }

@@ -3,7 +3,7 @@
 A :class:`Dataset` describes one source: how to *extract* it (download + preprocess in its own
 in-memory DuckDB, then dump to a GeoParquet file) and how it lands in the final database (table
 name, whether it carries geometry, what upstream parquet it needs). The orchestrator in
-``scripts.build_db`` iterates the registry rather than hard-coding per-dataset control flow, so a
+``safer_streets_tooling.data_pipeline`` iterates the registry rather than hard-coding per-dataset control flow, so a
 new source is added by writing one module and appending its ``Dataset`` to ``DATASETS``.
 
 All geometry is British National Grid (EPSG:27700) by convention; see ``safer_streets_tooling.extract._common``.

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from safer_streets_tooling import build_db
+from safer_streets_tooling import data_pipeline
 from safer_streets_tooling.async_node import AsyncNode
 from safer_streets_tooling.async_pipeline import AsyncPipeline
 from safer_streets_tooling.extract import build_pipeline, run_extract
@@ -101,6 +101,6 @@ def test_async_pipeline_passes_dependency_results():
     assert pipeline["doubler"].unwrap() == 42
 
 
-def test_run_extract_exposed_on_build_db():
-    # build_db re-exports run_extract so the CLI and tests share one entry point
-    assert build_db.run_extract is run_extract
+def test_run_extract_exposed_on_data_pipeline():
+    # data_pipeline re-exports run_extract so the CLI and tests share one entry point
+    assert data_pipeline.run_extract is run_extract

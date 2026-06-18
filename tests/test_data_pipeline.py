@@ -13,7 +13,7 @@ import requests
 from safer_streets_core.database import duckdb_connector, read_geoparquet, write_geoparquet
 from shapely import LineString, Polygon
 
-from safer_streets_tooling import build_db
+from safer_streets_tooling import data_pipeline
 from safer_streets_tooling.config import data_source
 from safer_streets_tooling.extract import _common, greenspace, imd, land_cover, poi, retail_centres, roads, schools
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
@@ -541,24 +541,24 @@ def test_run_extract_skips_cached_unless_rebuild(tmp_path):
     ctx = _ctx(tmp_path)
 
     # absent → runs
-    build_db.run_extract([ds], ctx, rebuild=False)
+    data_pipeline.run_extract([ds], ctx, rebuild=False)
     assert calls == ["ran"]
     # present + rebuild False → skipped
-    build_db.run_extract([ds], ctx, rebuild=False)
+    data_pipeline.run_extract([ds], ctx, rebuild=False)
     assert calls == ["ran"]
     # present + rebuild True → re-runs
-    build_db.run_extract([ds], ctx, rebuild=True)
+    data_pipeline.run_extract([ds], ctx, rebuild=True)
     assert calls == ["ran", "ran"]
 
 
 def test_run_extract_optional_failure_is_skipped_required_propagates(tmp_path):
     ctx = _ctx(tmp_path)
     boom = Dataset(name="opt", table="opt", extract=MagicMock(side_effect=RuntimeError("nope")), optional=True)
-    build_db.run_extract([boom], ctx, rebuild=False)  # optional → swallowed
+    data_pipeline.run_extract([boom], ctx, rebuild=False)  # optional → swallowed
 
     required = Dataset(name="req", table="req", extract=MagicMock(side_effect=RuntimeError("nope")), optional=False)
     with pytest.raises(RuntimeError, match="nope"):
-        build_db.run_extract([required], ctx, rebuild=False)
+        data_pipeline.run_extract([required], ctx, rebuild=False)
 
 
 def test_run_transform_caches_outputs_and_skips_unless_rebuild(tmp_path, monkeypatch):
@@ -569,7 +569,7 @@ def test_run_transform_caches_outputs_and_skips_unless_rebuild(tmp_path, monkeyp
     con.close()
 
     datasets = (Dataset(name="req_geom", table="req_geom", extract=lambda ctx: None, optional=False),)
-    monkeypatch.setattr(build_db, "DATASETS", datasets)
+    monkeypatch.setattr(data_pipeline, "DATASETS", datasets)
 
     # stand-in transform steps: each creates the relations it declares as outputs; the overlap/retail
     # steps have no outputs here (so the imported input is never re-written by the transform phase)
@@ -590,22 +590,22 @@ def test_run_transform_caches_outputs_and_skips_unless_rebuild(tmp_path, monkeyp
         fake_step("retail_centre_lookups", depends_on=("crime_counts",)),
         fake_step("geogs", "h3_8_geogs", depends_on=("geo_lookups", "overlap_lookups", "retail_centre_lookups")),
     )
-    monkeypatch.setattr(build_db, "STEPS", steps)
+    monkeypatch.setattr(data_pipeline, "STEPS", steps)
 
     tdir = tmp_path / "transform"
     tdir.mkdir()
 
-    build_db.run_transform(tmp_path, tdir, resolutions=[8])
+    data_pipeline.run_transform(tmp_path, tdir, resolutions=[8])
     assert (tdir / "crime_counts_h3_8.parquet").exists()  # crime_counts step (now in transform) wrote its output
     assert (tdir / "h3_8_geogs.parquet").exists()  # geogs step wrote its output
     assert (tdir / "h3_8_lad24cd_lookup.parquet").exists()  # a derived lookup is written
     assert not (tdir / "req_geom.parquet").exists()  # imported inputs are not written by transform
     assert calls["crime_counts"] == 1 and calls["geo_lookups"] == 1 and calls["geogs"] == 1
 
-    build_db.run_transform(tmp_path, tdir, resolutions=[8])  # outputs present → skipped (reloaded)
+    data_pipeline.run_transform(tmp_path, tdir, resolutions=[8])  # outputs present → skipped (reloaded)
     assert calls["crime_counts"] == 1 and calls["geo_lookups"] == 1 and calls["geogs"] == 1
 
-    build_db.run_transform(tmp_path, tdir, resolutions=[8], rebuild=True)  # forced → rebuilt
+    data_pipeline.run_transform(tmp_path, tdir, resolutions=[8], rebuild=True)  # forced → rebuilt
     assert calls["crime_counts"] == 2 and calls["geo_lookups"] == 2 and calls["geogs"] == 2
 
 
@@ -625,7 +625,7 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
     for table in boundaries:
         write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", edir / f"{table}.parquet")
     # the default feature layers (extract) — included by default
-    features = set(build_db.DEFAULT_FEATURE_TABLES)
+    features = set(data_pipeline.DEFAULT_FEATURE_TABLES)
     for table in features:
         write_geoparquet(con, "SELECT 'a' AS spatial_id, 1 AS v", edir / f"{table}.parquet")
     # a non-default table: an intermediate lookup (transform), only loaded when included
@@ -633,7 +633,7 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
     con.close()
 
     indexed = []
-    monkeypatch.setattr(build_db, "index_geometry_tables", lambda con: indexed.append(True))
+    monkeypatch.setattr(data_pipeline, "index_geometry_tables", lambda con: indexed.append(True))
 
     def _tables(db_path):
         out = duckdb_connector(db_path)
@@ -649,13 +649,13 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
     minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries | features
 
     db_path = tmp_path / "out.db"
-    build_db.run_load(db_path, tdir, [8], edir=edir)
+    data_pipeline.run_load(db_path, tdir, [8], edir=edir)
     assert db_path.exists()
     assert indexed == [True]
     assert _tables(db_path) == minimal  # counts + geogs + boundaries; the lookup is excluded by default
 
     db2 = tmp_path / "out2.db"
-    build_db.run_load(db2, tdir, [8], edir=edir, include=["h3_8_lad24cd_lookup"])
+    data_pipeline.run_load(db2, tdir, [8], edir=edir, include=["h3_8_lad24cd_lookup"])
     assert _tables(db2) == minimal | {"h3_8_lad24cd_lookup"}
 
 
@@ -668,4 +668,119 @@ def test_run_load_missing_required_raises(tmp_path):
     write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_geogs.parquet")
     con.close()
     with pytest.raises(FileNotFoundError, match="required table 'crime_counts_h3_8' parquet not found"):
-        build_db.run_load(tmp_path / "out.db", tdir, [8])
+        data_pipeline.run_load(tmp_path / "out.db", tdir, [8])
+
+
+# --- sync (Azure Blob reconcile) -------------------------------------------------------------------
+
+import os  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+from io import BytesIO  # noqa: E402
+
+from safer_streets_core.file_storage import UpdatePolicy  # noqa: E402
+
+
+class _FakeBlobStorage:
+    """Offline stand-in for AzureBlobStorage holding blobs as {name: (bytes, last_modified)}.
+
+    write_file stamps the blob with a monotonically increasing time, mirroring Azure setting
+    last-modified to the moment of upload.
+    """
+
+    def __init__(self):
+        self.blobs: dict[str, tuple[bytes, datetime]] = {}
+        self._clock = 1000.0
+
+    def _now(self) -> datetime:
+        self._clock += 10.0
+        return datetime.fromtimestamp(self._clock, tz=UTC)
+
+    def put(self, name: str, data: bytes, ts: float) -> None:
+        self.blobs[name] = (data, datetime.fromtimestamp(ts, tz=UTC))
+
+    def list(self, startswith=None):
+        return [n for n in self.blobs if startswith is None or n.startswith(startswith)]
+
+    def read(self, filename: str) -> BytesIO:
+        return BytesIO(self.blobs[filename][0])
+
+    def metadata(self, filename: str):
+        if filename not in self.blobs:
+            return None
+        return MagicMock(last_modified=self.blobs[filename][1])
+
+    def write_file(self, root_path: Path, filename: str, *, overwrite: bool = False) -> bool:
+        self.blobs[filename] = ((root_path / filename).read_bytes(), self._now())
+        return True
+
+    def needs_update(self, root_path: Path, filename: str, policy: UpdatePolicy) -> bool:
+        return filename not in self.blobs  # only the IGNORE branch is exercised here
+
+
+def _sync_dirs(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
+    edir, tdir = tmp_path / "extract", tmp_path / "transform"
+    edir.mkdir()
+    tdir.mkdir()
+    monkeypatch.setattr(data_pipeline, "extract_dir", lambda: edir)
+    monkeypatch.setattr(data_pipeline, "transform_dir", lambda: tdir)
+    return edir, tdir
+
+
+def _write_local(path: Path, data: bytes, mtime: float) -> None:
+    path.write_bytes(data)
+    os.utime(path, (mtime, mtime))
+
+
+def test_sync_newer_uploads_local_only_and_is_idempotent(monkeypatch, tmp_path):
+    edir, _ = _sync_dirs(monkeypatch, tmp_path)
+    _write_local(edir / "a.parquet", b"local", mtime=5000.0)
+    storage = _FakeBlobStorage()
+
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (1, 0, 0)
+    assert storage.blobs["extract/a.parquet"][0] == b"local"
+
+    # mtime was aligned to the new blob's, so a second run sees them in sync
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (0, 0, 1)
+
+
+def test_sync_newer_downloads_remote_only(monkeypatch, tmp_path):
+    edir, _ = _sync_dirs(monkeypatch, tmp_path)
+    storage = _FakeBlobStorage()
+    storage.put("extract/b.parquet", b"remote", ts=6000.0)
+
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (0, 1, 0)
+    assert (edir / "b.parquet").read_bytes() == b"remote"
+    assert (edir / "b.parquet").stat().st_mtime == 6000.0  # stamped with remote time
+
+
+def test_sync_newer_picks_the_newer_side(monkeypatch, tmp_path):
+    edir, tdir = _sync_dirs(monkeypatch, tmp_path)
+    storage = _FakeBlobStorage()
+
+    # local newer → upload
+    _write_local(edir / "loc.parquet", b"new-local", mtime=9000.0)
+    storage.put("extract/loc.parquet", b"old-remote", ts=8000.0)
+    # remote newer → download
+    _write_local(tdir / "rem.parquet", b"old-local", mtime=8000.0)
+    storage.put("transform/rem.parquet", b"new-remote", ts=9000.0)
+
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (1, 1, 0)
+    assert storage.blobs["extract/loc.parquet"][0] == b"new-local"
+    assert (tdir / "rem.parquet").read_bytes() == b"new-remote"
+
+
+def test_sync_upload_ignore_skips_existing(monkeypatch, tmp_path):
+    edir, _ = _sync_dirs(monkeypatch, tmp_path)
+    _write_local(edir / "a.parquet", b"a", mtime=5000.0)
+    _write_local(edir / "b.parquet", b"b", mtime=5000.0)
+    storage = _FakeBlobStorage()
+    storage.put("extract/a.parquet", b"a-remote", ts=4000.0)  # already exists → skipped under IGNORE
+
+    up, skipped = data_pipeline._sync_upload(storage, tmp_path, UpdatePolicy.IGNORE)
+    assert (up, skipped) == (1, 1)
+    assert storage.blobs["extract/b.parquet"][0] == b"b"
+    assert storage.blobs["extract/a.parquet"][0] == b"a-remote"  # untouched
