@@ -671,24 +671,53 @@ def test_run_load_missing_required_raises(tmp_path):
         data_pipeline.run_load(tmp_path / "out.db", tdir, [8])
 
 
+def test_run_load_skips_missing_optional_feature(tmp_path, monkeypatch):
+    """A default feature backed by an optional dataset (e.g. the licensed land_cover) is skipped with a
+    warning when its parquet is absent, rather than aborting the load."""
+    con = _connect()
+    edir = tmp_path / "extract"
+    tdir = tmp_path / "transform"
+    edir.mkdir()
+    tdir.mkdir()
+    write_geoparquet(con, "SELECT 'a' AS spatial_id, 5 AS count", tdir / "crime_counts_h3_8.parquet")
+    write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_geogs.parquet")
+    for table in set(GEOGRAPHY_MAPPINGS.values()):
+        write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", edir / f"{table}.parquet")
+    # every default feature *except* land_cover (its parquet is intentionally absent)
+    for table in set(data_pipeline.DEFAULT_FEATURE_TABLES) - {"land_cover"}:
+        write_geoparquet(con, "SELECT 'a' AS spatial_id, 1 AS v", edir / f"{table}.parquet")
+    con.close()
+    monkeypatch.setattr(data_pipeline, "index_geometry_tables", lambda con: None)
+
+    db_path = tmp_path / "out.db"
+    data_pipeline.run_load(db_path, tdir, [8], edir=edir)  # does not raise despite land_cover absent
+
+    out = duckdb_connector(db_path)
+    names = {r[0] for r in out.execute("SELECT table_name FROM information_schema.tables").fetchall()}
+    out.close()
+    assert "land_cover" not in names  # the absent optional feature was skipped
+    assert {"crime_counts_h3_8", "h3_8_geogs", "schools", "poi", "imd_scores_pct"} <= names
+
+
 # --- sync (Azure Blob reconcile) -------------------------------------------------------------------
 
 import os  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from io import BytesIO  # noqa: E402
 
-from safer_streets_core.file_storage import UpdatePolicy  # noqa: E402
+from safer_streets_core.file_storage import SRC_MTIME_KEY, UpdatePolicy  # noqa: E402
 
 
 class _FakeBlobStorage:
-    """Offline stand-in for AzureBlobStorage holding blobs as {name: (bytes, last_modified)}.
+    """Offline stand-in for AzureBlobStorage holding blobs as {name: (bytes, last_modified, metadata)}.
 
-    write_file stamps the blob with a monotonically increasing time, mirroring Azure setting
-    last-modified to the moment of upload.
+    write_file stamps last-modified with a monotonically increasing time (mirroring Azure setting it to
+    the moment of upload) and records the source file's mtime under SRC_MTIME_KEY (as AzureBlobStorage
+    does), so blob_mtime() reflects content time rather than upload time.
     """
 
     def __init__(self):
-        self.blobs: dict[str, tuple[bytes, datetime]] = {}
+        self.blobs: dict[str, tuple[bytes, datetime, dict[str, str]]] = {}
         self._clock = 1000.0
 
     def _now(self) -> datetime:
@@ -696,7 +725,8 @@ class _FakeBlobStorage:
         return datetime.fromtimestamp(self._clock, tz=UTC)
 
     def put(self, name: str, data: bytes, ts: float) -> None:
-        self.blobs[name] = (data, datetime.fromtimestamp(ts, tz=UTC))
+        # a pre-existing remote blob: its source mtime is the time it was created
+        self.blobs[name] = (data, datetime.fromtimestamp(ts, tz=UTC), {SRC_MTIME_KEY: str(ts)})
 
     def list(self, startswith=None):
         return [n for n in self.blobs if startswith is None or n.startswith(startswith)]
@@ -707,10 +737,15 @@ class _FakeBlobStorage:
     def metadata(self, filename: str):
         if filename not in self.blobs:
             return None
-        return MagicMock(last_modified=self.blobs[filename][1])
+        _, last_modified, metadata = self.blobs[filename]
+        return MagicMock(last_modified=last_modified, metadata=metadata)
 
-    def write_file(self, root_path: Path, filename: str, *, overwrite: bool = False) -> bool:
-        self.blobs[filename] = ((root_path / filename).read_bytes(), self._now())
+    def write_file(
+        self, root_path: Path, filename: str, *, overwrite: bool = False, metadata: dict[str, str] | None = None
+    ) -> bool:
+        src = root_path / filename
+        meta = {SRC_MTIME_KEY: str(src.stat().st_mtime), **(metadata or {})}
+        self.blobs[filename] = (src.read_bytes(), self._now(), meta)
         return True
 
     def needs_update(self, root_path: Path, filename: str, policy: UpdatePolicy) -> bool:

@@ -30,12 +30,12 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     column carries the H3 cell's true (geodesic) area in m², from the h3 extension's ``h3_cell_area`` —
     the same unit as the ``{prefix}_overlap_area`` columns, so ``{prefix}_overlap_area / cell_area`` is a
     coverage fraction. For each overlap
-    feature whose data is present (greenspace, land cover, road network), a ``{prefix}_ids`` list of
-    overlapping features is added along with an aggregate overlap measure: ``{prefix}_overlap_area`` (m²)
-    is the *largest* single overlap for the polygon layers (greenspace, land cover) — overlapping
-    polygons of different types would double-count if summed — while ``road_overlap_length`` (m) is the
-    *total* road length within the cell. When retail centres are present, the nearest centre's
-    ``retail_centre_id`` and ``retail_centre_distance`` are added.
+    feature whose data is present (greenspace, urban/suburban land cover, road network), a ``{prefix}_ids``
+    list of overlapping features is added along with an aggregate overlap measure: ``{prefix}_overlap_area``
+    (m²) is the *largest* single overlap for the polygon layers (greenspace, and the ``urban`` /
+    ``suburban`` land-cover splits) — overlapping polygons of different types would double-count if summed —
+    while ``road_overlap_length`` (m) is the *total* road length within the cell. When retail centres are
+    present, the nearest centre's ``retail_centre_id`` and ``retail_centre_distance`` are added.
     """
     base = _BASE_KEY if _BASE_KEY in GEOGRAPHY_MAPPINGS else next(iter(GEOGRAPHY_MAPPINGS))
     others = [key for key in GEOGRAPHY_MAPPINGS if key != base]

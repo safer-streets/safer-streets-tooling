@@ -58,13 +58,16 @@ flowchart LR
    poi
    schools
    imd_scores_pct
+   oac
+   oac_classification
 
    crime_counts_h3_8
    crime_counts_h3_9
    crime_counts_h3_10
    h3_geogs_lookup
    h3_greenspace_lookup
-   h3_land_cover_lookup
+   h3_urban_lookup
+   h3_suburban_lookup
    h3_road_network_lookup
    h3_retail_centres_lookup
    h3_8_geogs
@@ -91,22 +94,26 @@ flowchart LR
     lsoa_2021 --> h3_geogs_lookup
     output_areas_2021 --> h3_geogs_lookup
     open_greenspace --> h3_greenspace_lookup
-    land_cover --> h3_land_cover_lookup
+    land_cover --> h3_urban_lookup
+    land_cover --> h3_suburban_lookup
     open_roads --> h3_road_network_lookup
     retail_centres --> h3_retail_centres_lookup
     h3_geogs_lookup --> h3_8_geogs
     h3_greenspace_lookup --> h3_8_geogs
-    h3_land_cover_lookup --> h3_8_geogs
+    h3_urban_lookup --> h3_8_geogs
+    h3_suburban_lookup --> h3_8_geogs
     h3_road_network_lookup --> h3_8_geogs
     h3_retail_centres_lookup --> h3_8_geogs
     h3_geogs_lookup --> h3_9_geogs
     h3_greenspace_lookup --> h3_9_geogs
-    h3_land_cover_lookup --> h3_9_geogs
+    h3_urban_lookup --> h3_9_geogs
+    h3_suburban_lookup --> h3_9_geogs
     h3_road_network_lookup --> h3_9_geogs
     h3_retail_centres_lookup --> h3_9_geogs
     h3_geogs_lookup --> h3_10_geogs
     h3_greenspace_lookup --> h3_10_geogs
-    h3_land_cover_lookup --> h3_10_geogs
+    h3_urban_lookup --> h3_10_geogs
+    h3_suburban_lookup --> h3_10_geogs
     h3_road_network_lookup --> h3_10_geogs
     h3_retail_centres_lookup --> h3_10_geogs
 
@@ -125,20 +132,23 @@ flowchart LR
     schools -.-> database
     poi -.-> database
     imd_scores_pct -.-> database
+    land_cover -.-> database
+    oac -.-> database
+    oac_classification -.-> database
 
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
-    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,retail_centres,open_roads,poi,schools,imd_scores_pct extract;
+    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,retail_centres,open_roads,poi,schools,imd_scores_pct,oac,oac_classification extract;
     class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
     class database load;
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3 aggregation
 parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `h3_*_geogs` parquet, the
-five ONS boundary tables and the `schools` / `poi` / `imd_scores_pct` feature layers into a minimal
-database (dashed above — `--include` can pull in any other table).
+five ONS boundary tables and the `schools` / `poi` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
+feature layers into a minimal database (dashed above — `--include` can pull in any other table).
 
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` on load (the coordinates are the contract).

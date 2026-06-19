@@ -14,10 +14,11 @@ class OverlapFeature:
     table: str  # source table with a geometry column (may be absent → feature skipped)
     name: str  # view name h3_{res}_{name}_lookup
     id_col: str  # id column in the source table
-    extra_col: str  # an extra descriptive column carried in the lookup view
+    extra_col: str  # an extra descriptive column carried in the lookup view ("" → none)
     extra_alias: str  # alias for that extra column in the lookup view
     cte: str  # short CTE alias used when folding the list into h3_geogs
     id_alias: str = ""  # prefix for the {prefix}_id / {prefix}_ids columns (defaults to `name`)
+    where: str = ""  # optional predicate on the source row (alias `s`) filtering the layer, e.g. `s.urban`
     geom_col: str = "geom"  # geometry column overlapped against each cell (e.g. `isochrone` for schools)
     overlap_fn: str = "ST_Area"  # ST_Area for polygons, ST_Length for line layers (e.g. roads)
     overlap_alias: str = "overlap_area"  # name of the overlap-measure column in the lookup view
@@ -33,9 +34,12 @@ class OverlapFeature:
 # optional geometry layers folded into h3_geogs, each skipped if its table is absent. Loaded by
 # data_pipeline: open_greenspace (OS Open Greenspace), land_cover (UKCEH LCM), road_network (OS Open Roads),
 # schools (GIAS, overlapped by their walk-isochrone catchment rather than the point location).
+# land_cover carries an `urban` flag (true=urban, false=suburban); it is split into two overlap layers so
+# h3_geogs gets separate `urban_overlap_area` / `suburban_overlap_area` columns.
 OVERLAP_FEATURES: tuple[OverlapFeature, ...] = (
     OverlapFeature("open_greenspace", "greenspace", "id", "function", "function", "gs"),
-    OverlapFeature("land_cover", "land_cover", "gid", "urban", "urban", "lc"),
+    OverlapFeature("land_cover", "urban", "gid", "", "", "ur", where="s.urban"),
+    OverlapFeature("land_cover", "suburban", "gid", "", "", "sub", where="NOT s.urban"),
     OverlapFeature(
         "open_roads",
         "road_network",
@@ -73,13 +77,15 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     for f in OVERLAP_FEATURES:
         if not table_exists(con, f.table):
             continue
+        extra_select = f"s.{f.extra_col} AS {f.extra_alias}," if f.extra_col else ""
+        where_clause = f"WHERE {f.where}" if f.where else ""
         for res in resolutions:
             con.execute(f"""
                 {create_clause("VIEW", f"h3_{res}_{f.name}_lookup", replace=replace)} AS
                 SELECT
                     c.spatial_id,
                     s.{f.id_col} AS {f.prefix}_id,
-                    s.{f.extra_col} AS {f.extra_alias},
+                    {extra_select}
                     {f.overlap_fn}(ST_Intersection(c.cell_geom, s.{f.geom_col})) AS {f.overlap_alias}
                 FROM (
                     SELECT DISTINCT
@@ -90,7 +96,8 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
                         ) AS cell_geom
                     FROM crime_counts_h3_{res}
                 ) c
-                JOIN {f.table} s ON ST_Intersects(c.cell_geom, s.{f.geom_col});
+                JOIN {f.table} s ON ST_Intersects(c.cell_geom, s.{f.geom_col})
+                {where_clause};
             """)
 
 
@@ -104,5 +111,5 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     depends_on=("crime_counts",),
-    extract_inputs=tuple(f.table for f in OVERLAP_FEATURES),
+    extract_inputs=tuple(dict.fromkeys(f.table for f in OVERLAP_FEATURES)),
 )
