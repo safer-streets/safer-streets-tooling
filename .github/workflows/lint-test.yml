@@ -15,8 +15,23 @@ jobs:
       matrix:
         python-version: ["3.14"]
         os: [ubuntu-latest, windows-latest, macos-latest]
+    # All run steps execute inside the tooling checkout; the core repo is checked out alongside it
+    # (see below) so the editable `../safer-streets-core` path dependency resolves.
+    defaults:
+      run:
+        working-directory: safer-streets-tooling
     steps:
     - uses: actions/checkout@v6
+      with:
+        path: safer-streets-tooling
+    # The editable path dependency in pyproject.toml ([tool.uv.sources]) points at the sibling
+    # ../safer-streets-core checkout; actions/checkout can only write inside the workspace, so both
+    # repos are checked out as sibling subdirectories here to make that relative path resolve.
+    - name: Check out safer-streets-core (editable path dependency)
+      uses: actions/checkout@v6
+      with:
+        repository: safer-streets/safer-streets-core
+        path: safer-streets-core
     - name: "Setup uv ${{ matrix.python-version }} / ${{ matrix.os }}"
       uses: astral-sh/setup-uv@v8.1.0
       with:
@@ -43,11 +58,11 @@ jobs:
       uses: actions/upload-artifact@v6
       with:
         name: dist-wheel-${{ matrix.os }}-${{ matrix.python-version }}
-        path: dist/*
+        path: safer-streets-tooling/dist/*
         if-no-files-found: error
     - name: Upload coverage report
       if: ${{ matrix.os == 'ubuntu-latest' }}
       uses: actions/upload-artifact@v6
       with:
         name: coverage-html-${{ matrix.os }}-${{ matrix.python-version }}
-        path: htmlcov/
+        path: safer-streets-tooling/htmlcov/

@@ -316,7 +316,9 @@ class _BlobStore(Protocol):
 def _local_parquet(root: Path) -> dict[str, Path]:
     """Local extract + transform parquet, keyed by blob name (path relative to ``root``)."""
     return {
-        str(parquet.relative_to(root)): parquet
+        # as_posix() so the key matches the blob name (forward slashes) on Windows too, where
+        # str(Path) would use backslashes and never match the remote "extract/..." names.
+        parquet.relative_to(root).as_posix(): parquet
         for d in (extract_dir(), transform_dir())
         for parquet in d.glob("*.parquet")
     }
