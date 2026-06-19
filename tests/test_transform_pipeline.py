@@ -199,15 +199,19 @@ def test_geogs_includes_cell_area_and_folds_overlaps():
     # one row per ONS geography lookup for the cell
     for key in GEOGRAPHY_MAPPINGS:
         con.execute(f"CREATE TABLE h3_8_{key}_lookup AS SELECT '{cell}' AS spatial_id, 'X' AS {key}")
-    # two greenspace polygons (largest 10), one land-cover polygon (7), two road segments (sum 150)
+    # two greenspace polygons (largest 10), urban land-cover overlap 7, suburban 3, two road segments (sum 150)
     con.execute(
         f"CREATE TABLE h3_8_greenspace_lookup AS SELECT * FROM "
         f"(VALUES ('{cell}', 1, 'park', 10.0), ('{cell}', 2, 'wood', 5.0)) "
         f"t(spatial_id, greenspace_id, function, overlap_area)"
     )
     con.execute(
-        f"CREATE TABLE h3_8_land_cover_lookup AS SELECT * FROM "
-        f"(VALUES ('{cell}', 1, 'urban', 7.0)) t(spatial_id, land_cover_id, urban, overlap_area)"
+        f"CREATE TABLE h3_8_urban_lookup AS SELECT * FROM "
+        f"(VALUES ('{cell}', 1, 7.0)) t(spatial_id, urban_id, overlap_area)"
+    )
+    con.execute(
+        f"CREATE TABLE h3_8_suburban_lookup AS SELECT * FROM "
+        f"(VALUES ('{cell}', 2, 3.0)) t(spatial_id, suburban_id, overlap_area)"
     )
     con.execute(
         f"CREATE TABLE h3_8_road_network_lookup AS SELECT * FROM "
@@ -220,9 +224,9 @@ def test_geogs_includes_cell_area_and_folds_overlaps():
 
     geogs.build(con, [8], True)
 
-    cell_area, gs, lc, rl = con.execute(
-        f"SELECT cell_area, greenspace_overlap_area, land_cover_overlap_area, road_overlap_length "
+    cell_area, gs, ur, sub, rl = con.execute(
+        f"SELECT cell_area, greenspace_overlap_area, urban_overlap_area, suburban_overlap_area, road_overlap_length "
         f"FROM h3_8_geogs WHERE spatial_id = '{cell}'"
     ).fetchone()
     assert 100_000 < float(cell_area) < 2_000_000  # a res-8 H3 cell is ~0.66 km² = ~660,000 m²
-    assert (float(gs), float(lc), float(rl)) == (10.0, 7.0, 150.0)
+    assert (float(gs), float(ur), float(sub), float(rl)) == (10.0, 7.0, 3.0, 150.0)

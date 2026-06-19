@@ -17,7 +17,7 @@ The pipeline has three phases (extract → transform → load):
   3. **load**       *(optional)* a minimal consumer database is assembled from the transform parquet —
      ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined on
      ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
-     and the schools / poi / imd_scores_pct feature layers —
+     and the schools / poi / imd_scores_pct / land_cover / oac (+ oac_classification) feature layers —
      into a ``<name>.staging.db`` that is only promoted over the live database with an atomic
      ``os.replace`` once every table loaded, so read-only consumers always see a complete database.
      ``--include NAME`` adds further tables (an intermediate lookup or a feature layer). This step is
@@ -48,7 +48,7 @@ from safer_streets_core.database import (
     index_geometry_tables,
     read_geoparquet,
 )
-from safer_streets_core.file_storage import AzureBlobStorage, UpdatePolicy
+from safer_streets_core.file_storage import AzureBlobStorage, UpdatePolicy, blob_mtime
 from safer_streets_core.utils import blob_storage_url, data_dir, database_path
 
 from safer_streets_tooling.extract import BY_NAME, DATASETS, ExtractContext, run_extract
@@ -113,7 +113,14 @@ def run_transform(edir: Path, tdir: Path, resolutions: list[int], *, rebuild: bo
 
 
 # Feature layers included in the database by default (extract datasets, loaded from ``edir``).
-DEFAULT_FEATURE_TABLES: tuple[str, ...] = ("schools", "poi", "imd_scores_pct")
+DEFAULT_FEATURE_TABLES: tuple[str, ...] = (
+    "schools",
+    "poi",
+    "imd_scores_pct",
+    "land_cover",
+    "oac",
+    "oac_classification",
+)
 
 
 def _minimal_tables(resolutions: list[int]) -> list[str]:
@@ -123,7 +130,9 @@ def _minimal_tables(resolutions: list[int]) -> list[str]:
     - ``h3_{res}_geogs`` — per-cell attributes (also keyed by ``spatial_id``);
     - the ONS boundary tables ``h3_*_geogs`` references by code (PFA / LAD / MSOA / LSOA / OA), so a
       consumer can resolve a cell's codes to the boundary geometry;
-    - the ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / imd_scores_pct).
+    - the ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / imd_scores_pct / land_cover / oac +
+      ``oac_classification``; ``oac`` is the per-OA 2021 Output Area Classification code, keyed by
+      ``oa21cd``, decoded to tier names via the ``oac_classification`` dimension table).
 
     The intermediate lookups and the other raw extract datasets are build inputs, not part of the output.
     """
@@ -139,33 +148,42 @@ def run_load(
 
     By default the ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` parquet (under ``tdir``) plus the ONS
     boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA, under ``edir``) and the
-    ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / imd_scores_pct, under ``edir``) are
+    ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / imd_scores_pct / land_cover / oac (+ oac_classification), under ``edir``) are
     imported — the per-cell counts and attributes the app joins on ``spatial_id``, the boundaries those
     cells resolve to, and the feature layers. ``include`` names further tables to add (each looked up
     under ``tdir`` then ``edir``) —
     e.g. an intermediate ``h3_*_lookup`` or a feature layer. The boundary tables' geometry is repaired
-    and RTree-indexed; the counts/geogs carry none. A missing required parquet aborts. The staging DB is
-    only promoted over ``db_path`` with ``os.replace`` once every table loaded, so consumers only ever
-    see a complete database.
+    and RTree-indexed; the counts/geogs carry none. A table backed by an *optional* dataset (e.g. the
+    licensed ``land_cover`` extract) is skipped with a warning when its parquet is absent; a missing
+    *required* parquet aborts. The staging DB is only promoted over ``db_path`` with ``os.replace`` once
+    every present table loaded, so consumers only ever see a complete database.
 
     This load step is **optional**: the per-dataset and transform parquet are the durable build outputs;
     the database is just a convenience bundle for consumers that prefer a single file.
     """
     search_dirs = [d for d in (tdir, edir) if d is not None]
     tables = _minimal_tables(resolutions) + (include or [])
+    # tables backed by an optional dataset are skipped with a warning when absent (e.g. the licensed
+    # land_cover extract); a missing required table still aborts the build.
+    optional_tables = {ds.table for ds in DATASETS if ds.optional}
 
     staging = db_path.with_suffix(".staging.db")
     staging.unlink(missing_ok=True)
 
     print(f"\n=== Loading {db_path} (staging: {staging}) ===\n")
     con = duckdb_connector(staging, writeable=True)
+    loaded = 0
     try:
         for name in tables:
             parquet = next((d / f"{name}.parquet" for d in search_dirs if (d / f"{name}.parquet").exists()), None)
             if parquet is None:
                 searched = ", ".join(str(d) for d in search_dirs)
+                if name in optional_tables:
+                    print(f"  {name}: optional parquet absent, skipping (searched: {searched})")
+                    continue
                 raise FileNotFoundError(f"required table '{name}' parquet not found in: {searched}")
             con.execute(f'CREATE OR REPLACE TABLE "{name}" AS {read_geoparquet(parquet)}')
+            loaded += 1
             print(f"  {name}: loaded")
 
         index_geometry_tables(con)  # no-op for the minimal tables (no geometry); indexes any included layers
@@ -173,7 +191,7 @@ def run_load(
         con.close()
 
     os.replace(staging, db_path)
-    print(f"\n=== Done. Promoted minimal database ({len(tables)} table(s)) → {db_path} ===")
+    print(f"\n=== Done. Promoted minimal database ({loaded} table(s)) → {db_path} ===")
 
 
 @app.command("extract")
@@ -227,7 +245,7 @@ def load(
 
     By default ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined
     on ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
-    and the schools / poi / imd_scores_pct feature layers are imported. ``--include NAME`` (repeatable)
+    and the schools / poi / imd_scores_pct / land_cover / oac (+ oac_classification) feature layers are imported. ``--include NAME`` (repeatable)
     adds further tables (an intermediate ``h3_*_lookup`` or a feature layer), looked up in the transform
     then extract dirs. This step is optional — the parquet are the durable outputs; the database is a
     convenience bundle.
@@ -278,9 +296,10 @@ AZURE_CONTAINER = "phase2"
 # are the path relative to data_dir() (e.g. "extract/crime_data.parquet").
 SYNC_PREFIXES: tuple[str, ...] = ("extract/", "transform/")
 
-# Treat mtimes within this many seconds as equal: Azure last-modified is second-resolution, so a
-# finer comparison would spuriously re-transfer files that are already in sync.
-_MTIME_TOLERANCE_S = 1.0
+# Treat mtimes within this many seconds as equal: Azure last-modified is second-resolution and upload
+# round-trips introduce a little jitter, so a tighter comparison would spuriously re-transfer files
+# that are already in sync.
+_MTIME_TOLERANCE_S = 5.0
 
 
 class _BlobStore(Protocol):
@@ -308,23 +327,19 @@ def _remote_parquet(storage: _BlobStore) -> set[str]:
     return {name for prefix in SYNC_PREFIXES for name in storage.list(startswith=prefix) if name.endswith(".parquet")}
 
 
-def _download(storage: _BlobStore, root: Path, name: str, last_modified: float) -> None:
-    """Write the blob ``name`` to ``root / name`` and stamp it with the remote ``last_modified`` time
+def _download(storage: _BlobStore, root: Path, name: str, src_mtime: float) -> None:
+    """Write the blob ``name`` to ``root / name`` and stamp it with the blob's recorded source mtime
     (so a subsequent ``newer`` sync sees the two as in-sync rather than re-transferring)."""
     dest = root / name
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(storage.read(name).getvalue())
-    os.utime(dest, (last_modified, last_modified))
+    os.utime(dest, (src_mtime, src_mtime))
 
 
 def _upload(storage: _BlobStore, root: Path, name: str) -> None:
-    """Upload ``root / name`` then align its local mtime to the resulting blob's last-modified time
-    (so a subsequent ``newer`` sync doesn't see the freshly-written remote as newer and pull it back)."""
+    """Upload ``root / name``. ``write_file`` records the local mtime as the blob's ``src_mtime``
+    metadata, so the local file and blob already agree on modification time — no re-stamping needed."""
     storage.write_file(root, name, overwrite=True)
-    meta = storage.metadata(name)
-    if meta is not None:
-        ts = meta.last_modified.timestamp()
-        os.utime(root / name, (ts, ts))
 
 
 def _sync_newer(storage: _BlobStore, root: Path) -> tuple[int, int, int]:
@@ -340,17 +355,17 @@ def _sync_newer(storage: _BlobStore, root: Path) -> tuple[int, int, int]:
             print(f"  ↑ {name}: uploaded (local only)")
             uploaded += 1
         elif name not in local:  # remote-only
-            _download(storage, root, name, meta.last_modified.timestamp())
+            _download(storage, root, name, blob_mtime(meta))
             print(f"  ↓ {name}: downloaded (remote only)")
             downloaded += 1
         else:
-            delta = local[name].stat().st_mtime - meta.last_modified.timestamp()
+            delta = local[name].stat().st_mtime - blob_mtime(meta)
             if delta > _MTIME_TOLERANCE_S:
                 _upload(storage, root, name)
                 print(f"  ↑ {name}: uploaded (local newer)")
                 uploaded += 1
             elif delta < -_MTIME_TOLERANCE_S:
-                _download(storage, root, name, meta.last_modified.timestamp())
+                _download(storage, root, name, blob_mtime(meta))
                 print(f"  ↓ {name}: downloaded (remote newer)")
                 downloaded += 1
             else:
@@ -365,7 +380,9 @@ def _sync_upload(storage: _BlobStore, root: Path, update: UpdatePolicy) -> tuple
     uploaded = skipped = 0
     for name in sorted(_local_parquet(root)):
         if storage.needs_update(root, name, update):
-            storage.write_file(root, name, overwrite=True)
+            # write_file records the local mtime as the blob's src_mtime, so a later `--update newer`
+            # compares like for like and won't mistake the freshly-uploaded remote for being newer.
+            _upload(storage, root, name)
             print(f"  ↑ {name}: uploaded")
             uploaded += 1
         else:

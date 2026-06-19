@@ -106,6 +106,11 @@
     "glob": "File_7_IoD*All_Ranks_Scores_Deciles*.csv",
     "note": "English Indices of Deprivation 2025 'File 7' (open data, gov.uk)."
   },
+  "oac": {
+    "oa": "oac21ew.csv",
+    "names": "classification_codes_and_names-1.csv",
+    "note": "2021 Output Area Classification (GeoDS). Requires a login (https://data.geods.ac.uk/), so the per-OA codes (oac21ew.csv → the `oac` table, keyed by oa21cd) and the codes-and-names lookup (classification_codes_and_names-1.csv → the `oac_classification` dimension table) are manually downloaded into the data directory's raw folder. Attribute-only."
+  },
   "wimd": {
     "url": "https://www.gov.wales/sites/default/files/statistics-and-research/2025-12/wimd-2025-index-and-domain-scores-by-small-area.ods",
     "ods": "wimd-2025-index-and-domain-scores-by-small-area.ods",
