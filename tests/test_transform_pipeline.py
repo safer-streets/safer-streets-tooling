@@ -29,6 +29,7 @@ def test_pipeline_wires_data_dependencies():
     pipeline = build_pipeline(STEPS, con, resolutions=[8])
 
     assert pipeline.nodes["crime_counts"].dependency_ids == ()
+    assert pipeline.nodes["streetlight_counts"].dependency_ids == ()  # independent of crime_counts
     assert pipeline.nodes["geo_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["overlap_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
@@ -230,3 +231,26 @@ def test_geogs_includes_cell_area_and_folds_overlaps():
     ).fetchone()
     assert 100_000 < float(cell_area) < 2_000_000  # a res-8 H3 cell is ~0.66 km² = ~660,000 m²
     assert (float(gs), float(ur), float(sub), float(rl)) == (10.0, 7.0, 3.0, 150.0)
+
+
+def test_streetlight_counts_aggregates_per_res9_cell():
+    """streetlight_counts groups the streetlights extract into a per-res-9-cell count keyed by spatial_id."""
+    from safer_streets_tooling.transform import streetlight_counts
+
+    con = duckdb.connect()  # plain group-by, no spatial/h3 extensions needed
+    con.execute("CREATE TABLE streetlights AS SELECT * FROM (VALUES ('aaa'), ('aaa'), ('aaa'), ('bbb')) t(h3_9_id)")
+
+    streetlight_counts.build(con, [9], True)
+
+    rows = dict(con.execute("SELECT spatial_id, streetlight_count FROM streetlight_counts_h3_9").fetchall())
+    assert rows == {"aaa": 3, "bbb": 1}
+    assert streetlight_counts.outputs(con, [9]) == ["streetlight_counts_h3_9"]
+
+
+def test_streetlight_counts_noop_without_streetlights_table():
+    """The step is a no-op (no table, no output) when the streetlights extract is absent."""
+    from safer_streets_tooling.transform import streetlight_counts
+
+    con = duckdb.connect()
+    streetlight_counts.build(con, [9], True)  # no streetlights table → must not raise
+    assert streetlight_counts.outputs(con, [9]) == []
