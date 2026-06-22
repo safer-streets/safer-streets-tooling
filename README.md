@@ -140,7 +140,6 @@ flowchart LR
     poi -.-> database
     naptan -.-> database
     food_outlets -.-> database
-    streetlights -.-> database
     cctv -.-> database
     imd_scores_pct -.-> database
     land_cover -.-> database
@@ -158,11 +157,13 @@ flowchart LR
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3 aggregation
 parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `h3_*_geogs` parquet, the
-five ONS boundary tables and the `schools` / `poi` / `naptan` / `food_outlets` / `streetlights` / `cctv` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
+five ONS boundary tables and the `schools` / `poi` / `naptan` / `food_outlets` / `cctv` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
 feature layers into a minimal database (dashed above — `--include` can pull in any other table). The
 `streetlight_counts` transform step aggregates the `streetlights` extract into a per-cell
 `streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`), which
-is included in the default minimal DB (skipped if the optional `streetlights` extract was absent).
+is included in the default minimal DB (skipped if the optional `streetlights` extract was absent). The
+raw `streetlights` point layer itself is **not** bundled by default — this per-cell count is the useful
+form (the raw points are millions of rows) — but it can still be pulled in with `--include streetlights`.
 
 > **OSM coverage caveat (streetlights & cctv).** The `streetlights` layer comes from OpenStreetMap (via
 > Overture Maps `infrastructure`, `class = street_lamp`) and `cctv` from OSM `man_made=surveillance`
