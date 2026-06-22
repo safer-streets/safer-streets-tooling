@@ -59,8 +59,6 @@ def extract(ctx: ExtractContext) -> None:
                 BusinessType AS business_type,
                 PostCode AS postcode,
                 RatingValue AS rating_value,
-                TRY_CAST(Hygiene AS INTEGER) AS hygiene_score,
-                TRY_CAST(Structural AS INTEGER) AS structural_score,
                 LocalAuthorityName AS local_authority_name,
                 ST_Transform(
                     ST_Point(CAST(Longitude AS DOUBLE), CAST(Latitude AS DOUBLE)),
