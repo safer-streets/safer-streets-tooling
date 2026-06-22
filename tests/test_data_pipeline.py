@@ -15,7 +15,17 @@ from shapely import LineString, Polygon
 
 from safer_streets_tooling import data_pipeline
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.extract import _common, greenspace, imd, land_cover, poi, retail_centres, roads, schools
+from safer_streets_tooling.extract import (
+    _common,
+    greenspace,
+    imd,
+    land_cover,
+    naptan,
+    poi,
+    retail_centres,
+    roads,
+    schools,
+)
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 from safer_streets_tooling.transform import TransformStep
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
@@ -241,11 +251,92 @@ def test_poi_extracts_filtered_places(tmp_path, monkeypatch):
 
     con = _read_parquet(tmp_path / "poi.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert cols == {"poi_id", "geom", "name", "postcode", "basic_category", "primary_category", "alternate_category"}
+    assert cols == {
+        "poi_id",
+        "geom",
+        "h3_9_id",
+        "name",
+        "postcode",
+        "basic_category",
+        "primary_category",
+        "alternate_category",
+    }
     # only the requested categories are kept
     cats = {r[0] for r in con.execute("SELECT DISTINCT basic_category FROM t").fetchall()}
     assert cats <= set(poi.POI_CATEGORIES)
     con.close()
+
+
+# --- NAPTAN transport stops ---
+
+_NAPTAN_HEADER = (
+    "ATCOCode,NaptanCode,CommonName,Street,Indicator,Bearing,LocalityName,Town,StopType,Status,"
+    "Easting,Northing,Longitude,Latitude"
+)
+
+
+def _write_naptan_csv(path: Path) -> None:
+    rows = [
+        # active stops across categories; BCT→bus, RLY→rail, MET→tram_metro, ZZZ (unknown)→other
+        "0100A,bcode,Stop A,High St,o,N,Leeds,Leeds,BCT,active,430000,433000,-1.55,53.80",
+        "0100B,rcode,Leeds Rail,Station Rd,,N,Leeds,Leeds,RLY,active,430100,433100,-1.55,53.80",
+        "0100C,mcode,Tram Stop,Tram Rd,,N,Leeds,Leeds,MET,active,430200,433200,-1.55,53.80",
+        "0100D,xcode,Odd Stop,Odd Rd,,N,Leeds,Leeds,ZZZ,active,430300,433300,-1.55,53.80",
+        # filtered out: inactive status, and a zero-coordinate (placeholder) stop
+        "0100E,icode,Closed Stop,Old Rd,,N,Leeds,Leeds,BCT,inactive,430400,433400,-1.55,53.80",
+        "0100F,ncode,No Coords,Nowhere,,N,Leeds,Leeds,BCT,active,0,0,0,0",
+    ]
+    path.write_text("\n".join([_NAPTAN_HEADER, *rows]) + "\n")
+
+
+def test_naptan_extracts_active_stops_and_categorises(tmp_path, monkeypatch):
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    _write_naptan_csv(_raw(tmp_path) / "naptan.csv")
+    _connect().close()
+
+    naptan.extract(_ctx(tmp_path))  # cached CSV → no download
+    con = _read_parquet(tmp_path / "naptan.parquet")
+    cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
+    assert {"atco_code", "naptan_code", "name", "stop_type", "stop_category", "geom", "h3_9_id"} <= cols
+
+    # only the four active stops with valid coordinates survive (inactive + zero-coord dropped)
+    assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 4
+
+    cats = dict(con.execute("SELECT stop_type, stop_category FROM t").fetchall())
+    assert cats == {"BCT": "bus", "RLY": "rail", "MET": "tram_metro", "ZZZ": "other"}
+
+    # every row gets a lowercase-hex resolution-9 H3 cell id
+    h3 = con.execute("SELECT h3_9_id FROM t WHERE atco_code = '0100A'").fetchone()[0]
+    assert h3 == h3.lower() and all(c in "0123456789abcdef" for c in h3)
+    assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
+
+    # coordinates land in BNG metres (Easting/Northing passed straight through, no reprojection)
+    east = con.execute("SELECT ST_X(geom) FROM t WHERE atco_code = '0100A'").fetchone()[0]
+    assert east == pytest.approx(430000)
+    con.close()
+
+
+def test_download_naptan_uses_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    cached = _raw(tmp_path) / "naptan.csv"
+    _write_naptan_csv(cached)
+    # a cached file is reused without hitting the network
+    monkeypatch.setattr(naptan, "download", lambda *a, **k: pytest.fail("should not download"))
+    assert naptan._download_naptan() == cached
+
+
+def test_download_naptan_downloads_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
+    urls: list[str] = []
+
+    def fake_download(url, path):
+        urls.append(url)
+        _write_naptan_csv(path)
+
+    monkeypatch.setattr(naptan, "download", fake_download)
+    result = naptan._download_naptan()
+    assert result == _raw(tmp_path) / "naptan.csv"
+    assert urls == [data_source("naptan")["url"]]
 
 
 # --- retail centres ---
