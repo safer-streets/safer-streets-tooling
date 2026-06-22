@@ -17,6 +17,7 @@ from safer_streets_tooling import data_pipeline
 from safer_streets_tooling.config import data_source
 from safer_streets_tooling.extract import (
     _common,
+    food_outlets,
     greenspace,
     imd,
     land_cover,
@@ -25,7 +26,6 @@ from safer_streets_tooling.extract import (
     retail_centres,
     roads,
     schools,
-    takeaways,
 )
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 from safer_streets_tooling.transform import TransformStep
@@ -340,10 +340,10 @@ def test_download_naptan_downloads_when_missing(tmp_path, monkeypatch):
     assert urls == [data_source("naptan")["url"]]
 
 
-# --- takeaways (FSA food hygiene) ---
+# --- food outlets (FSA food hygiene) ---
 
 _FHRS_HEADER = (
-    "AddressLine1,AddressLine2,AddressLine3,AddressLine4,BusinessTypeID,FHRSID,BusinessName,"
+    "AddressLine1,AddressLine2,AddressLine3,AddressLine4,BusinessTypeID,BusinessType,FHRSID,BusinessName,"
     "ConfidenceInManagement,Hygiene,Latitude,LocalAuthorityName,Longitude,PostCode,RatingDate,"
     "RatingValue,SchemeType,Structural"
 )
@@ -352,38 +352,42 @@ _FHRS_HEADER = (
 def _write_fhrs_csv(path: Path) -> None:
     rows = [
         # England takeaway (FHRS, valid coords) → kept
-        "88 Wood Street,London,,,7844,1,88 Beans,0,0,51.517115,City of London,-0.094462,EC2V 7DA,2025-04-11,5,FHRS,0",
+        "88 Wood Street,London,,,7844,Takeaway/sandwich shop,1,88 Beans,0,0,51.517115,City of London,-0.094462,EC2V 7DA,2025-04-11,5,FHRS,0",
         # Wales takeaway (FHRS) → kept
-        "1 High St,Cardiff,,,7844,2,Cardiff Kebab,5,5,51.4816,Cardiff,-3.1791,CF10 1AA,2024-01-01,4,FHRS,5",
+        "1 High St,Cardiff,,,7844,Takeaway/sandwich shop,2,Cardiff Kebab,5,5,51.4816,Cardiff,-3.1791,CF10 1AA,2024-01-01,4,FHRS,5",
+        # England restaurant (BusinessTypeID 1, in the food & drink set) → kept
+        "10 Strand,London,,,1,Restaurant/Cafe/Canteen,5,Posh Restaurant,0,0,51.5,Westminster,-0.1,WC2R 1AA,2024-01-01,5,FHRS,0",
         # Scotland (FHIS scheme) → dropped
-        "1 Royal Mile,Edinburgh,,,7844,3,Edin Chippy,,,55.9533,Edinburgh,-3.1883,EH1 1AA,2024-01-01,Pass,FHIS,",
+        "1 Royal Mile,Edinburgh,,,7844,Takeaway/sandwich shop,3,Edin Chippy,,,55.9533,Edinburgh,-3.1883,EH1 1AA,2024-01-01,Pass,FHIS,",
         # Northern Ireland (BT postcode) → dropped
-        "1 Falls Rd,Belfast,,,7844,4,Belfast Bites,0,0,54.5973,Belfast,-5.9301,BT12 4PD,2024-01-01,5,FHRS,0",
-        # not a takeaway (BusinessTypeID 1) → dropped
-        "2 High St,London,,,1,5,Posh Restaurant,0,0,51.5,Westminster,-0.1,SW1A 1AA,2024-01-01,5,FHRS,0",
+        "1 Falls Rd,Belfast,,,7844,Takeaway/sandwich shop,4,Belfast Bites,0,0,54.5973,Belfast,-5.9301,BT12 4PD,2024-01-01,5,FHRS,0",
+        # retailer (BusinessTypeID 4613, not a food & drink venue) → dropped
+        "20 Oxford St,London,,,4613,Retailers - other,6,Corner Shop,0,0,51.515,Westminster,-0.14,W1D 1AA,2024-01-01,5,FHRS,0",
         # E&W takeaway but no geocode → dropped
-        "3 High St,Leeds,,,7844,6,No Geo Takeaway,0,0,,Leeds,,LS1 1AA,2024-01-01,5,FHRS,0",
+        "3 High St,Leeds,,,7844,Takeaway/sandwich shop,7,No Geo Takeaway,0,0,,Leeds,,LS1 1AA,2024-01-01,5,FHRS,0",
     ]
     path.write_text("\n".join([_FHRS_HEADER, *rows]) + "\n")
 
 
-def test_takeaways_extracts_england_and_wales_only(tmp_path, monkeypatch):
+def test_food_outlets_extracts_england_and_wales_food_venues(tmp_path, monkeypatch):
     monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     _write_fhrs_csv(_raw(tmp_path) / "fhrs_all_en-GB.csv")
     _connect().close()
 
-    takeaways.extract(_ctx(tmp_path))  # cached CSV → no download
-    con = _read_parquet(tmp_path / "takeaways.parquet")
+    food_outlets.extract(_ctx(tmp_path))  # cached CSV → no download
+    con = _read_parquet(tmp_path / "food_outlets.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert {"fhrsid", "business_name", "address", "postcode", "rating_value", "geom", "h3_9_id"} <= cols
+    assert {"fhrsid", "business_name", "business_type", "postcode", "rating_value", "geom", "h3_9_id"} <= cols
+    assert "address" not in cols  # address dropped (postcode kept)
 
-    # only the two E&W takeaways with coords survive (Scotland FHIS, NI BT, non-takeaway, no-geo dropped)
+    # the two E&W takeaways + the E&W restaurant survive; Scotland FHIS, NI BT, retailer, no-geo dropped
     ids = {r[0] for r in con.execute("SELECT fhrsid FROM t").fetchall()}
-    assert ids == {1, 2}
+    assert ids == {1, 2, 5}
+    # business_type is carried through (both food & drink types present)
+    types = {r[0] for r in con.execute("SELECT DISTINCT business_type FROM t").fetchall()}
+    assert types == {"Takeaway/sandwich shop", "Restaurant/Cafe/Canteen"}
 
-    # address lines are concatenated; geometry reprojected to BNG metres; every row gets a res-9 h3 id
-    addr = con.execute("SELECT address FROM t WHERE fhrsid = 1").fetchone()[0]
-    assert addr == "88 Wood Street, London"
+    # geometry reprojected to BNG metres; every row gets a res-9 h3 id
     assert con.execute("SELECT MIN(ST_X(geom)) FROM t").fetchone()[0] > 1000  # BNG metres, not lon/lat
     h3 = con.execute("SELECT h3_9_id FROM t WHERE fhrsid = 1").fetchone()[0]
     assert h3 == h3.lower() and all(c in "0123456789abcdef" for c in h3)
@@ -395,8 +399,8 @@ def test_download_fhrs_uses_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(_common, "data_dir", lambda: tmp_path)
     cached = _raw(tmp_path) / "fhrs_all_en-GB.csv"
     _write_fhrs_csv(cached)
-    monkeypatch.setattr(takeaways, "download", lambda *a, **k: pytest.fail("should not download"))
-    assert takeaways._download_fhrs() == cached
+    monkeypatch.setattr(food_outlets, "download", lambda *a, **k: pytest.fail("should not download"))
+    assert food_outlets._download_fhrs() == cached
 
 
 def test_download_fhrs_downloads_when_missing(tmp_path, monkeypatch):
@@ -407,10 +411,10 @@ def test_download_fhrs_downloads_when_missing(tmp_path, monkeypatch):
         urls.append(url)
         _write_fhrs_csv(path)
 
-    monkeypatch.setattr(takeaways, "download", fake_download)
-    result = takeaways._download_fhrs()
+    monkeypatch.setattr(food_outlets, "download", fake_download)
+    result = food_outlets._download_fhrs()
     assert result == _raw(tmp_path) / "fhrs_all_en-GB.csv"
-    assert urls == [data_source("takeaways")["url"]]
+    assert urls == [data_source("food_outlets")["url"]]
 
 
 # --- retail centres ---
