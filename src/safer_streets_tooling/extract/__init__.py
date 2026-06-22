@@ -13,6 +13,7 @@ from safer_streets_tooling.extract import (
     greenspace,
     imd,
     land_cover,
+    naptan,
     oac,
     poi,
     retail_centres,
@@ -29,6 +30,7 @@ DATASETS: tuple[Dataset, ...] = (
     retail_centres.DATASET,
     roads.DATASET,
     poi.DATASET,
+    naptan.DATASET,
     schools.DATASET,  # depends on open_roads
     imd.DATASET,  # depends on local_authority_districts
     *oac.DATASETS,

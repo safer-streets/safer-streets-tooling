@@ -111,6 +111,12 @@
     "names": "classification_codes_and_names-1.csv",
     "note": "2021 Output Area Classification (GeoDS). Requires a login (https://data.geods.ac.uk/), so the per-OA codes (oac21ew.csv → the `oac` table, keyed by oa21cd) and the codes-and-names lookup (classification_codes_and_names-1.csv → the `oac_classification` dimension table) are manually downloaded into the data directory's raw folder. Attribute-only."
   },
+  "naptan": {
+    "url": "https://naptan.api.dft.gov.uk/v1/access-nodes?dataFormat=csv",
+    "csv": "naptan.csv",
+    "glob": "naptan*.csv",
+    "note": "NAPTAN national public-transport access nodes (DfT, open data, no API key). The national CSV is published at a fixed URL (https://beta-naptan.dft.gov.uk/download/national); the loader downloads it and caches it under the data directory's raw folder. Coordinates supplied in BNG (Easting/Northing, EPSG:27700)."
+  },
   "wimd": {
     "url": "https://www.gov.wales/sites/default/files/statistics-and-research/2025-12/wimd-2025-index-and-domain-scores-by-small-area.ods",
     "ods": "wimd-2025-index-and-domain-scores-by-small-area.ods",
