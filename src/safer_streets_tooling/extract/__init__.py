@@ -20,6 +20,7 @@ from safer_streets_tooling.extract import (
     retail_centres,
     roads,
     schools,
+    streetlights,
 )
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
@@ -33,6 +34,7 @@ DATASETS: tuple[Dataset, ...] = (
     poi.DATASET,
     naptan.DATASET,
     food_outlets.DATASET,
+    streetlights.DATASET,
     schools.DATASET,  # depends on open_roads
     imd.DATASET,  # depends on local_authority_districts
     *oac.DATASETS,
