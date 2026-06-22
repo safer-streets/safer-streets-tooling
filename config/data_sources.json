@@ -117,6 +117,13 @@
     "glob": "naptan*.csv",
     "note": "NAPTAN national public-transport access nodes (DfT, open data, no API key). The national CSV is published at a fixed URL (https://beta-naptan.dft.gov.uk/download/national); the loader downloads it and caches it under the data directory's raw folder. Coordinates supplied in BNG (Easting/Northing, EPSG:27700)."
   },
+  "takeaways": {
+    "url": "https://safhrsprodstorage.blob.core.windows.net/opendatafileblobstorage/FHRS_All_en-GB.csv",
+    "csv": "fhrs_all_en-GB.csv",
+    "glob": "fhrs_all*.csv",
+    "business_type_id": "7844",
+    "note": "FSA Food Hygiene Rating Scheme open data, whole-country CSV (https://ratings.food.gov.uk/open-data; open data, no API key). Filtered to takeaways (BusinessTypeID 7844) in England & Wales: SchemeType FHRS drops Scotland (FHIS), and BT postcodes drop Northern Ireland. Coordinates supplied in WGS-84 (Latitude/Longitude); reprojected to BNG (EPSG:27700)."
+  },
   "wimd": {
     "url": "https://www.gov.wales/sites/default/files/statistics-and-research/2025-12/wimd-2025-index-and-domain-scores-by-small-area.ods",
     "ods": "wimd-2025-index-and-domain-scores-by-small-area.ods",
