@@ -9,6 +9,7 @@ it below.
 
 from safer_streets_tooling.extract import (
     boundaries,
+    cctv,
     crime,
     food_outlets,
     greenspace,
@@ -35,6 +36,7 @@ DATASETS: tuple[Dataset, ...] = (
     naptan.DATASET,
     food_outlets.DATASET,
     streetlights.DATASET,
+    cctv.DATASET,
     schools.DATASET,  # depends on open_roads
     imd.DATASET,  # depends on local_authority_districts
     *oac.DATASETS,

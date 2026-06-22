@@ -17,6 +17,7 @@ from safer_streets_tooling import data_pipeline
 from safer_streets_tooling.config import data_source
 from safer_streets_tooling.extract import (
     _common,
+    cctv,
     food_outlets,
     greenspace,
     imd,
@@ -290,6 +291,69 @@ def test_streetlights_extracts_street_lamps(tmp_path, monkeypatch):
     assert con.execute("SELECT MIN(ST_X(geom)) FROM t").fetchone()[0] > 1000  # BNG metres, not lon/lat
     assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
     con.close()
+
+
+# --- CCTV (OSM man_made=surveillance via Overpass) ---
+
+
+class _FakeOverpassResponse:
+    """Stand-in for the Overpass requests.post response."""
+
+    def __init__(self, elements):
+        self._elements = elements
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"elements": self._elements}
+
+
+def test_cctv_extracts_surveillance_nodes(tmp_path, monkeypatch):
+    """Overpass nodes are parsed to a BNG point + res-9 h3 id; nodes without coords are dropped."""
+    _connect().close()
+    elements = [
+        {"type": "node", "id": 1, "lon": -0.094462, "lat": 51.517115, "tags": {"man_made": "surveillance"}},
+        {"type": "node", "id": 2, "lon": -3.1791, "lat": 51.4816},
+        {"type": "way", "id": 3},  # no lon/lat → dropped
+    ]
+    calls: list[dict] = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs)
+        return _FakeOverpassResponse(elements)
+
+    monkeypatch.setattr(cctv.requests, "post", fake_post)
+
+    cctv.extract(_ctx(tmp_path))
+    # Overpass 406s the default python-requests UA, so a custom User-Agent must be sent
+    user_agent = calls[0]["headers"]["User-Agent"]
+    assert user_agent and "python-requests" not in user_agent
+    con = _read_parquet(tmp_path / "cctv.parquet")
+    cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
+    assert cols == {"cctv_id", "geom", "h3_9_id"}  # schema mirrors streetlights
+
+    # only the two nodes with coordinates survive; id carries the node/ prefix
+    ids = {r[0] for r in con.execute("SELECT cctv_id FROM t").fetchall()}
+    assert ids == {"node/1", "node/2"}
+    # geometry reprojected to BNG metres, not left as lon/lat; every row gets a res-9 h3 id
+    assert con.execute("SELECT MIN(ST_X(geom)) FROM t").fetchone()[0] > 1000
+    assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
+    con.close()
+
+
+def test_cctv_raises_when_no_nodes(tmp_path, monkeypatch):
+    """An empty Overpass result raises (so the optional dataset is skipped rather than writing empty)."""
+    monkeypatch.setattr(cctv.requests, "post", lambda *a, **k: _FakeOverpassResponse([]))
+    with pytest.raises(RuntimeError, match="no CCTV"):
+        cctv.extract(_ctx(tmp_path))
+
+
+def test_overpass_query_uses_south_west_north_east_order():
+    """The Overpass bbox is (south, west, north, east) = (ymin, xmin, ymax, xmax)."""
+    q = cctv._overpass_query((-5.86, 49.75, 1.81, 56.0), "man_made=surveillance")
+    assert '["man_made"="surveillance"]' in q
+    assert "(49.75,-5.86,56.0,1.81)" in q
 
 
 # --- NAPTAN transport stops ---
@@ -822,6 +886,10 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
     features = set(data_pipeline.DEFAULT_FEATURE_TABLES)
     for table in features:
         write_geoparquet(con, "SELECT 'a' AS spatial_id, 1 AS v", edir / f"{table}.parquet")
+    # the default transform outputs (e.g. streetlight_counts_h3_9) — included by default
+    transform_tables = set(data_pipeline.DEFAULT_TRANSFORM_TABLES)
+    for table in transform_tables:
+        write_geoparquet(con, "SELECT 'a' AS spatial_id, 3 AS streetlight_count", tdir / f"{table}.parquet")
     # a non-default table: an intermediate lookup (transform), only loaded when included
     write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_lad24cd_lookup.parquet")
     con.close()
@@ -840,13 +908,15 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
         out.close()
         return names
 
-    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries | features
+    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries | features | transform_tables
 
     db_path = tmp_path / "out.db"
     data_pipeline.run_load(db_path, tdir, [8], edir=edir)
     assert db_path.exists()
     assert indexed == [True]
-    assert _tables(db_path) == minimal  # counts + geogs + boundaries; the lookup is excluded by default
+    # counts + geogs + boundaries + features + streetlight_counts; the lookup is excluded by default
+    assert _tables(db_path) == minimal
+    assert "streetlight_counts_h3_9" in _tables(db_path)  # default transform output is loaded
 
     db2 = tmp_path / "out2.db"
     data_pipeline.run_load(db2, tdir, [8], edir=edir, include=["h3_8_lad24cd_lookup"])
