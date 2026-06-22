@@ -127,6 +127,7 @@ flowchart LR
     crime_counts_h3_8 -.-> database
     crime_counts_h3_9 -.-> database
     crime_counts_h3_10 -.-> database
+    streetlight_counts_h3_9 -.-> database
     h3_8_geogs -.-> database
     h3_9_geogs -.-> database
     h3_10_geogs -.-> database
@@ -160,8 +161,8 @@ parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `h3_
 five ONS boundary tables and the `schools` / `poi` / `naptan` / `food_outlets` / `streetlights` / `cctv` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
 feature layers into a minimal database (dashed above — `--include` can pull in any other table). The
 `streetlight_counts` transform step aggregates the `streetlights` extract into a per-cell
-`streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`); it is
-not in the default minimal DB but can be added with `--include streetlight_counts_h3_9`.
+`streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`), which
+is included in the default minimal DB (skipped if the optional `streetlights` extract was absent).
 
 > **OSM coverage caveat (streetlights & cctv).** The `streetlights` layer comes from OpenStreetMap (via
 > Overture Maps `infrastructure`, `class = street_lamp`) and `cctv` from OSM `man_made=surveillance`

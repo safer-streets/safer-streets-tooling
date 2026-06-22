@@ -886,6 +886,10 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
     features = set(data_pipeline.DEFAULT_FEATURE_TABLES)
     for table in features:
         write_geoparquet(con, "SELECT 'a' AS spatial_id, 1 AS v", edir / f"{table}.parquet")
+    # the default transform outputs (e.g. streetlight_counts_h3_9) — included by default
+    transform_tables = set(data_pipeline.DEFAULT_TRANSFORM_TABLES)
+    for table in transform_tables:
+        write_geoparquet(con, "SELECT 'a' AS spatial_id, 3 AS streetlight_count", tdir / f"{table}.parquet")
     # a non-default table: an intermediate lookup (transform), only loaded when included
     write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_lad24cd_lookup.parquet")
     con.close()
@@ -904,13 +908,15 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
         out.close()
         return names
 
-    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries | features
+    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries | features | transform_tables
 
     db_path = tmp_path / "out.db"
     data_pipeline.run_load(db_path, tdir, [8], edir=edir)
     assert db_path.exists()
     assert indexed == [True]
-    assert _tables(db_path) == minimal  # counts + geogs + boundaries; the lookup is excluded by default
+    # counts + geogs + boundaries + features + streetlight_counts; the lookup is excluded by default
+    assert _tables(db_path) == minimal
+    assert "streetlight_counts_h3_9" in _tables(db_path)  # default transform output is loaded
 
     db2 = tmp_path / "out2.db"
     data_pipeline.run_load(db2, tdir, [8], edir=edir, include=["h3_8_lad24cd_lookup"])
