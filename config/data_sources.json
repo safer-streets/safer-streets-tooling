@@ -124,6 +124,12 @@
     "business_type_ids": ["1", "7844", "7843", "7841", "7846", "7842"],
     "note": "FSA Food Hygiene Rating Scheme open data, whole-country CSV (https://ratings.food.gov.uk/open-data; open data, no API key). Filtered to food & drink venues in England & Wales by BusinessTypeID: 1 Restaurant/Cafe/Canteen, 7844 Takeaway/sandwich shop, 7843 Pub/bar/nightclub, 7841 Other catering premises, 7846 Mobile caterer, 7842 Hotel/bed & breakfast/guest house. SchemeType FHRS drops Scotland (FHIS), and BT postcodes drop Northern Ireland. Coordinates supplied in WGS-84 (Latitude/Longitude); reprojected to BNG (EPSG:27700)."
   },
+  "cctv": {
+    "bbox": [-5.86, 49.75, 1.81, 56.0],
+    "overpass_url": "https://overpass-api.de/api/interpreter",
+    "tag": "man_made=surveillance",
+    "note": "CCTV / surveillance cameras from OpenStreetMap (man_made=surveillance nodes), pulled from the Overpass API (no API key). bbox is England & Wales in WGS-84 (xmin, ymin, xmax, ymax); geometry reprojected to BNG (EPSG:27700). OSM coverage is uneven — indicative, not a complete inventory."
+  },
   "streetlights": {
     "bbox": [-5.86, 49.75, 1.81, 56.0],
     "subtype": "transportation",

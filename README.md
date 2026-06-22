@@ -59,6 +59,7 @@ flowchart LR
    naptan
    food_outlets
    streetlights
+   cctv
    schools
    imd_scores_pct
    oac
@@ -139,6 +140,7 @@ flowchart LR
     naptan -.-> database
     food_outlets -.-> database
     streetlights -.-> database
+    cctv -.-> database
     imd_scores_pct -.-> database
     land_cover -.-> database
     oac -.-> database
@@ -148,25 +150,26 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
-    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,schools,imd_scores_pct,oac,oac_classification extract;
+    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification extract;
     class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,streetlight_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
     class database load;
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3 aggregation
 parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `h3_*_geogs` parquet, the
-five ONS boundary tables and the `schools` / `poi` / `naptan` / `food_outlets` / `streetlights` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
+five ONS boundary tables and the `schools` / `poi` / `naptan` / `food_outlets` / `streetlights` / `cctv` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
 feature layers into a minimal database (dashed above — `--include` can pull in any other table). The
 `streetlight_counts` transform step aggregates the `streetlights` extract into a per-cell
 `streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`); it is
 not in the default minimal DB but can be added with `--include streetlight_counts_h3_9`.
 
-> **Streetlight coverage caveat.** The `streetlights` layer is sourced from OpenStreetMap (via Overture
-> Maps `infrastructure`, `class = street_lamp`). OSM street-light coverage is **uneven** — comprehensive
-> in some areas, sparse or absent in others — so both `streetlights` and the derived
-> `streetlight_counts_h3_9` are best read as a **presence/indicative** signal, **not** a complete or
-> authoritative inventory. (The authoritative source is OS NGD `trn-fts-streetlight-1`, which needs a
-> paid/keyed OS Data Hub subscription.)
+> **OSM coverage caveat (streetlights & cctv).** The `streetlights` layer comes from OpenStreetMap (via
+> Overture Maps `infrastructure`, `class = street_lamp`) and `cctv` from OSM `man_made=surveillance`
+> (via Overpass). OSM coverage of both is **uneven** — comprehensive in some areas, sparse or absent in
+> others — so `streetlights`, `cctv` and the derived `streetlight_counts_h3_9` are best read as a
+> **presence/indicative** signal, **not** a complete or authoritative inventory. (For street lights the
+> authoritative source is OS NGD `trn-fts-streetlight-1`, which needs a paid/keyed OS Data Hub
+> subscription.)
 
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` on load (the coordinates are the contract).
