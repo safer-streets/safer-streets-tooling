@@ -317,9 +317,18 @@ def test_cctv_extracts_surveillance_nodes(tmp_path, monkeypatch):
         {"type": "node", "id": 2, "lon": -3.1791, "lat": 51.4816},
         {"type": "way", "id": 3},  # no lon/lat → dropped
     ]
-    monkeypatch.setattr(cctv.requests, "post", lambda *a, **k: _FakeOverpassResponse(elements))
+    calls: list[dict] = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs)
+        return _FakeOverpassResponse(elements)
+
+    monkeypatch.setattr(cctv.requests, "post", fake_post)
 
     cctv.extract(_ctx(tmp_path))
+    # Overpass 406s the default python-requests UA, so a custom User-Agent must be sent
+    user_agent = calls[0]["headers"]["User-Agent"]
+    assert user_agent and "python-requests" not in user_agent
     con = _read_parquet(tmp_path / "cctv.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
     assert cols == {"cctv_id", "geom", "h3_9_id"}  # schema mirrors streetlights

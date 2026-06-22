@@ -21,6 +21,10 @@ CCTV_BBOX = tuple(_CCTV["bbox"])
 OVERPASS_URL = _CCTV["overpass_url"]
 CCTV_TAG = _CCTV["tag"]
 
+# Overpass rejects the default python-requests User-Agent with HTTP 406 (anti-abuse), so identify the
+# tool explicitly (per Overpass etiquette).
+_HEADERS = {"User-Agent": "safer-streets-tooling (+https://github.com/safer-streets/safer-streets-tooling)"}
+
 
 def _overpass_query(bbox: tuple[float, ...], tag: str) -> str:
     """Build an Overpass QL query for ``tag`` nodes within ``bbox`` (WGS-84 xmin/ymin/xmax/ymax).
@@ -42,7 +46,7 @@ def extract(ctx: ExtractContext) -> None:
     """
     query = _overpass_query(CCTV_BBOX, CCTV_TAG)
     print(f"  Querying Overpass for CCTV ({CCTV_TAG})…")
-    resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=600)
+    resp = requests.post(OVERPASS_URL, data={"data": query}, headers=_HEADERS, timeout=600)
     resp.raise_for_status()
     elements = resp.json()["elements"]
     # (id, lon, lat) — Overpass returns WGS-84 lon/lat on each node
