@@ -13,11 +13,13 @@ from safer_streets_tooling.transform import (
     geogs,
     overlap_lookups,
     retail_centre_lookups,
+    streetlight_counts,
 )
 from safer_streets_tooling.transform.base import TransformStep
 
 STEPS: tuple[TransformStep, ...] = (
     crime_counts.STEP,
+    streetlight_counts.STEP,  # independent: counts the streetlights extract per res-9 cell
     geo_lookups.STEP,  # depends on crime_counts
     overlap_lookups.STEP,  # depends on crime_counts
     retail_centre_lookups.STEP,  # depends on crime_counts

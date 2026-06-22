@@ -26,6 +26,7 @@ from safer_streets_tooling.extract import (
     retail_centres,
     roads,
     schools,
+    streetlights,
 )
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 from safer_streets_tooling.transform import TransformStep
@@ -265,6 +266,29 @@ def test_poi_extracts_filtered_places(tmp_path, monkeypatch):
     # only the requested categories are kept
     cats = {r[0] for r in con.execute("SELECT DISTINCT basic_category FROM t").fetchall()}
     assert cats <= set(poi.POI_CATEGORIES)
+    con.close()
+
+
+# --- streetlights (Overture infrastructure) ---
+
+
+def test_streetlights_extracts_street_lamps(tmp_path, monkeypatch):
+    """Integration: stream a tiny Overture bbox into the streetlights parquet (skipped if S3 down)."""
+    _connect().close()
+    # a small dense central-London bbox keeps the infrastructure stream manageable
+    monkeypatch.setattr(streetlights, "STREETLIGHTS_BBOX", (-0.16, 51.50, -0.12, 51.52))
+    try:
+        streetlights.extract(_ctx(tmp_path))
+    except Exception as e:  # noqa: BLE001 — network/S3 unavailable in this environment
+        pytest.skip(f"Overture S3 unavailable: {e}")
+
+    con = _read_parquet(tmp_path / "streetlights.parquet")
+    cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
+    assert cols == {"streetlight_id", "geom", "h3_9_id"}
+    # street lamps exist in central London; geometry reprojected to BNG metres, every row has a h3 id
+    assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] > 0
+    assert con.execute("SELECT MIN(ST_X(geom)) FROM t").fetchone()[0] > 1000  # BNG metres, not lon/lat
+    assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
     con.close()
 
 
