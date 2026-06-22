@@ -377,8 +377,17 @@ def test_food_outlets_extracts_england_and_wales_food_venues(tmp_path, monkeypat
     food_outlets.extract(_ctx(tmp_path))  # cached CSV → no download
     con = _read_parquet(tmp_path / "food_outlets.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert {"fhrsid", "business_name", "business_type", "postcode", "rating_value", "geom", "h3_9_id"} <= cols
-    assert "address" not in cols  # address dropped (postcode kept)
+    assert {
+        "fhrsid",
+        "business_name",
+        "business_type",
+        "postcode",
+        "rating_value",
+        "hygiene_score",
+        "geom",
+        "h3_9_id",
+    } <= cols
+    assert {"address", "structural_score"}.isdisjoint(cols)  # address + structural dropped (postcode, hygiene kept)
 
     # the two E&W takeaways + the E&W restaurant survive; Scotland FHIS, NI BT, retailer, no-geo dropped
     ids = {r[0] for r in con.execute("SELECT fhrsid FROM t").fetchall()}
