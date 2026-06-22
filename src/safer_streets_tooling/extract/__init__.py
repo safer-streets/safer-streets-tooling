@@ -10,6 +10,7 @@ it below.
 from safer_streets_tooling.extract import (
     boundaries,
     crime,
+    food_outlets,
     greenspace,
     imd,
     land_cover,
@@ -19,7 +20,6 @@ from safer_streets_tooling.extract import (
     retail_centres,
     roads,
     schools,
-    takeaways,
 )
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
@@ -32,7 +32,7 @@ DATASETS: tuple[Dataset, ...] = (
     roads.DATASET,
     poi.DATASET,
     naptan.DATASET,
-    takeaways.DATASET,
+    food_outlets.DATASET,
     schools.DATASET,  # depends on open_roads
     imd.DATASET,  # depends on local_authority_districts
     *oac.DATASETS,
