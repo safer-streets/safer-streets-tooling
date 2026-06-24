@@ -9,6 +9,7 @@ it below.
 
 from safer_streets_tooling.extract import (
     boundaries,
+    buildings,
     cctv,
     crime,
     food_outlets,
@@ -30,6 +31,7 @@ DATASETS: tuple[Dataset, ...] = (
     *boundaries.DATASETS,
     greenspace.DATASET,
     land_cover.DATASET,
+    buildings.DATASET,
     retail_centres.DATASET,
     roads.DATASET,
     poi.DATASET,

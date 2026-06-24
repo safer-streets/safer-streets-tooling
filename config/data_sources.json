@@ -136,6 +136,10 @@
     "class": "street_lamp",
     "note": "Street lights from Overture Maps base/infrastructure (sourced from OSM highway=street_lamp), streamed from S3 via the overturemaps reader (no API key). bbox is England & Wales in WGS-84 (xmin, ymin, xmax, ymax); kept where subtype/class match, geometry reprojected to BNG (EPSG:27700)."
   },
+  "buildings": {
+    "glob": "Download_?_*.zip",
+    "note": "Verisk UKBuildings (building footprints with use classification), supplied via EDINA Digimap. Licensed, so the download is manual: the eight Download_<n>_*.zip files (each containing a single ukbuildings_*.gpkg) are placed in the data directory's raw folder. Already BNG (EPSG:27700). Rows are de-duplicated on verisk_premise_id (chunks overlap at their boundaries)."
+  },
   "wimd": {
     "url": "https://www.gov.wales/sites/default/files/statistics-and-research/2025-12/wimd-2025-index-and-domain-scores-by-small-area.ods",
     "ods": "wimd-2025-index-and-domain-scores-by-small-area.ods",
