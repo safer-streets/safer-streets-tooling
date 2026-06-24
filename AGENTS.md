@@ -69,11 +69,17 @@ One module per dataset under [extract/](src/safer_streets_tooling/extract/), eac
 | 5 ONS boundary tables | [boundaries.py](src/safer_streets_tooling/extract/boundaries.py) | yes | — |
 | `open_greenspace` | [greenspace.py](src/safer_streets_tooling/extract/greenspace.py) | no | — |
 | `land_cover` | [land_cover.py](src/safer_streets_tooling/extract/land_cover.py) | no | — |
+| `buildings` | [buildings.py](src/safer_streets_tooling/extract/buildings.py) | no | — |
 | `retail_centres` | [retail_centres.py](src/safer_streets_tooling/extract/retail_centres.py) | no | — |
 | `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |
 | `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | — |
+| `naptan` | [naptan.py](src/safer_streets_tooling/extract/naptan.py) | no | — |
+| `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |
+| `streetlights` | [streetlights.py](src/safer_streets_tooling/extract/streetlights.py) | no | — |
+| `cctv` | [cctv.py](src/safer_streets_tooling/extract/cctv.py) | no | — |
 | `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network) |
 | `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
+| `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
 
 ### Transform steps
 
@@ -83,6 +89,8 @@ Registry order respects `depends_on`:
 | Step | Module | Outputs | Depends on |
 | ---- | ------ | ------- | ---------- |
 | `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}` | — |
+| `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `streetlight_counts_h3_9` | — |
+| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
 | `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3_{res}_{key}_lookup` | `crime_counts` |
 | `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3_{res}_{name}_lookup` | `crime_counts` |
 | `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3_{res}_retail_centre_lookup` | `crime_counts` |
@@ -214,13 +222,13 @@ src/
       pipeline.py      # concurrent extract phase (AsyncPipeline wiring)
       base.py          # Dataset spec + ExtractContext
       _common.py       # download / extract_cached / rename_geom_column / (read|write)_geoparquet
-      crime.py boundaries.py greenspace.py land_cover.py retail_centres.py
-      roads.py poi.py schools.py imd.py
+      crime.py boundaries.py greenspace.py land_cover.py buildings.py retail_centres.py
+      roads.py poi.py naptan.py food_outlets.py streetlights.py cctv.py schools.py imd.py oac.py
     transform/
       __init__.py      # STEPS registry + BY_NAME + validation
       pipeline.py      # concurrent transform phase (TransformNode + AsyncPipeline wiring)
       base.py          # TransformStep spec + create_clause / table_exists helpers
-      crime_counts.py geo_lookups.py overlap_lookups.py retail_centre_lookups.py geogs.py
+      crime_counts.py streetlight_counts.py building_counts.py geo_lookups.py overlap_lookups.py retail_centre_lookups.py geogs.py
 tests/                 # pytest suite (offline-safe)
 README.md
 AGENTS.md

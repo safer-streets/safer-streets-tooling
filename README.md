@@ -53,6 +53,7 @@ flowchart LR
    output_areas_2021
    open_greenspace
    land_cover
+   buildings
    retail_centres
    open_roads
    poi
@@ -69,6 +70,7 @@ flowchart LR
    crime_counts_h3_9
    crime_counts_h3_10
    streetlight_counts_h3_9
+   building_counts_h3_9
    h3_geogs_lookup
    h3_greenspace_lookup
    h3_urban_lookup
@@ -91,6 +93,8 @@ flowchart LR
     crime_data --> crime_counts_h3_9
     crime_data --> crime_counts_h3_10
     streetlights --> streetlight_counts_h3_9
+    buildings --> building_counts_h3_9
+    crime_counts_h3_9 --> building_counts_h3_9
     crime_counts_h3_8 --> h3_geogs_lookup
     crime_counts_h3_9 --> h3_geogs_lookup
     crime_counts_h3_10 --> h3_geogs_lookup
@@ -128,6 +132,7 @@ flowchart LR
     crime_counts_h3_9 -.-> database
     crime_counts_h3_10 -.-> database
     streetlight_counts_h3_9 -.-> database
+    building_counts_h3_9 -.-> database
     h3_8_geogs -.-> database
     h3_9_geogs -.-> database
     h3_10_geogs -.-> database
@@ -150,8 +155,8 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
-    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification extract;
-    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,streetlight_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
+    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification extract;
+    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,streetlight_counts_h3_9,building_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
     class database load;
 ```
 
@@ -164,6 +169,14 @@ feature layers into a minimal database (dashed above — `--include` can pull in
 is included in the default minimal DB (skipped if the optional `streetlights` extract was absent). The
 raw `streetlights` point layer itself is **not** bundled by default — this per-cell count is the useful
 form (the raw points are millions of rows) — but it can still be pulled in with `--include streetlights`.
+
+Likewise the `building_counts` transform step aggregates the `buildings` extract (Verisk UKBuildings
+footprints) into `building_counts_h3_9` — the count of buildings per resolution-9 cell **split by
+`map_simple_use`** (Residential / Non Residential / Mixed Use), keyed by `spatial_id`. Each building is
+placed by its footprint centroid, and the output is restricted to cells present in `crime_counts_h3_9`
+so it lines up with the crime grid (≈83% of all footprints fall in a crime cell). It is bundled in the
+default minimal DB (skipped if the optional `buildings` extract was absent); the raw `buildings` layer
+(tens of millions of polygons) is **not** bundled by default but can be pulled in with `--include buildings`.
 
 > **OSM coverage caveat (streetlights & cctv).** The `streetlights` layer comes from OpenStreetMap (via
 > Overture Maps `infrastructure`, `class = street_lamp`) and `cctv` from OSM `man_made=surveillance`

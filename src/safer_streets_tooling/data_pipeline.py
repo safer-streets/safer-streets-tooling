@@ -127,10 +127,11 @@ DEFAULT_FEATURE_TABLES: tuple[str, ...] = (
 )
 
 # Transform outputs included in the database by default (loaded from ``tdir``), beyond the per-resolution
-# crime counts + geogs. Backed by an optional extract (streetlights), so skipped if its parquet is absent.
-# Note: the raw `streetlights` point layer is deliberately *not* in DEFAULT_FEATURE_TABLES — the per-cell
-# `streetlight_counts_h3_9` count is the useful form for consumers (the raw points are millions of rows).
-DEFAULT_TRANSFORM_TABLES: tuple[str, ...] = ("streetlight_counts_h3_9",)
+# crime counts + geogs. Each is backed by an optional extract (streetlights / buildings), so skipped if
+# that parquet is absent. Note: the raw point/footprint layers are deliberately *not* in
+# DEFAULT_FEATURE_TABLES — the per-cell counts (`streetlight_counts_h3_9`, `building_counts_h3_9`) are the
+# useful form for consumers (the raw layers are millions/tens of millions of rows).
+DEFAULT_TRANSFORM_TABLES: tuple[str, ...] = ("streetlight_counts_h3_9", "building_counts_h3_9")
 
 
 def _minimal_tables(resolutions: list[int]) -> list[str]:

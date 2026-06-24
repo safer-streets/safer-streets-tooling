@@ -8,6 +8,7 @@ precedes its dependent (validated at import time), and the pipeline wires them i
 """
 
 from safer_streets_tooling.transform import (
+    building_counts,
     crime_counts,
     geo_lookups,
     geogs,
@@ -20,6 +21,7 @@ from safer_streets_tooling.transform.base import TransformStep
 STEPS: tuple[TransformStep, ...] = (
     crime_counts.STEP,
     streetlight_counts.STEP,  # independent: counts the streetlights extract per res-9 cell
+    building_counts.STEP,  # depends on crime_counts: buildings per res-9 cell, restricted to its cells
     geo_lookups.STEP,  # depends on crime_counts
     overlap_lookups.STEP,  # depends on crime_counts
     retail_centre_lookups.STEP,  # depends on crime_counts
