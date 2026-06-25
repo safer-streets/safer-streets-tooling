@@ -1,100 +1,14 @@
-# Agent Guidelines for `safer-streets-tooling`
+# Agent Rules of Engagement — `safer-streets-tooling`
 
-This file instructs AI agents acting as developer, reviewer, and QA for this repository.
+This is the rules-of-engagement doc for AI agents acting as developer, reviewer, and QA on this
+repository. It says **how to work here** — the gates to pass, the invariants to preserve, and the
+workflow to follow. For **what the package does** (pipeline, datasets, transform steps, modules,
+usage), see [README.md](README.md); don't duplicate that material here.
 
-## Project Overview
-
-`safer-streets-tooling` is the data-build tooling for the Safer Streets project, split out of
-[`safer-streets-core`](../safer-streets-core). It builds the production DuckDB database (police.uk
-crime + ONS boundaries + supplementary geographic/deprivation layers + H3 aggregations) from
-**modular, per-dataset GeoParquet intermediates**.
-
-It depends on `safer-streets-core` (editable path dependency) for the DuckDB helpers
-(`safer_streets_core.database`), the H3 transforms (`safer_streets_core.transforms`), the data-source
-catalogue (`safer_streets_core.utils.data_source`, backed by core's `config/data_sources.json`), and
-the ONS boundary downloader (`scripts.ons_boundaries`, which lives in core). It adds **no new data
-logic of its own to core** — core stays as-is.
-
-### Three-phase pipeline (extract → transform → load)
-
-The `data` CLI (`extract`, `transform`, `load`, plus `assemble` = transform+load and `build` = all
-three) drives a dataset registry (`safer_streets_tooling.extract.DATASETS`) and a transform-step
-registry (`safer_streets_tooling.transform.STEPS`):
-
-1. **extract** — each dataset is downloaded and preprocessed in its **own in-memory DuckDB** and dumped
-   to a `<name>.parquet` GeoParquet file under `data_dir()/extract` (raw source files are cached under
-   `data_dir()/raw`). The extractors run **concurrently**
-   as nodes in an `AsyncPipeline`, respecting `depends_on` edges. Each parquet is a durable per-dataset
-   cache, so one dataset can be refreshed without rebuilding everything.
-2. **transform** — the extracted parquet are loaded into a throwaway in-memory DuckDB, geometry is
-   indexed, and the H3 aggregation steps run concurrently as nodes in an `AsyncPipeline`
-   (`transform.build_all(STEPS, con, …)`), respecting `depends_on` edges. Each step writes the relations
-   it produces (the BTP-filtered `crime_counts_h3_*`, per-cell lookups, `h3_{res}_geogs`) out as its own
-   parquet under `data_dir()/transform` — a durable cache; a step whose output parquet already exist is
-   skipped unless `--all`. No live DB is touched.
-3. **load** *(optional)* — a **minimal** database is assembled in a `<name>.staging.db` from
-   `crime_counts_h3_{res}` + `h3_{res}_geogs` (joined on `spatial_id`) plus the five ONS boundary tables
-   their codes resolve to (PFA / LAD / MSOA / LSOA / OA, from the extract dir), then **atomically
-   promoted** (`os.replace`) over the live database so consumers only ever see a complete DB. `--include
-   NAME` adds non-default tables (a lookup or a feature layer, looked up in the transform then extract
-   dir); boundary geometry is RTree-indexed. Optional because the parquet are the durable outputs — the
-   DB is a convenience bundle.
-
-### Key modules
-
-Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
-
-| File | Role |
-| ---- | ---- |
-| [data_pipeline.py](src/safer_streets_tooling/data_pipeline.py) | `data` CLI: `extract` / `assemble` / `build` commands + `run_assemble` |
-| [extract/pipeline.py](src/safer_streets_tooling/extract/pipeline.py) | Concurrent extract phase: `DatasetExtractNode`, `build_pipeline`, `run_extract` |
-| [transform/pipeline.py](src/safer_streets_tooling/transform/pipeline.py) | Concurrent transform phase: `TransformNode`, `build_pipeline`, `build_all` |
-| [async_pipeline.py](src/safer_streets_tooling/async_pipeline.py) | DAG runner over `AsyncNode`s (`graphlib.TopologicalSorter` + `asyncio.gather`) |
-| [async_node.py](src/safer_streets_tooling/async_node.py) | `AsyncNode` base: derives `dependency_ids` from `execute`'s kwonly args; `__call__` captures exceptions as `Err` |
-| [result.py](src/safer_streets_tooling/result.py) | `Result[T]` / `Ok` / `Err` (`unwrap`, `is_ok`, `is_err`) |
-| [extract/base.py](src/safer_streets_tooling/extract/base.py) | `Dataset` spec + `ExtractContext` |
-| [`extract/__init__.py`](src/safer_streets_tooling/extract/__init__.py) | Ordered `DATASETS` registry + `BY_NAME` + dependency validation |
-| [extract/_common.py](src/safer_streets_tooling/extract/_common.py) | `download`, `extract_cached`, `rename_geom_column`, `write_geoparquet`, `read_geoparquet` |
-| [transform/base.py](src/safer_streets_tooling/transform/base.py) | `TransformStep` spec + `create_clause` / `table_exists` helpers |
-| [`transform/__init__.py`](src/safer_streets_tooling/transform/__init__.py) | Ordered `STEPS` registry + `BY_NAME` + dependency validation |
-
-### Datasets
-
-One module per dataset under [extract/](src/safer_streets_tooling/extract/), each exposing a
-`DATASET` (or `DATASETS` for the boundary group). Registry order respects `depends_on`:
-
-| Dataset(s) | Module | Required? | Depends on |
-| ---------- | ------ | --------- | ---------- |
-| `crime_data` | [crime.py](src/safer_streets_tooling/extract/crime.py) | yes | — |
-| 5 ONS boundary tables | [boundaries.py](src/safer_streets_tooling/extract/boundaries.py) | yes | — |
-| `open_greenspace` | [greenspace.py](src/safer_streets_tooling/extract/greenspace.py) | no | — |
-| `land_cover` | [land_cover.py](src/safer_streets_tooling/extract/land_cover.py) | no | — |
-| `buildings` | [buildings.py](src/safer_streets_tooling/extract/buildings.py) | no | — |
-| `retail_centres` | [retail_centres.py](src/safer_streets_tooling/extract/retail_centres.py) | no | — |
-| `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |
-| `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | — |
-| `naptan` | [naptan.py](src/safer_streets_tooling/extract/naptan.py) | no | — |
-| `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |
-| `streetlights` | [streetlights.py](src/safer_streets_tooling/extract/streetlights.py) | no | — |
-| `cctv` | [cctv.py](src/safer_streets_tooling/extract/cctv.py) | no | — |
-| `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network) |
-| `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
-| `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
-
-### Transform steps
-
-One module per step under [transform/](src/safer_streets_tooling/transform/), each exposing a `STEP`.
-Registry order respects `depends_on`:
-
-| Step | Module | Outputs | Depends on |
-| ---- | ------ | ------- | ---------- |
-| `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}` | — |
-| `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `streetlight_counts_h3_9` | — |
-| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
-| `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3_{res}_{key}_lookup` | `crime_counts` |
-| `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3_{res}_{name}_lookup` | `crime_counts` |
-| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3_{res}_retail_centre_lookup` | `crime_counts` |
-| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3_{res}_geogs` | `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
+In one line: `safer-streets-tooling` builds the production DuckDB database from modular, per-dataset
+GeoParquet intermediates via a three-phase `extract → transform → load` pipeline, depending on
+[`safer-streets-core`](../safer-streets-core) (editable path dependency) for the DuckDB helpers, the H3
+transforms, the data-source catalogue, and the ONS boundary downloader.
 
 ## Toolchain
 
@@ -138,13 +52,13 @@ Overture S3 is unreachable, mirroring the existing tests.
 - **Adding a dataset is additive.** Write a module under [extract/](src/safer_streets_tooling/extract/)
   exposing `DATASET = Dataset(...)` whose `extract(ctx)` does its work in its own
   `duckdb_connector()` and writes `ctx.parquet(name)`, then register it in
-  [`extract/__init__.py`](src/safer_streets_tooling/extract/__init__.py) **after** any `depends_on`.
+  [extract/__init__.py](src/safer_streets_tooling/extract/__init__.py) **after** any `depends_on`.
   Do not add per-dataset control flow to the orchestrator. New remote URLs / filenames / layer hints
   go in core's `config/data_sources.json` (read via `data_source`), not hard-coded here.
 - **Adding a transform step is additive too.** Write a module under
   [transform/](src/safer_streets_tooling/transform/) exposing `STEP = TransformStep(...)` with
   `build(con, resolutions, replace)`, `outputs(con, resolutions)`, and `depends_on`, then register it in
-  [`transform/__init__.py`](src/safer_streets_tooling/transform/__init__.py) **after** any `depends_on`.
+  [transform/__init__.py](src/safer_streets_tooling/transform/__init__.py) **after** any `depends_on`.
   The pipeline caches each step by its declared `outputs`, so keep `outputs` in step with what `build`
   creates.
 - **The assemble phase must stay atomic.** It writes a `<name>.staging.db` and only promotes it with
@@ -173,8 +87,9 @@ Overture S3 is unreachable, mirroring the existing tests.
 - **No comments explaining what the code does.** Only comment the non-obvious *why*.
 - **Keep documentation in step with the code.** Any change to the pipeline, CLI commands/flags, the
   dataset or transform-step set, the DAG, or developer-facing behaviour must update the docs in the same
-  change: [README.md](README.md) (including its extract & transform DAG mermaid diagram), this
-  `AGENTS.md`, and the relevant module/CLI docstrings. Docs and code must never drift.
+  change: [README.md](README.md) (including its extract & transform DAG mermaid diagram and the dataset
+  / transform-step / module tables) and the relevant module/CLI docstrings. Docs and code must never
+  drift.
 
 ## Reviewer Checklist
 
@@ -194,8 +109,8 @@ When reviewing a PR or diff, check:
 6. **Coverage** — change keeps total coverage at or above the 65% gate; new code paths have tests.
 7. **No core edits** — the change does not depend on modifying `safer-streets-core`.
 8. **Types & ruff** — precise annotations, no suppressed `select` rules without justification.
-9. **Docs** — if the pipeline, CLI flags, the dataset set, or the extract/transform DAG change, update
-   [README.md](README.md) (including its extract & transform DAG mermaid diagram).
+9. **Docs** — if the pipeline, CLI flags, the dataset set, or the extract/transform DAG change, the
+   docs in [README.md](README.md) (including the DAG mermaid diagram) are updated in the same change.
 
 ## QA Rules
 
@@ -206,37 +121,10 @@ When reviewing a PR or diff, check:
   handles) — flag platform-sensitive path/file-handle code.
 - If a test is skipped or `xfail`, leave a comment explaining why and when it can be removed.
 
-## Repository Layout
-
-```
-src/
-  safer_streets_tooling/
-    __init__.py
-    data_pipeline.py   # `data` CLI: extract / transform / load / assemble / build / sync
-    async_pipeline.py  # DAG runner over AsyncNodes
-    async_node.py      # AsyncNode base (exception-safe, dependency introspection)
-    result.py          # Result / Ok / Err
-    config.py          # data-source catalogue accessor
-    extract/
-      __init__.py      # DATASETS registry + BY_NAME + validation
-      pipeline.py      # concurrent extract phase (AsyncPipeline wiring)
-      base.py          # Dataset spec + ExtractContext
-      _common.py       # download / extract_cached / rename_geom_column / (read|write)_geoparquet
-      crime.py boundaries.py greenspace.py land_cover.py buildings.py retail_centres.py
-      roads.py poi.py naptan.py food_outlets.py streetlights.py cctv.py schools.py imd.py oac.py
-    transform/
-      __init__.py      # STEPS registry + BY_NAME + validation
-      pipeline.py      # concurrent transform phase (TransformNode + AsyncPipeline wiring)
-      base.py          # TransformStep spec + create_clause / table_exists helpers
-      crime_counts.py streetlight_counts.py building_counts.py geo_lookups.py overlap_lookups.py retail_centre_lookups.py geogs.py
-tests/                 # pytest suite (offline-safe)
-README.md
-AGENTS.md
-pyproject.toml
-```
-
 ## Branch and Release Policy
 
+- Create a feature branch off `main` — never commit directly to `main`.
+- **Never merge a PR without explicit approval.** Open the PR, report CI status, and stop.
 - `safer-streets-core` is consumed as an editable path dependency, not a pinned release. When core is
   eventually published/pinned, update `[tool.uv.sources]` / `[project.dependencies]` accordingly.
 - Version bumps go in [pyproject.toml](pyproject.toml) (`version = "x.y.z"`).
@@ -248,6 +136,28 @@ pyproject.toml
    a module + a registry entry.
 3. Add or update tests in [tests/](tests/) — offline-safe, coverage at/above 65%.
 4. Run the full gate suite locally (`ruff check`, `ruff format --check`, `ty check`, `pytest`).
-5. If the pipeline, CLI flags, the dataset set, or the extract DAG changed, update
-   [README.md](README.md); new data-source locations go in core's `config/data_sources.json`.
-6. Commit (pre-commit hooks auto-fix formatting and re-lock `uv.lock` once configured).
+5. Update the docs ([README.md](README.md)) if the pipeline, CLI flags, the dataset set, or the
+   extract/transform DAG changed; new data-source locations go in core's `config/data_sources.json`.
+6. Commit (pre-commit hooks auto-fix formatting and re-lock `uv.lock` once configured), open a PR,
+   report CI, and **stop** — do not merge without approval.
+
+## Contributions
+
+A log of the substantive changes made to this repo, newest first. Add an entry here when you land a PR
+that changes the dataset/transform set, the pipeline, or developer-facing behaviour.
+
+- **Buildings extract + `building_counts_h3_9` transform** (#9) — Verisk UKBuildings footprints, counted
+  per resolution-9 cell split by `map_simple_use`, restricted to crime cells.
+- **CCTV extract** (#8) — OSM `man_made=surveillance` via Overpass (presence/indicative signal).
+- **Streetlights extract + `streetlight_counts_h3_9` transform** (#7) — Overture/OSM `street_lamp`,
+  counted per resolution-9 cell.
+- **`food_outlets` — drop component scores** (#6) — keep only `rating_value`.
+- **`food_outlets` — broaden takeaways to food & drink venues** (#5) — generalised the FSA takeaways
+  layer (#4) into `food_outlets`.
+- **FSA food-hygiene takeaways (E&W) extract** (#4).
+- **NAPTAN transport stops extract** (#3).
+- **CI: resolve editable core path dep by sibling checkout** (#2) — plus posix-key normalisation so
+  sync works on Windows.
+- **OAC + OAC classification, land-cover overlap split, sync refactor** (#1).
+- **Initial pipeline** — extract → transform → load with the dataset/transform registries, async DAG
+  runner, `data` CLI, cell areas, `load` step, `poi` / `schools` / `imd` layers, and Azure Blob `sync`.

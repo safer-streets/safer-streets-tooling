@@ -189,6 +189,66 @@ default minimal DB (skipped if the optional `buildings` extract was absent); the
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` on load (the coordinates are the contract).
 
+## Datasets
+
+One module per dataset under [src/safer_streets_tooling/extract/](src/safer_streets_tooling/extract/),
+each exposing a `DATASET` (or `DATASETS` for the boundary group). Required datasets abort the build if
+they can't be produced; optional ones are best-effort and skipped (the H3 transforms tolerate their
+absence). Registry order respects `depends_on`:
+
+| Dataset(s) | Module | Required? | Depends on |
+| ---------- | ------ | --------- | ---------- |
+| `crime_data` | [crime.py](src/safer_streets_tooling/extract/crime.py) | yes | — |
+| 5 ONS boundary tables | [boundaries.py](src/safer_streets_tooling/extract/boundaries.py) | yes | — |
+| `open_greenspace` | [greenspace.py](src/safer_streets_tooling/extract/greenspace.py) | no | — |
+| `land_cover` | [land_cover.py](src/safer_streets_tooling/extract/land_cover.py) | no | — |
+| `buildings` | [buildings.py](src/safer_streets_tooling/extract/buildings.py) | no | — |
+| `retail_centres` | [retail_centres.py](src/safer_streets_tooling/extract/retail_centres.py) | no | — |
+| `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |
+| `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | — |
+| `naptan` | [naptan.py](src/safer_streets_tooling/extract/naptan.py) | no | — |
+| `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |
+| `streetlights` | [streetlights.py](src/safer_streets_tooling/extract/streetlights.py) | no | — |
+| `cctv` | [cctv.py](src/safer_streets_tooling/extract/cctv.py) | no | — |
+| `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network) |
+| `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
+| `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
+
+## Transform steps
+
+One module per step under [src/safer_streets_tooling/transform/](src/safer_streets_tooling/transform/),
+each exposing a `STEP`. Each step writes the relations it produces out as parquet under
+`data_dir()/transform`; a step whose outputs already exist is skipped unless `--all`. Registry order
+respects `depends_on`:
+
+| Step | Module | Outputs | Depends on |
+| ---- | ------ | ------- | ---------- |
+| `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}` | — |
+| `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `streetlight_counts_h3_9` | — |
+| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
+| `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3_{res}_{key}_lookup` | `crime_counts` |
+| `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3_{res}_{name}_lookup` | `crime_counts` |
+| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3_{res}_retail_centre_lookup` | `crime_counts` |
+| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3_{res}_geogs` | `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
+
+## Key modules
+
+Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
+
+| File | Role |
+| ---- | ---- |
+| [data_pipeline.py](src/safer_streets_tooling/data_pipeline.py) | `data` CLI: `extract` / `transform` / `load` / `assemble` / `build` / `sync` commands |
+| [extract/pipeline.py](src/safer_streets_tooling/extract/pipeline.py) | Concurrent extract phase: `DatasetExtractNode`, `build_pipeline`, `run_extract` |
+| [transform/pipeline.py](src/safer_streets_tooling/transform/pipeline.py) | Concurrent transform phase: `TransformNode`, `build_pipeline`, `build_all` |
+| [async_pipeline.py](src/safer_streets_tooling/async_pipeline.py) | DAG runner over `AsyncNode`s (`graphlib.TopologicalSorter` + `asyncio.gather`) |
+| [async_node.py](src/safer_streets_tooling/async_node.py) | `AsyncNode` base: derives `dependency_ids` from `execute`'s kwonly args; `__call__` captures exceptions as `Err` |
+| [result.py](src/safer_streets_tooling/result.py) | `Result[T]` / `Ok` / `Err` (`unwrap`, `is_ok`, `is_err`) |
+| [extract/base.py](src/safer_streets_tooling/extract/base.py) | `Dataset` spec + `ExtractContext` |
+| [extract/__init__.py](src/safer_streets_tooling/extract/__init__.py) | Ordered `DATASETS` registry + `BY_NAME` + dependency validation |
+| [extract/_common.py](src/safer_streets_tooling/extract/_common.py) | `download`, `extract_cached`, `rename_geom_column`, `write_geoparquet`, `read_geoparquet` |
+| [transform/base.py](src/safer_streets_tooling/transform/base.py) | `TransformStep` spec + `create_clause` / `table_exists` helpers |
+| [transform/__init__.py](src/safer_streets_tooling/transform/__init__.py) | Ordered `STEPS` registry + `BY_NAME` + dependency validation |
+
 ## Usage
 
 ```bash
