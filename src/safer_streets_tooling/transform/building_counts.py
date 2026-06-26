@@ -14,30 +14,19 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     Keyed by ``spatial_id`` (the lowercase-hex res-9 cell, matching ``crime_counts_h3_9`` /
     ``h3_9_geogs``) plus the ``map_simple_use`` class (Residential / Non Residential / Mixed Use), so a
     consumer joins the per-class counts straight onto those by ``spatial_id``. Each building is placed by
-    its footprint *centroid*: the BNG geometry is reprojected to WGS-84 and indexed to an H3 cell with
-    ``h3_latlng_to_cell`` (the same expression ``crime_counts`` uses). Output is restricted to cells that
-    appear in ``crime_counts_h3_9`` so the count grid lines up with the crime grid. No-op if the buildings
-    table is absent. ``resolutions`` is ignored — this is only produced at resolution 9.
+    its footprint *centroid*: the ``buildings`` extract already tags every footprint with its res-9 cell
+    (``h3_9_id``), so this just reads that column. Output is restricted to cells that appear in
+    ``crime_counts_h3_9`` so the count grid lines up with the crime grid. No-op if the buildings table is
+    absent. ``resolutions`` is ignored — this is only produced at resolution 9.
     """
     if not table_exists(con, BUILDINGS_TABLE):
         return
     con.execute(f"""
         {create_clause("TABLE", f"building_counts_h3_{RESOLUTION}", replace=replace)} AS
-        WITH cells AS (
-            SELECT
-                lower(hex(h3_latlng_to_cell(ST_Y(centroid), ST_X(centroid), {RESOLUTION}))) AS spatial_id,
-                map_simple_use
-            FROM (
-                SELECT
-                    ST_Transform(ST_Centroid(geom), 'EPSG:27700', 'EPSG:4326', always_xy := true) AS centroid,
-                    map_simple_use
-                FROM {BUILDINGS_TABLE}
-            )
-        )
-        SELECT spatial_id, map_simple_use, COUNT(*) AS building_count
-        FROM cells
-        WHERE spatial_id IN (SELECT spatial_id FROM crime_counts_h3_{RESOLUTION})
-        GROUP BY spatial_id, map_simple_use;
+        SELECT h3_9_id AS spatial_id, map_simple_use, COUNT(*) AS building_count
+        FROM {BUILDINGS_TABLE}
+        WHERE h3_9_id IN (SELECT spatial_id FROM crime_counts_h3_{RESOLUTION})
+        GROUP BY h3_9_id, map_simple_use;
     """)
 
 

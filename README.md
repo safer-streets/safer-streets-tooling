@@ -87,6 +87,7 @@ flowchart LR
     %% extract edges
     open_roads --> schools
     local_authority_districts --> imd_scores_pct
+    output_areas_2021 --> buildings
 
     %% transform edges
     crime_data --> crime_counts_h3_8
@@ -170,6 +171,12 @@ is included in the default minimal DB (skipped if the optional `streetlights` ex
 raw `streetlights` point layer itself is **not** bundled by default — this per-cell count is the useful
 form (the raw points are millions of rows) — but it can still be pulled in with `--include streetlights`.
 
+The `buildings` extract itself spatially joins each footprint to the 2021 output areas, tagging it with
+`oa21cd` (the OA21 code) of the OA containing its **centroid** (a LEFT join, so a footprint whose
+centroid falls outside every OA — e.g. Scotland or offshore structures — is kept with a null
+`oa21cd` rather than dropped). The same centroid is also indexed to a resolution-9 H3 cell `h3_9_id`
+(lowercase hex), so the raw layer can be joined straight onto the crime grid / `h3_9_geogs`.
+
 Likewise the `building_counts` transform step aggregates the `buildings` extract (Verisk UKBuildings
 footprints) into `building_counts_h3_9` — the count of buildings per resolution-9 cell **split by
 `map_simple_use`** (Residential / Non Residential / Mixed Use), keyed by `spatial_id`. Each building is
@@ -177,6 +184,11 @@ placed by its footprint centroid, and the output is restricted to cells present 
 so it lines up with the crime grid (≈83% of all footprints fall in a crime cell). It is bundled in the
 default minimal DB (skipped if the optional `buildings` extract was absent); the raw `buildings` layer
 (tens of millions of polygons) is **not** bundled by default but can be pulled in with `--include buildings`.
+
+> **TODO:** now that the `buildings` extract carries `h3_9_id` per footprint, `building_counts_h3_9` may
+> be surplus to requirements — a consumer can aggregate the counts directly from `buildings` by
+> `h3_9_id` / `map_simple_use`. Consider dropping the transform (and its bundled table) once nothing
+> depends on the pre-aggregated form.
 
 > **OSM coverage caveat (streetlights & cctv).** The `streetlights` layer comes from OpenStreetMap (via
 > Overture Maps `infrastructure`, `class = street_lamp`) and `cctv` from OSM `man_made=surveillance`
@@ -202,7 +214,7 @@ absence). Registry order respects `depends_on`:
 | 5 ONS boundary tables | [boundaries.py](src/safer_streets_tooling/extract/boundaries.py) | yes | — |
 | `open_greenspace` | [greenspace.py](src/safer_streets_tooling/extract/greenspace.py) | no | — |
 | `land_cover` | [land_cover.py](src/safer_streets_tooling/extract/land_cover.py) | no | — |
-| `buildings` | [buildings.py](src/safer_streets_tooling/extract/buildings.py) | no | — |
+| `buildings` | [buildings.py](src/safer_streets_tooling/extract/buildings.py) | no | `output_areas_2021` (OA `oa21cd` for each footprint) |
 | `retail_centres` | [retail_centres.py](src/safer_streets_tooling/extract/retail_centres.py) | no | — |
 | `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |
 | `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | — |

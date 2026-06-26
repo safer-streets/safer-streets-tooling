@@ -12,6 +12,10 @@ from safer_streets_tooling.extract.base import Dataset, ExtractContext
 # stable per-premise id used to de-duplicate the overlapping download chunks.
 KEEP_COLS = ("verisk_premise_id", "premise_use", "premise_type", "uprn", "toid", "map_use", "map_simple_use")
 
+# Resolution of the H3 cell (``h3_9_id``) tagged onto each building; matches the ``building_counts``
+# transform and the crime grid (``crime_counts_h3_9`` / ``h3_9_geogs``).
+H3_RESOLUTION = 9
+
 
 def extract(ctx: ExtractContext) -> None:
     """
@@ -25,6 +29,22 @@ def extract(ctx: ExtractContext) -> None:
     The chunks tile England & Wales and overlap at their boundaries, so the same premise can appear in
     more than one file; rows are de-duplicated on ``verisk_premise_id`` (matching the notebook). Kept
     columns are the premise/use classification fields plus the building footprint ``geom``.
+
+    Each de-duplicated building is then spatially joined to the 2021 output areas, tagging it with
+    ``oa21cd`` (the OA21 code) of the OA whose polygon contains the footprint's *centroid*. Both
+    geometries are BNG, so the join is direct. Placing by centroid means every footprint maps to exactly
+    one OA (a point falls in at most one non-overlapping polygon), so boundary-straddling footprints are
+    assigned cleanly rather than dropped. The join is a LEFT join so no building is ever dropped: a
+    footprint whose centroid falls outside every OA (genuinely outside the England & Wales extent, e.g.
+    Scotland or offshore structures) is kept with a null ``oa21cd``, and the count is reported.
+
+    The same centroid (reprojected to WGS-84) is indexed to a resolution-9 H3 cell as ``h3_9_id``
+    (lowercase hex), matching the ``building_counts`` transform and the crime grid so a consumer can join
+    straight onto ``crime_counts_h3_9`` / ``h3_9_geogs``.
+
+    Observed on the full extract (8 GeoPackages): 26,790,009 buildings, of which 158,976 (~0.6%) have a
+    centroid in no output area — consistent with footprints lying outside the OA-clipped England & Wales
+    extent.
     """
     src = data_source("buildings")
     zips = sorted(raw_dir().glob(src["glob"]))
@@ -33,6 +53,13 @@ def extract(ctx: ExtractContext) -> None:
             f"No Verisk UKBuildings download zips matching {src['glob']!r} found under {raw_dir()}.\n"
             f"Download the UKBuildings tiles from EDINA Digimap (https://digimap.edina.ac.uk/) and place the "
             f"Download_<n>_*.zip files in the data directory's raw folder."
+        )
+
+    oa_pq = ctx.parquet("output_areas_2021")
+    if not oa_pq.exists():
+        raise FileNotFoundError(
+            f"Output areas parquet not found at {oa_pq}; the 'output_areas_2021' boundary dataset must be "
+            f"extracted before buildings (it provides the oa21cd for the spatial join)."
         )
 
     gpkgs = []
@@ -56,14 +83,33 @@ def extract(ctx: ExtractContext) -> None:
         union = " UNION ALL ".join(f"SELECT {cols}, \"{geom_col}\" AS geom FROM ST_Read('{gpkg}')" for gpkg in gpkgs)
         con.execute(f"""
             CREATE TABLE buildings AS
-            SELECT DISTINCT ON (verisk_premise_id) {cols}, geom
-            FROM ({union});
+            WITH deduped AS (
+                SELECT DISTINCT ON (verisk_premise_id) {cols}, geom
+                FROM ({union})
+            ),
+            located AS (
+                SELECT
+                    {cols}, geom,
+                    ST_Centroid(geom) AS centroid,  -- BNG, for the OA containment join
+                    ST_Transform(ST_Centroid(geom), 'EPSG:27700', 'EPSG:4326', always_xy := true) AS centroid_ll
+                FROM deduped
+            )
+            SELECT
+                b.* EXCLUDE (geom, centroid, centroid_ll),
+                oa.spatial_id AS oa21cd,
+                lower(hex(h3_latlng_to_cell(ST_Y(b.centroid_ll), ST_X(b.centroid_ll), {H3_RESOLUTION}))) AS h3_9_id,
+                b.geom
+            FROM located b
+            LEFT JOIN read_parquet('{oa_pq}') oa
+            ON ST_Contains(oa.geom, b.centroid);
         """)
-        row_count = con.execute("SELECT COUNT(*) FROM buildings").fetchone()[0]  # ty:ignore[not-subscriptable]
+        row_count, no_oa = con.execute(
+            "SELECT COUNT(*), COUNT(*) FILTER (WHERE oa21cd IS NULL) FROM buildings"
+        ).fetchone()  # ty:ignore[not-iterable]
         write_geoparquet(con, "SELECT * FROM buildings", ctx.parquet("buildings"))
     finally:
         con.close()
-    print(f"  buildings: {row_count:,} rows")
+    print(f"  buildings: {row_count:,} rows ({no_oa:,} with no output area)")
 
 
-DATASET = Dataset(name="buildings", table="buildings", extract=extract)
+DATASET = Dataset(name="buildings", table="buildings", extract=extract, depends_on=("output_areas_2021",))
