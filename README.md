@@ -185,6 +185,11 @@ so it lines up with the crime grid (≈83% of all footprints fall in a crime cel
 default minimal DB (skipped if the optional `buildings` extract was absent); the raw `buildings` layer
 (tens of millions of polygons) is **not** bundled by default but can be pulled in with `--include buildings`.
 
+> **TODO:** now that the `buildings` extract carries `h3_9_id` per footprint, `building_counts_h3_9` may
+> be surplus to requirements — a consumer can aggregate the counts directly from `buildings` by
+> `h3_9_id` / `map_simple_use`. Consider dropping the transform (and its bundled table) once nothing
+> depends on the pre-aggregated form.
+
 > **OSM coverage caveat (streetlights & cctv).** The `streetlights` layer comes from OpenStreetMap (via
 > Overture Maps `infrastructure`, `class = street_lamp`) and `cctv` from OSM `man_made=surveillance`
 > (via Overpass). OSM coverage of both is **uneven** — comprehensive in some areas, sparse or absent in
