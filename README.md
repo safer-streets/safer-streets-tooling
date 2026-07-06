@@ -248,7 +248,9 @@ respects `depends_on`:
 Every command that (re)builds parquet (`extract` / `transform` / `assemble` / `build`) rewrites
 `data_dir()/index.parquet` (also available standalone as `data index`): one row per parquet
 under `extract/` and `transform/`, with its `phase`, `name`, a one-line `description`, its
-`n_rows` / `n_columns` / `columns` schema summary and a `has_geometry` flag. The descriptions come from
+`n_rows` / `n_columns` / `columns` schema summary, a `has_geometry` flag and `last_modified` — the
+parquet's mtime (UTC), i.e. when the table was last built (`sync` preserves it across machines). The
+descriptions come from
 the registries — `Dataset.description` (extract) and `TransformStep.description` (transform) — which are
 **required** (validated at import), so every table in the catalogue is described. Keep those fields
 current when a table changes and the catalogue follows.

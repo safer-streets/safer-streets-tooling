@@ -40,13 +40,35 @@ def test_build_index_rows_and_schema(dirs, tmp_path):
     assert count == 4
 
     idx = pd.read_parquet(out).set_index("name")
-    assert list(idx.columns) == ["phase", "description", "n_rows", "n_columns", "has_geometry", "columns"]
+    assert list(idx.columns) == [
+        "phase",
+        "description",
+        "n_rows",
+        "n_columns",
+        "has_geometry",
+        "columns",
+        "last_modified",
+    ]
 
     assert idx.loc["poi", "phase"] == "extract"
     assert idx.loc["crime_counts_h3_9", "phase"] == "transform"
     assert idx.loc["poi", "n_rows"] == 2
     assert idx.loc["poi", "n_columns"] == 3
     assert idx.loc["poi", "columns"] == "spatial_id,category,geom"
+
+
+def test_last_modified_is_the_parquet_mtime(dirs, tmp_path):
+    """last_modified reflects the source parquet's mtime (UTC), i.e. when the table was last built."""
+    import os
+    from datetime import UTC, datetime
+
+    edir, tdir = dirs
+    os.utime(edir / "poi.parquet", (5_000_000.0, 5_000_000.0))
+    out = tmp_path / "index.parquet"
+    build_index(edir, tdir, out, resolutions=[9])
+    idx = pd.read_parquet(out).set_index("name")
+
+    assert idx.loc["poi", "last_modified"] == datetime.fromtimestamp(5_000_000.0, tz=UTC)
 
 
 def test_geometry_flag_tracks_the_geom_column(dirs, tmp_path):
