@@ -1,13 +1,16 @@
 """Tests for the concurrent extract phase (AsyncPipeline wiring)."""
 
 import asyncio
+from zipfile import ZipFile
 
+import duckdb
+import pandas as pd
 import pytest
 
 from safer_streets_tooling import data_pipeline
 from safer_streets_tooling.async_node import AsyncNode
 from safer_streets_tooling.async_pipeline import AsyncPipeline
-from safer_streets_tooling.extract import build_pipeline, run_extract
+from safer_streets_tooling.extract import build_pipeline, run_extract, workplace_population
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 from safer_streets_tooling.result import Err, Ok
 
@@ -99,6 +102,27 @@ def test_async_pipeline_passes_dependency_results():
 
     assert seen["got"] == 21
     assert pipeline["doubler"].unwrap() == 42
+
+
+def test_workplace_population_extract_reads_oa_csv_from_zip(tmp_path, monkeypatch):
+    """The extractor unpacks the OA-level WP001 CSV from the (mocked) nomis zip and writes the parquet
+    keyed by spatial_id."""
+
+    def fake_download(url, dest):
+        with ZipFile(dest, "w") as z:
+            z.writestr("WP001_oa.csv", "Output Areas Code,Count\nE00000001,76\nW00000002,10\n")
+
+    monkeypatch.setattr(workplace_population, "download", fake_download)
+    monkeypatch.setattr(workplace_population, "raw_dir", lambda: tmp_path)
+
+    try:
+        workplace_population.extract(_ctx(tmp_path))
+    except duckdb.HTTPException as e:  # extension download unavailable
+        pytest.skip(f"extension download unavailable: {e}")
+
+    df = pd.read_parquet(tmp_path / "workplace_population.parquet")
+    assert list(df.columns) == ["spatial_id", "workplace_population"]
+    assert dict(zip(df["spatial_id"], df["workplace_population"], strict=True)) == {"E00000001": 76, "W00000002": 10}
 
 
 def test_run_extract_exposed_on_data_pipeline():

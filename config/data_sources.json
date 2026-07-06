@@ -140,6 +140,12 @@
     "glob": "Download_?_*.zip",
     "note": "Verisk UKBuildings (building footprints with use classification), supplied via EDINA Digimap. Licensed, so the download is manual: the eight Download_<n>_*.zip files (each containing a single ukbuildings_*.gpkg) are placed in the data directory's raw folder. Already BNG (EPSG:27700). Rows are de-duplicated on verisk_premise_id (chunks overlap at their boundaries)."
   },
+  "workplace_population": {
+    "url": "https://www.nomisweb.co.uk/output/census/2021/wp001.zip",
+    "zip": "wp001.zip",
+    "member": "WP001_oa.csv",
+    "note": "Census 2021 WP001 workplace population, nomis bulk download (open data, no API key; https://www.nomisweb.co.uk/sources/census_2021_wp). The zip holds one CSV per geography level; only the OA-level WP001_oa.csv is used. Attribute-only. The workplace population is an estimate of the usually resident population aged 16 years and over, working in an area; it includes people who work mainly at or from home, or do not have a fixed place of work, in their area of usual residence."
+  },
   "wimd": {
     "url": "https://www.gov.wales/sites/default/files/statistics-and-research/2025-12/wimd-2025-index-and-domain-scores-by-small-area.ods",
     "ods": "wimd-2025-index-and-domain-scores-by-small-area.ods",

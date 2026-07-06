@@ -30,6 +30,7 @@ def test_pipeline_wires_data_dependencies():
 
     assert pipeline.nodes["crime_counts"].dependency_ids == ()
     assert pipeline.nodes["streetlight_counts"].dependency_ids == ()  # independent of crime_counts
+    assert pipeline.nodes["building_workplace"].dependency_ids == ()  # independent of crime_counts
     assert pipeline.nodes["geo_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["overlap_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
@@ -245,6 +246,63 @@ def test_streetlight_counts_aggregates_per_res9_cell():
     rows = dict(con.execute("SELECT spatial_id, streetlight_count FROM streetlight_counts_h3_9").fetchall())
     assert rows == {"aaa": 3, "bbb": 1}
     assert streetlight_counts.outputs(con, [9]) == ["streetlight_counts_h3_9"]
+
+
+def test_building_workplace_allocates_pro_rata_to_weighted_floor_area():
+    """Each OA's workplace population is split across its Non Residential / Mixed Use buildings pro rata
+    to floor area × use weight; Residential and OA-less buildings get nothing."""
+    from safer_streets_tooling.transform import building_workplace
+
+    con = duckdb.connect()  # plain SQL, no spatial/h3 extensions needed
+    con.execute("""
+        CREATE TABLE buildings AS SELECT * FROM (VALUES
+            (1, 'OA1', 'aaa', 'Non Residential', 100.0, 300.0),
+            (2, 'OA1', 'aaa', 'Mixed Use',       100.0, 200.0),
+            (3, 'OA1', 'bbb', 'Residential',     100.0, 200.0),
+            (4, 'OA1', 'bbb', 'Non Residential', 100.0, NULL),
+            (5, NULL,  'ccc', 'Non Residential', 100.0, 100.0)
+        ) t(verisk_premise_id, oa21cd, h3_9_id, map_simple_use, premise_area, gross_area)
+    """)
+    con.execute("CREATE TABLE workplace_population AS SELECT 'OA1' AS spatial_id, 500 AS workplace_population")
+
+    building_workplace.build(con, [9], True)
+
+    rows = dict(
+        con.execute("SELECT verisk_premise_id, workplace_population FROM building_workplace_population").fetchall()
+    )
+    # weights: #1 gross 300 × 1.0 = 300; #2 gross 200 × 0.5 = 100; #4 no gross → premise 100 × 1.0 = 100
+    # → 500 people split 300 / 100 / 100; #3 (Residential) and #5 (no OA) excluded
+    assert rows.keys() == {1, 2, 4}
+    assert rows[1] == pytest.approx(300.0)
+    assert rows[2] == pytest.approx(100.0)
+    assert rows[4] == pytest.approx(100.0)
+    assert building_workplace.outputs(con, [9]) == ["building_workplace_population"]
+
+
+def test_building_workplace_noop_without_input_tables():
+    """The step is a no-op (no table, no output) when either input extract is absent."""
+    from safer_streets_tooling.transform import building_workplace
+
+    con = duckdb.connect()
+    building_workplace.build(con, [9], True)  # neither table → must not raise
+    assert building_workplace.outputs(con, [9]) == []
+
+    con.execute("CREATE TABLE buildings(verisk_premise_id INTEGER)")
+    building_workplace.build(con, [9], True)  # workplace_population absent → still a no-op
+    assert building_workplace.outputs(con, [9]) == []
+
+
+def test_building_workplace_noop_when_buildings_predate_size_columns():
+    """A cached buildings parquet from before the size columns were added is skipped, not crashed on."""
+    from safer_streets_tooling.transform import building_workplace
+
+    con = duckdb.connect()
+    con.execute("CREATE TABLE buildings AS SELECT 1 AS verisk_premise_id, 'OA1' AS oa21cd")  # no area columns
+    con.execute("CREATE TABLE workplace_population AS SELECT 'OA1' AS spatial_id, 500 AS workplace_population")
+
+    building_workplace.build(con, [9], True)  # must not raise
+
+    assert building_workplace.outputs(con, [9]) == []
 
 
 def test_streetlight_counts_noop_without_streetlights_table():
