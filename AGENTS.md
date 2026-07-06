@@ -56,7 +56,8 @@ Overture S3 is unreachable, mirroring the existing tests.
   Do not add per-dataset control flow to the orchestrator. New remote URLs / filenames / layer hints
   go in core's `config/data_sources.json` (read via `data_source`), not hard-coded here.
 - **Every table is described.** `Dataset` and `TransformStep` each carry a required one-line
-  `description`, surfaced in the `index.parquet` catalogue (`data index`, run by `assemble` / `build`).
+  `description`, surfaced in the `index.parquet` catalogue (`data index`, rewritten by every command
+  that (re)builds parquet: `extract` / `transform` / `assemble` / `build`).
   The registry validators reject a blank one at import. When you add or change a table, set / update its
   `description` in the same change — it is the single source of truth the catalogue is built from.
 - **Adding a transform step is additive too.** Write a module under

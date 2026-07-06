@@ -245,7 +245,8 @@ respects `depends_on`:
 
 ## Table catalogue (`index.parquet`)
 
-`data index` (also run by `assemble` and `build`) writes `data_dir()/index.parquet`: one row per parquet
+Every command that (re)builds parquet (`extract` / `transform` / `assemble` / `build`) rewrites
+`data_dir()/index.parquet` (also available standalone as `data index`): one row per parquet
 under `extract/` and `transform/`, with its `phase`, `name`, a one-line `description`, its
 `n_rows` / `n_columns` / `columns` schema summary and a `has_geometry` flag. The descriptions come from
 the registries — `Dataset.description` (extract) and `TransformStep.description` (transform) — which are
@@ -283,7 +284,7 @@ uv run data transform                   # (re)build the H3 aggregation parquet f
 uv run data load                        # (optional) assemble the minimal DB: crime_counts + geogs + boundaries + features
 uv run data load --include road_network # …plus any extra table(s) by name
 uv run data assemble                    # transform + load in one step
-uv run data index                       # (re)write index.parquet cataloguing the extract + transform tables
+uv run data index                       # (re)write index.parquet by hand (extract/transform/assemble/build do this too)
 uv run data sync                        # upload the extract + transform parquet to Azure Blob (phase2)
 uv run data sync --update newer         # two-way: upload if local newer, download if remote newer
 ```
