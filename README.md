@@ -66,6 +66,7 @@ flowchart LR
    oac
    oac_classification
    workplace_population
+   residential_population
 
    crime_counts_h3_8
    crime_counts_h3_9
@@ -160,7 +161,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
-    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population extract;
+    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population extract;
     class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,streetlight_counts_h3_9,building_counts_h3_9,building_workplace_population,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
     class database load;
 ```
@@ -207,6 +208,15 @@ than reallocated. Like the raw `buildings` layer the per-building output is **no
 default minimal DB, but can be pulled in with `--include building_workplace_population` (or aggregated
 onto the crime grid via its `h3_9_id`).
 
+Its residential counterpart is the `residential_population` extract: the Census 2021 **TS001** count of
+usual residents per 2021 output area (nomis API, table `NM_2021_1`; needs a free `NOMIS_API_KEY`),
+keyed by `spatial_id` (the OA21 code) and split by residence type into `household_population` and
+`communal_population`. A usual resident is anyone who, on Census Day (21 March 2021), was in the UK and
+had stayed or intended to stay in the UK for a period of 12 months or more, or had a permanent UK
+address and was outside the UK and intended to be outside the UK for less than 12 months. (A
+`building_residential` transform mirroring `building_workplace` — allocating residents to residential
+buildings — is a natural follow-up but is not yet implemented.)
+
 > **TODO:** now that the `buildings` extract carries `h3_9_id` per footprint, `building_counts_h3_9` may
 > be surplus to requirements — a consumer can aggregate the counts directly from `buildings` by
 > `h3_9_id` / `map_simple_use`. Consider dropping the transform (and its bundled table) once nothing
@@ -248,6 +258,7 @@ absence). Registry order respects `depends_on`:
 | `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
 | `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
+| `residential_population` | [residential_population.py](src/safer_streets_tooling/extract/residential_population.py) | no | — |
 
 ## Transform steps
 

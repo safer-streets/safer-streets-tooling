@@ -140,6 +140,11 @@
     "glob": "Download_?_*.zip",
     "note": "Verisk UKBuildings (building footprints with use classification), supplied via EDINA Digimap. Licensed, so the download is manual: the eight Download_<n>_*.zip files (each containing a single ukbuildings_*.gpkg) are placed in the data directory's raw folder. Already BNG (EPSG:27700). Rows are de-duplicated on verisk_premise_id (chunks overlap at their boundaries)."
   },
+  "residential_population": {
+    "nm_table": "NM_2021_1",
+    "csv": "ts001_oa.csv",
+    "note": "Census 2021 TS001 usual residents per OA, fetched from the nomis API (table TS001 resolves to NM_2021_1; needs NOMIS_API_KEY, free registration at https://www.nomisweb.co.uk). Attribute-only. Split by residence type: lives in a household vs lives in a communal establishment. A usual resident is anyone who, on Census Day 2021, was in the UK and had stayed or intended to stay for 12 months or more, or had a permanent UK address and was outside the UK for less than 12 months."
+  },
   "workplace_population": {
     "url": "https://www.nomisweb.co.uk/output/census/2021/wp001.zip",
     "zip": "wp001.zip",

@@ -151,9 +151,10 @@ When reviewing a PR or diff, check:
 A log of the substantive changes made to this repo, newest first. Add an entry here when you land a PR
 that changes the dataset/transform set, the pipeline, or developer-facing behaviour.
 
-- **Workplace population extract + `building_workplace` transform** (#14) — Census 2021 WP001 workplace
-  population per OA (nomis bulk download), allocated to Non Residential / Mixed Use buildings pro rata
-  to floor area × use weight as `building_workplace_population`.
+- **Population extracts + `building_workplace` transform** (#14) — Census 2021 WP001 workplace
+  population and TS001 residential population per OA (nomis); the workplace population is allocated to
+  Non Residential / Mixed Use buildings pro rata to floor area × use weight as
+  `building_workplace_population`.
 - **Table catalogue `index.parquet`** (#11) — a required one-line `description` on every `Dataset` /
   `TransformStep`, and a `data index` command (run by `assemble` / `build`) that writes
   `data_dir()/index.parquet` cataloguing every extract + transform table (phase, name, description,
