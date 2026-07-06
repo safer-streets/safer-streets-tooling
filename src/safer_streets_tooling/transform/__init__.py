@@ -9,11 +9,11 @@ precedes its dependent (validated at import time), and the pipeline wires them i
 
 from safer_streets_tooling.transform import (
     building_counts,
-    building_workplace,
     crime_counts,
     geo_lookups,
     geogs,
     overlap_lookups,
+    population_counts,
     retail_centre_lookups,
     streetlight_counts,
 )
@@ -23,7 +23,7 @@ STEPS: tuple[TransformStep, ...] = (
     crime_counts.STEP,
     streetlight_counts.STEP,  # independent: counts the streetlights extract per res-9 cell
     building_counts.STEP,  # depends on crime_counts: buildings per res-9 cell, restricted to its cells
-    building_workplace.STEP,  # independent: OA workplace population allocated to non-residential buildings
+    population_counts.STEP,  # independent: OA residential + workplace population per res-9 cell via buildings
     geo_lookups.STEP,  # depends on crime_counts
     overlap_lookups.STEP,  # depends on crime_counts
     retail_centre_lookups.STEP,  # depends on crime_counts
