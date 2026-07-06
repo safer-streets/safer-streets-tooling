@@ -52,6 +52,7 @@ STEP = TransformStep(
     name="geo_lookups",
     build=build,
     outputs=outputs,
+    description="Per-cell lookup mapping each H3 cell to one ONS geography code (max-overlap).",
     depends_on=("crime_counts",),
     extract_inputs=tuple(GEOGRAPHY_MAPPINGS.values()),
 )

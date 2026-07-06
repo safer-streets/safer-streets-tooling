@@ -112,4 +112,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  naptan: {row_count:,} rows")
 
 
-DATASET = Dataset(name="naptan", table="naptan", extract=extract)
+DATASET = Dataset(
+    name="naptan",
+    table="naptan",
+    extract=extract,
+    description="NAPTAN public-transport access nodes (bus/rail/metro/tram/ferry/taxi stops).",
+)

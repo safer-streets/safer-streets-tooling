@@ -61,4 +61,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  land_cover: {row_count:,} rows")
 
 
-DATASET = Dataset(name="land_cover", table="land_cover", extract=extract)
+DATASET = Dataset(
+    name="land_cover",
+    table="land_cover",
+    extract=extract,
+    description="UKCEH Land Cover Map vector polygons with an urban/suburban flag.",
+)

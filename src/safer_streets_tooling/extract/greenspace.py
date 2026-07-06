@@ -46,4 +46,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  open_greenspace: {row_count:,} rows")
 
 
-DATASET = Dataset(name="open_greenspace", table="open_greenspace", extract=extract)
+DATASET = Dataset(
+    name="open_greenspace",
+    table="open_greenspace",
+    extract=extract,
+    description="OS Open Greenspace polygons (parks, playing fields, etc.) with a function class.",
+)

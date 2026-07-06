@@ -153,6 +153,7 @@ DATASET = Dataset(
     name="imd_scores_pct",
     table="imd_scores_pct",
     extract=extract,
+    description="Per-LSOA deprivation percentiles (English IoD + Welsh WIMD), keyed by lsoa21cd.",
     geometry=False,
     depends_on=("local_authority_districts",),
 )

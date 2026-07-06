@@ -46,11 +46,16 @@ DATASETS: tuple[Dataset, ...] = (
 
 
 def _validate(datasets: tuple[Dataset, ...]) -> None:
-    """Names are unique and every depends_on refers to an earlier dataset."""
+    """Names are unique, every depends_on refers to an earlier dataset, and each has a description.
+
+    The description is required so the ``index.parquet`` catalogue never has a blank row (see AGENTS.md).
+    """
     seen: set[str] = set()
     for ds in datasets:
         if ds.name in seen:
             raise ValueError(f"duplicate dataset name: {ds.name}")
+        if not ds.description.strip():
+            raise ValueError(f"dataset {ds.name!r} needs a non-empty description (surfaced in index.parquet)")
         for dep in ds.depends_on:
             if dep not in seen:
                 raise ValueError(f"dataset {ds.name!r} depends on {dep!r}, which is not registered earlier")

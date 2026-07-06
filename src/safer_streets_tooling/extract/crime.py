@@ -46,4 +46,10 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  crime_data: {row_count:,} rows")
 
 
-DATASET = Dataset(name="crime_data", table="crime_data", extract=extract, optional=False)
+DATASET = Dataset(
+    name="crime_data",
+    table="crime_data",
+    extract=extract,
+    description="police.uk street-level crimes (date, type, lat/lon, reporting force).",
+    optional=False,
+)

@@ -74,4 +74,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  cctv: {row_count:,} rows")
 
 
-DATASET = Dataset(name="cctv", table="cctv", extract=extract)
+DATASET = Dataset(
+    name="cctv",
+    table="cctv",
+    extract=extract,
+    description="CCTV / surveillance cameras from OpenStreetMap (Overpass) — presence signal.",
+)

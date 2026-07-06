@@ -38,5 +38,6 @@ STEP = TransformStep(
     name="streetlight_counts",
     build=build,
     outputs=outputs,
+    description="Street lights counted per resolution-9 H3 cell, keyed by spatial_id.",
     extract_inputs=(STREETLIGHTS_TABLE,),
 )

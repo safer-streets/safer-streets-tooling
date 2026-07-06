@@ -35,15 +35,17 @@ class Dataset:
 
     ``extract`` downloads/preprocesses the source in its own connection and writes
     ``ctx.parquet(name)``; it raises (e.g. ``FileNotFoundError``) when an absent source means the
-    dataset should be skipped. ``optional`` datasets are skipped with a warning on failure, required
-    ones abort the build. ``geometry`` flags that the table carries a ``geom`` column (so it is
-    RTree-indexed on assemble). ``depends_on`` lists other dataset names whose parquet this extractor
-    reads, and must precede this one in ``DATASETS``.
+    dataset should be skipped. ``description`` is a one-line human summary of the table, surfaced in the
+    ``index.parquet`` catalogue (keep it current when the table changes). ``optional`` datasets are
+    skipped with a warning on failure, required ones abort the build. ``geometry`` flags that the table
+    carries a ``geom`` column (so it is RTree-indexed on assemble). ``depends_on`` lists other dataset
+    names whose parquet this extractor reads, and must precede this one in ``DATASETS``.
     """
 
     name: str
     table: str
     extract: Callable[[ExtractContext], None]
+    description: str = ""
     optional: bool = True
     geometry: bool = True
     depends_on: tuple[str, ...] = field(default_factory=tuple)

@@ -52,6 +52,7 @@ STEP = TransformStep(
     name="retail_centre_lookups",
     build=build,
     outputs=outputs,
+    description="Per-cell lookup of each H3 cell's nearest retail centre (within 2km) + distance.",
     depends_on=("crime_counts",),
     extract_inputs=(RETAIL_CENTRES_TABLE,),
 )

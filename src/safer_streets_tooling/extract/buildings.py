@@ -112,4 +112,10 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  buildings: {row_count:,} rows ({no_oa:,} with no output area)")
 
 
-DATASET = Dataset(name="buildings", table="buildings", extract=extract, depends_on=("output_areas_2021",))
+DATASET = Dataset(
+    name="buildings",
+    table="buildings",
+    extract=extract,
+    description="Verisk UKBuildings footprints with premise use, oa21cd and a res-9 h3_9_id.",
+    depends_on=("output_areas_2021",),
+)

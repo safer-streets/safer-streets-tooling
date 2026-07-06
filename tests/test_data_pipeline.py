@@ -1083,3 +1083,54 @@ def test_sync_upload_ignore_skips_existing(monkeypatch, tmp_path):
     assert (up, skipped) == (1, 1)
     assert storage.blobs["extract/b.parquet"][0] == b"b"
     assert storage.blobs["extract/a.parquet"][0] == b"a-remote"  # untouched
+
+
+def test_sync_includes_the_root_index_parquet(monkeypatch, tmp_path):
+    """The index.parquet catalogue at the data_dir() root is synced by its bare name, both ways."""
+    edir, _ = _sync_dirs(monkeypatch, tmp_path)
+    storage = _FakeBlobStorage()
+
+    # local-only index → uploaded under its bare name (no extract/ or transform/ prefix)
+    _write_local(tmp_path / "index.parquet", b"local-index", mtime=5000.0)
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (1, 0, 0)
+    assert storage.blobs["index.parquet"][0] == b"local-index"
+
+    # remote newer → downloaded back to the root
+    storage.put("index.parquet", b"new-remote-index", ts=9000.0)
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (0, 1, 0)
+    assert (tmp_path / "index.parquet").read_bytes() == b"new-remote-index"
+
+
+def test_sync_remote_only_index_is_downloaded(monkeypatch, tmp_path):
+    _sync_dirs(monkeypatch, tmp_path)
+    storage = _FakeBlobStorage()
+    storage.put("index.parquet", b"remote-index", ts=6000.0)
+
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (0, 1, 0)
+    assert (tmp_path / "index.parquet").read_bytes() == b"remote-index"
+
+
+# --- CLI wiring --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("command", ["extract", "transform", "assemble", "build", "index"])
+def test_parquet_mutating_commands_rewrite_the_index(monkeypatch, tmp_path, command):
+    """Every command that (re)builds parquet regenerates index.parquet (and `index` does standalone)."""
+    from typer.testing import CliRunner
+
+    calls: list[str] = []
+    monkeypatch.setattr(data_pipeline, "extract_dir", lambda: tmp_path / "extract")
+    monkeypatch.setattr(data_pipeline, "transform_dir", lambda: tmp_path / "transform")
+    monkeypatch.setattr(data_pipeline, "index_path", lambda: tmp_path / "index.parquet")
+    monkeypatch.setattr(data_pipeline, "database_path", lambda: tmp_path / "test.db")
+    monkeypatch.setattr(data_pipeline, "run_extract", lambda *a, **k: calls.append("extract"))
+    monkeypatch.setattr(data_pipeline, "run_transform", lambda *a, **k: calls.append("transform"))
+    monkeypatch.setattr(data_pipeline, "run_load", lambda *a, **k: calls.append("load"))
+    monkeypatch.setattr(data_pipeline, "run_index", lambda *a, **k: calls.append("index"))
+
+    result = CliRunner().invoke(data_pipeline.app, [command])
+    assert result.exit_code == 0, result.output
+    assert calls[-1] == "index"

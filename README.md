@@ -243,13 +243,26 @@ respects `depends_on`:
 | `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3_{res}_retail_centre_lookup` | `crime_counts` |
 | `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3_{res}_geogs` | `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
 
+## Table catalogue (`index.parquet`)
+
+Every command that (re)builds parquet (`extract` / `transform` / `assemble` / `build`) rewrites
+`data_dir()/index.parquet` (also available standalone as `data index`): one row per parquet
+under `extract/` and `transform/`, with its `phase`, `name`, a one-line `description`, its
+`n_rows` / `n_columns` / `columns` schema summary, a `has_geometry` flag and `last_modified` — the
+parquet's mtime (UTC), i.e. when the table was last built (`sync` preserves it across machines). The
+descriptions come from
+the registries — `Dataset.description` (extract) and `TransformStep.description` (transform) — which are
+**required** (validated at import), so every table in the catalogue is described. Keep those fields
+current when a table changes and the catalogue follows.
+
 ## Key modules
 
 Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
 
 | File | Role |
 | ---- | ---- |
-| [data_pipeline.py](src/safer_streets_tooling/data_pipeline.py) | `data` CLI: `extract` / `transform` / `load` / `assemble` / `build` / `sync` commands |
+| [data_pipeline.py](src/safer_streets_tooling/data_pipeline.py) | `data` CLI: `extract` / `transform` / `load` / `assemble` / `build` / `index` / `sync` commands |
+| [index.py](src/safer_streets_tooling/index.py) | `build_index`: writes `index.parquet` cataloguing every extract + transform table (name, description, schema) |
 | [extract/pipeline.py](src/safer_streets_tooling/extract/pipeline.py) | Concurrent extract phase: `DatasetExtractNode`, `build_pipeline`, `run_extract` |
 | [transform/pipeline.py](src/safer_streets_tooling/transform/pipeline.py) | Concurrent transform phase: `TransformNode`, `build_pipeline`, `build_all` |
 | [async_pipeline.py](src/safer_streets_tooling/async_pipeline.py) | DAG runner over `AsyncNode`s (`graphlib.TopologicalSorter` + `asyncio.gather`) |
@@ -273,6 +286,7 @@ uv run data transform                   # (re)build the H3 aggregation parquet f
 uv run data load                        # (optional) assemble the minimal DB: crime_counts + geogs + boundaries + features
 uv run data load --include road_network # …plus any extra table(s) by name
 uv run data assemble                    # transform + load in one step
+uv run data index                       # (re)write index.parquet by hand (extract/transform/assemble/build do this too)
 uv run data sync                        # upload the extract + transform parquet to Azure Blob (phase2)
 uv run data sync --update newer         # two-way: upload if local newer, download if remote newer
 ```
@@ -284,7 +298,8 @@ uv run data sync --update newer         # two-way: upload if local newer, downlo
 uv run data load
 ```
 
-`data sync` reconciles every `*.parquet` under `data_dir()/extract` and `data_dir()/transform` with the
+`data sync` reconciles every `*.parquet` under `data_dir()/extract` and `data_dir()/transform` — plus
+the root `index.parquet` catalogue — with the
 `phase2` container, keyed by path relative to `data_dir()` (e.g. `extract/crime_data.parquet`). The
 account URL comes from the `SAFER_STREETS_BLOB_STORAGE` env var and authentication uses a service
 principal (`AZURE_*` credentials); see `safer_streets_core.file_storage`. A blob absent remotely is
@@ -300,7 +315,8 @@ always uploaded; for one that exists on both sides `--update` decides:
 ## Adding a dataset
 
 1. Write a module under `src/safer_streets_tooling/extract/` exposing a `DATASET = Dataset(...)`
-   whose `extract(ctx)` writes `ctx.parquet(name)` (use `_common.write_geoparquet`).
+   whose `extract(ctx)` writes `ctx.parquet(name)` (use `_common.write_geoparquet`). Give it a one-line
+   `description` (required — surfaced in `index.parquet`).
 2. Register it in `src/safer_streets_tooling/extract/__init__.py` (after any `depends_on`).
 3. `data extract --only <name>` then `data assemble`.
 
@@ -308,6 +324,7 @@ always uploaded; for one that exists on both sides `--update` decides:
 
 1. Write a module under `src/safer_streets_tooling/transform/` exposing a `STEP = TransformStep(...)`
    with a `build(con, resolutions, replace)`, an `outputs(con, resolutions)` listing the relations it
-   produces, and the names of any steps it `depends_on`.
+   produces, a one-line `description` (required — surfaced in `index.parquet`), and the names of any
+   steps it `depends_on`.
 2. Register it in `src/safer_streets_tooling/transform/__init__.py` (after any `depends_on`).
 3. `data transform` then `data load` (or `data assemble`).

@@ -110,6 +110,7 @@ STEP = TransformStep(
     name="overlap_lookups",
     build=build,
     outputs=outputs,
+    description="Per-cell lookup of every overlapping feature (greenspace, land cover, roads, school catchments).",
     depends_on=("crime_counts",),
     extract_inputs=tuple(dict.fromkeys(f.table for f in OVERLAP_FEATURES)),
 )

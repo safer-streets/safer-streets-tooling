@@ -40,12 +40,26 @@ def _make_extract(layer_key: str, table: str):
     return extract
 
 
+# one-line description per boundary table, surfaced in the index.parquet catalogue. Any table without an
+# entry falls back to a generic phrasing.
+_DESCRIPTIONS = {
+    "police_force_areas": "ONS Police Force Area boundaries (E&W), id renamed to spatial_id (pfa23cd).",
+    "local_authority_districts": "ONS Local Authority District boundaries (UK), spatial_id = lad24cd.",
+    "msoa_2021": "ONS 2021 MSOA boundaries (E&W), spatial_id = msoa21cd.",
+    "lsoa_2021": "ONS 2021 LSOA boundaries (E&W), spatial_id = lsoa21cd.",
+    "output_areas_2021": "ONS 2021 Output Area boundaries (E&W), spatial_id = oa21cd.",
+}
+
+
 def _datasets() -> tuple[Dataset, ...]:
     return tuple(
         Dataset(
             name=info["table"],
             table=info["table"],
             extract=_make_extract(layer_key, info["table"]),
+            description=_DESCRIPTIONS.get(
+                info["table"], f"ONS {info['table']} boundary layer (spatial_id code + geom)."
+            ),
             optional=False,  # the H3 geography lookups in transform/geo_lookups.py require every boundary table
         )
         for layer_key, info in ons_boundaries.sources()["layers"].items()

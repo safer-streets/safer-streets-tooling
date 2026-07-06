@@ -30,11 +30,16 @@ STEPS: tuple[TransformStep, ...] = (
 
 
 def _validate(steps: tuple[TransformStep, ...]) -> None:
-    """Names are unique and every depends_on refers to an earlier step."""
+    """Names are unique, every depends_on refers to an earlier step, and each has a description.
+
+    The description is required so the ``index.parquet`` catalogue never has a blank row (see AGENTS.md).
+    """
     seen: set[str] = set()
     for step in steps:
         if step.name in seen:
             raise ValueError(f"duplicate transform step name: {step.name}")
+        if not step.description.strip():
+            raise ValueError(f"transform step {step.name!r} needs a non-empty description (surfaced in index.parquet)")
         for dep in step.depends_on:
             if dep not in seen:
                 raise ValueError(f"transform step {step.name!r} depends on {dep!r}, which is not registered earlier")
