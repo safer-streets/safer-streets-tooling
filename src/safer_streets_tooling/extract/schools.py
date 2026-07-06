@@ -166,4 +166,10 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  schools: {row_count:,} rows")
 
 
-DATASET = Dataset(name="schools", table="schools", extract=extract, depends_on=("open_roads",))
+DATASET = Dataset(
+    name="schools",
+    table="schools",
+    extract=extract,
+    description="GIAS schools with a 10-minute walk-isochrone catchment geometry.",
+    depends_on=("open_roads",),
+)

@@ -55,6 +55,10 @@ Overture S3 is unreachable, mirroring the existing tests.
   [extract/__init__.py](src/safer_streets_tooling/extract/__init__.py) **after** any `depends_on`.
   Do not add per-dataset control flow to the orchestrator. New remote URLs / filenames / layer hints
   go in core's `config/data_sources.json` (read via `data_source`), not hard-coded here.
+- **Every table is described.** `Dataset` and `TransformStep` each carry a required one-line
+  `description`, surfaced in the `index.parquet` catalogue (`data index`, run by `assemble` / `build`).
+  The registry validators reject a blank one at import. When you add or change a table, set / update its
+  `description` in the same change — it is the single source of truth the catalogue is built from.
 - **Adding a transform step is additive too.** Write a module under
   [transform/](src/safer_streets_tooling/transform/) exposing `STEP = TransformStep(...)` with
   `build(con, resolutions, replace)`, `outputs(con, resolutions)`, and `depends_on`, then register it in
@@ -99,7 +103,7 @@ When reviewing a PR or diff, check:
    reprojected in the extractor, not later.
 2. **Registry, not control flow** — new datasets / transform steps are added via a module + registry
    entry, with correct `optional`/`geometry`/`depends_on` (datasets) or `outputs`/`depends_on` (steps),
-   and each `depends_on` precedes its entry in `DATASETS` / `STEPS`.
+   a non-empty `description`, and each `depends_on` precedes its entry in `DATASETS` / `STEPS`.
 3. **Assemble integrity** — still staging + atomic `os.replace`? Geometry tables indexed before the
    transforms run?
 4. **Extract robustness** — optional-source failures become skips, required failures abort; `--only`
@@ -146,6 +150,10 @@ When reviewing a PR or diff, check:
 A log of the substantive changes made to this repo, newest first. Add an entry here when you land a PR
 that changes the dataset/transform set, the pipeline, or developer-facing behaviour.
 
+- **Table catalogue `index.parquet`** (#11) — a required one-line `description` on every `Dataset` /
+  `TransformStep`, and a `data index` command (run by `assemble` / `build`) that writes
+  `data_dir()/index.parquet` cataloguing every extract + transform table (phase, name, description,
+  schema, geometry flag).
 - **Buildings extract + `building_counts_h3_9` transform** (#9) — Verisk UKBuildings footprints, counted
   per resolution-9 cell split by `map_simple_use`, restricted to crime cells.
 - **CCTV extract** (#8) — OSM `man_made=surveillance` via Overpass (presence/indicative signal).

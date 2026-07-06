@@ -92,5 +92,6 @@ STEP = TransformStep(
     name="geogs",
     build=build,
     outputs=outputs,
+    description="One row per H3 cell: ONS codes, overlap id lists + measures, cell_area, nearest retail centre.",
     depends_on=("geo_lookups", "overlap_lookups", "retail_centre_lookups"),
 )

@@ -41,4 +41,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  open_roads: {row_count:,} rows")
 
 
-DATASET = Dataset(name="open_roads", table="open_roads", extract=extract)
+DATASET = Dataset(
+    name="open_roads",
+    table="open_roads",
+    extract=extract,
+    description="OS Open Roads network links with a road_function classification.",
+)

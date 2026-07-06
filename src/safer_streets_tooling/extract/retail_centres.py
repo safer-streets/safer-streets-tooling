@@ -48,4 +48,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  retail_centres: {row_count:,} rows")
 
 
-DATASET = Dataset(name="retail_centres", table="retail_centres", extract=extract)
+DATASET = Dataset(
+    name="retail_centres",
+    table="retail_centres",
+    extract=extract,
+    description="GeoDS Retail Centre Boundaries (retail agglomerations), reprojected to BNG.",
+)

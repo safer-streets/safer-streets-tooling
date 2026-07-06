@@ -40,6 +40,7 @@ STEP = TransformStep(
     name="building_counts",
     build=build,
     outputs=outputs,
+    description="Buildings counted per resolution-9 H3 cell and map_simple_use, keyed by spatial_id.",
     depends_on=("crime_counts",),
     extract_inputs=(BUILDINGS_TABLE,),
 )

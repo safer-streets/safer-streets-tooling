@@ -99,6 +99,18 @@ def extract_oac_classification(ctx: ExtractContext) -> None:
 
 
 DATASETS: tuple[Dataset, ...] = (
-    Dataset(name="oac", table="oac", extract=extract_oac, geometry=False),
-    Dataset(name="oac_classification", table="oac_classification", extract=extract_oac_classification, geometry=False),
+    Dataset(
+        name="oac",
+        table="oac",
+        extract=extract_oac,
+        description="2021 Output Area Classification code per OA (CDRC), keyed by oa21cd.",
+        geometry=False,
+    ),
+    Dataset(
+        name="oac_classification",
+        table="oac_classification",
+        extract=extract_oac_classification,
+        description="OAC dimension table decoding each code to its supergroup/group/subgroup names.",
+        geometry=False,
+    ),
 )

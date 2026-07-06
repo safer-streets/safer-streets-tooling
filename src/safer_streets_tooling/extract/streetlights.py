@@ -57,4 +57,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  streetlights: {row_count:,} rows")
 
 
-DATASET = Dataset(name="streetlights", table="streetlights", extract=extract)
+DATASET = Dataset(
+    name="streetlights",
+    table="streetlights",
+    extract=extract,
+    description="Street lights (Overture Maps base/infrastructure), each tagged with its res-9 h3_9_id.",
+)

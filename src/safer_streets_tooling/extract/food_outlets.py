@@ -79,4 +79,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  food_outlets: {row_count:,} rows")
 
 
-DATASET = Dataset(name="food_outlets", table="food_outlets", extract=extract)
+DATASET = Dataset(
+    name="food_outlets",
+    table="food_outlets",
+    extract=extract,
+    description="FSA food-hygiene food & drink venues (E&W) with hygiene rating_value.",
+)

@@ -54,4 +54,9 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  poi: {row_count:,} rows")
 
 
-DATASET = Dataset(name="poi", table="poi", extract=extract)
+DATASET = Dataset(
+    name="poi",
+    table="poi",
+    extract=extract,
+    description="Overture Maps places (points of interest) with category and name.",
+)
