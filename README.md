@@ -175,7 +175,11 @@ The `buildings` extract itself spatially joins each footprint to the 2021 output
 `oa21cd` (the OA21 code) of the OA containing its **centroid** (a LEFT join, so a footprint whose
 centroid falls outside every OA — e.g. Scotland or offshore structures — is kept with a null
 `oa21cd` rather than dropped). The same centroid is also indexed to a resolution-9 H3 cell `h3_9_id`
-(lowercase hex), so the raw layer can be joined straight onto the crime grid / `h3_9_geogs`.
+(lowercase hex), so the raw layer can be joined straight onto the crime grid / `h3_9_geogs`. Alongside
+the premise/use classification each footprint carries its size: `premise_floor_count` (number of floors;
+kept verbatim as text since a premise whose floor count varies across its footprint carries a comma-list,
+e.g. `"1,2"`), `premise_area` (footprint area, m²) and `gross_area` (total floor area, m² — footprint ×
+floors where known).
 
 Likewise the `building_counts` transform step aggregates the `buildings` extract (Verisk UKBuildings
 footprints) into `building_counts_h3_9` — the count of buildings per resolution-9 cell **split by

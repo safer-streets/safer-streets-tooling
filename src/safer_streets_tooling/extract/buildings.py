@@ -9,8 +9,22 @@ from safer_streets_tooling.extract._common import extract_cached, raw_dir
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # Attribute columns kept from the source (geometry handled separately); verisk_premise_id is the
-# stable per-premise id used to de-duplicate the overlapping download chunks.
-KEEP_COLS = ("verisk_premise_id", "premise_use", "premise_type", "uprn", "toid", "map_use", "map_simple_use")
+# stable per-premise id used to de-duplicate the overlapping download chunks. premise_floor_count is a
+# VARCHAR in the source: usually a plain integer, but a premise whose floor count varies across its
+# footprint carries a comma-list (e.g. "1,2"), so it is kept verbatim. premise_area is the footprint
+# area (m²) and gross_area the total floor area (m², = premise_area × floor count where known).
+KEEP_COLS = (
+    "verisk_premise_id",
+    "premise_use",
+    "premise_type",
+    "premise_floor_count",
+    "premise_area",
+    "gross_area",
+    "uprn",
+    "toid",
+    "map_use",
+    "map_simple_use",
+)
 
 # Resolution of the H3 cell (``h3_9_id``) tagged onto each building; matches the ``building_counts``
 # transform and the crime grid (``crime_counts_h3_9`` / ``h3_9_geogs``).
@@ -28,7 +42,9 @@ def extract(ctx: ExtractContext) -> None:
 
     The chunks tile England & Wales and overlap at their boundaries, so the same premise can appear in
     more than one file; rows are de-duplicated on ``verisk_premise_id`` (matching the notebook). Kept
-    columns are the premise/use classification fields plus the building footprint ``geom``.
+    columns are the premise/use classification fields, the size fields (``premise_floor_count``,
+    ``premise_area`` — the footprint area in m² — and ``gross_area`` — the total floor area in m²,
+    footprint × floors) plus the building footprint ``geom``.
 
     Each de-duplicated building is then spatially joined to the 2021 output areas, tagging it with
     ``oa21cd`` (the OA21 code) of the OA whose polygon contains the footprint's *centroid*. Both
@@ -116,6 +132,6 @@ DATASET = Dataset(
     name="buildings",
     table="buildings",
     extract=extract,
-    description="Verisk UKBuildings footprints with premise use, oa21cd and a res-9 h3_9_id.",
+    description="Verisk UKBuildings footprints with premise use, floor count, footprint/gross floor area (m²), oa21cd and a res-9 h3_9_id.",
     depends_on=("output_areas_2021",),
 )
