@@ -65,12 +65,15 @@ flowchart LR
    imd_scores_pct
    oac
    oac_classification
+   workplace_population
+   residential_population
 
    crime_counts_h3_8
    crime_counts_h3_9
    crime_counts_h3_10
    streetlight_counts_h3_9
    building_counts_h3_9
+   population_counts_h3_9
    h3_geogs_lookup
    h3_greenspace_lookup
    h3_urban_lookup
@@ -96,6 +99,9 @@ flowchart LR
     streetlights --> streetlight_counts_h3_9
     buildings --> building_counts_h3_9
     crime_counts_h3_9 --> building_counts_h3_9
+    buildings --> population_counts_h3_9
+    workplace_population --> population_counts_h3_9
+    residential_population --> population_counts_h3_9
     crime_counts_h3_8 --> h3_geogs_lookup
     crime_counts_h3_9 --> h3_geogs_lookup
     crime_counts_h3_10 --> h3_geogs_lookup
@@ -134,6 +140,7 @@ flowchart LR
     crime_counts_h3_10 -.-> database
     streetlight_counts_h3_9 -.-> database
     building_counts_h3_9 -.-> database
+    population_counts_h3_9 -.-> database
     h3_8_geogs -.-> database
     h3_9_geogs -.-> database
     h3_10_geogs -.-> database
@@ -156,8 +163,8 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
-    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification extract;
-    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,streetlight_counts_h3_9,building_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
+    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population extract;
+    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
     class database load;
 ```
 
@@ -188,6 +195,30 @@ placed by its footprint centroid, and the output is restricted to cells present 
 so it lines up with the crime grid (≈83% of all footprints fall in a crime cell). It is bundled in the
 default minimal DB (skipped if the optional `buildings` extract was absent); the raw `buildings` layer
 (tens of millions of polygons) is **not** bundled by default but can be pulled in with `--include buildings`.
+
+Two attribute-only extracts hold the Census 2021 populations per 2021 output area, both keyed by
+`spatial_id` (the OA21 code). `workplace_population` is the **WP001** count (nomis bulk download): the
+workplace population is an estimate of the usually resident population aged 16 years and over, working
+in an area. It includes people who work mainly at or from home, or do not have a fixed place of work,
+in their area of usual residence. `residential_population` is the **TS001** count of usual residents
+(nomis API, table `NM_2021_1`; needs a free `NOMIS_API_KEY`), split by residence type into
+`household_population` and `communal_population`. A usual resident is anyone who, on Census Day
+(21 March 2021), was in the UK and had stayed or intended to stay in the UK for a period of 12 months
+or more, or had a permanent UK address and was outside the UK and intended to be outside the UK for
+less than 12 months.
+
+The `population_counts` transform step disaggregates both onto the crime grid as
+`population_counts_h3_9` (one row per res-9 cell: `spatial_id`, `residential_population`,
+`workplace_population`). Each OA's populations are first assigned to that OA's buildings pro rata to
+total floor area (`gross_area`, falling back to the footprint `premise_area` where the floor count is
+unknown) times a use weight — the workplace population to **Non Residential** (×1.0) and **Mixed Use**
+(×0.5) buildings, the residential population (households + communal establishments) to **Residential**
+(×1.0) and **Mixed Use** (×0.5), i.e. a mixed-use building sits 50-50 in both pools — then the
+per-building assignments are grouped by the building's `h3_9_id` and summed. Both populations are
+conserved onto the grid except where they cannot be assigned (an OA with no building of the right
+type, or a building whose centroid falls in no OA); the step reports the allocated share of each
+source total. It is bundled in the default minimal DB (skipped if any of its three input extracts was
+absent).
 
 > **TODO:** now that the `buildings` extract carries `h3_9_id` per footprint, `building_counts_h3_9` may
 > be surplus to requirements — a consumer can aggregate the counts directly from `buildings` by
@@ -229,6 +260,8 @@ absence). Registry order respects `depends_on`:
 | `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network) |
 | `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
 | `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
+| `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
+| `residential_population` | [residential_population.py](src/safer_streets_tooling/extract/residential_population.py) | no | — |
 
 ## Transform steps
 
@@ -242,6 +275,7 @@ respects `depends_on`:
 | `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}` | — |
 | `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `streetlight_counts_h3_9` | — |
 | `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
+| `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `population_counts_h3_9` | — |
 | `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3_{res}_{key}_lookup` | `crime_counts` |
 | `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3_{res}_{name}_lookup` | `crime_counts` |
 | `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3_{res}_retail_centre_lookup` | `crime_counts` |
