@@ -343,3 +343,36 @@ def test_streetlight_counts_noop_without_streetlights_table():
     con = duckdb.connect()
     streetlight_counts.build(con, [9], True)  # no streetlights table → must not raise
     assert streetlight_counts.outputs(con, [9]) == []
+
+
+def test_road_intersection_counts_per_cell_restricted_to_crime_grid():
+    """Intersection points are placed by their H3 cell at each resolution and counted, keeping only
+    cells present in crime_counts (so the count grid lines up with the crime / road-length grid)."""
+    from safer_streets_tooling.transform import road_intersection_counts
+
+    con = _connect()  # needs the spatial + h3 extensions (ST_Transform, h3_latlng_to_cell)
+    # three intersections (BNG geom): two share one WGS-84 point, one elsewhere
+    con.execute("""
+        CREATE TABLE road_intersections AS SELECT
+            ST_Transform(pt, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
+        FROM (VALUES (ST_Point(-1.5, 53.8)), (ST_Point(-1.5, 53.8)), (ST_Point(-2.5, 53.4))) t(pt)
+    """)
+    cell_a = con.execute("SELECT lower(hex(h3_latlng_to_cell(53.8, -1.5, 9)))").fetchone()[0]
+
+    # only cell_a is in the crime grid → the third point's cell is excluded
+    con.execute(f"CREATE TABLE crime_counts_h3_9 AS SELECT '{cell_a}' AS spatial_id")
+
+    road_intersection_counts.build(con, [9], True)
+
+    rows = dict(con.execute("SELECT spatial_id, road_intersection_count FROM road_intersection_counts_h3_9").fetchall())
+    assert rows == {cell_a: 2}
+    assert road_intersection_counts.outputs(con, [9]) == ["road_intersection_counts_h3_9"]
+
+
+def test_road_intersection_counts_noop_without_road_intersections_table():
+    """The step is a no-op (no table, no output) when the road_intersections extract is absent."""
+    from safer_streets_tooling.transform import road_intersection_counts
+
+    con = duckdb.connect()
+    road_intersection_counts.build(con, [9], True)  # no road_intersections table → must not raise
+    assert road_intersection_counts.outputs(con, [9]) == []
