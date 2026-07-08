@@ -225,13 +225,8 @@ absent).
 > `h3_9_id` / `map_simple_use`. Consider dropping the transform (and its bundled table) once nothing
 > depends on the pre-aggregated form.
 
-> **OSM coverage caveat (streetlights & cctv).** The `streetlights` layer comes from OpenStreetMap (via
-> Overture Maps `infrastructure`, `class = street_lamp`) and `cctv` from OSM `man_made=surveillance`
-> (via Overpass). OSM coverage of both is **uneven** — comprehensive in some areas, sparse or absent in
-> others — so `streetlights`, `cctv` and the derived `streetlight_counts_h3_9` are best read as a
-> **presence/indicative** signal, **not** a complete or authoritative inventory. (For street lights the
-> authoritative source is OS NGD `trn-fts-streetlight-1`, which needs a paid/keyed OS Data Hub
-> subscription.)
+OSM coverage of the `streetlights` and `cctv` layers is uneven — see
+[Data-quality caveats](#data-quality-caveats) below.
 
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` on load (the coordinates are the contract).
@@ -262,6 +257,38 @@ absence). Registry order respects `depends_on`:
 | `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
 | `residential_population` | [residential_population.py](src/safer_streets_tooling/extract/residential_population.py) | no | — |
+
+## Data-quality caveats
+
+### OSM coverage: `streetlights` & `cctv`
+
+Both layers are sourced from OpenStreetMap and inherit its uneven, volunteer-driven coverage:
+
+- **`streetlights`** — Overture Maps `base/infrastructure`, `subtype = transportation` /
+  `class = street_lamp` (OSM `highway=street_lamp`), streamed from S3.
+- **`cctv`** — OSM `man_made=surveillance` nodes, via the Overpass API.
+
+OSM tagging of street furniture is **comprehensive in some areas and sparse or entirely absent in
+others** — coverage tends to arrive via occasional bulk imports (a council's asset inventory, a local
+mapping party) rather than organic, nationwide surveying. So `streetlights`, `cctv` and the derived
+`streetlight_counts_h3_9` are best read as a **presence / indicative** signal, **not** a complete or
+authoritative inventory.
+
+Concretely, the England & Wales `streetlights` extract holds ~129k lamps spread across only ~13.7k
+distinct resolution-9 cells (out of ~1.4M land cells), heavily clustered in a handful of well-mapped
+areas. Most cells report zero not because they are unlit but because nobody has tagged their lighting.
+This was checked against the raw Overture release — the extract row count matches Overture exactly, and
+the BNG reprojection and H3-cell assignment are both correct — so the sparsity is a **source-data
+limitation, not a pipeline bug**.
+
+**Authoritative alternative (OS).** For a complete national inventory the authoritative source is
+Ordnance Survey — the OS NGD street-lighting collection (`trn-fts-streetlight-1`, Transport theme /
+street furniture), which requires a keyed OS Data Hub / NGD API subscription. We should switch
+`streetlights` over to the OS dataset **once (a) it can be located and accessed under our OS licence
+and (b) that licence permits us to publish the aggregate `streetlight_counts_h3_9` we derive from it**
+(per-cell counts, not the raw point locations). Until then the OSM/Overture layer stands as an
+indicative placeholder. The same OS caveat applies to `cctv`, for which there is no comparable
+authoritative national feed — it remains indicative only.
 
 ## Transform steps
 
