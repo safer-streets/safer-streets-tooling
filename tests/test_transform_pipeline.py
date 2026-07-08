@@ -65,6 +65,59 @@ def test_steps_run_respecting_dependency_order():
     assert order.index("retail_centre_lookups") < order.index("geogs")
 
 
+def _crime_data(con):
+    """Six crime_data rows: four countable, one BTP and one un-geolocated (both excluded)."""
+    con.execute("""
+        CREATE TABLE crime_data AS SELECT * FROM (VALUES
+            (53.80, -1.50, 'Burglary',      '2024-01', 'West Yorkshire Police'),
+            (53.80, -1.50, 'Burglary',      '2024-01', 'West Yorkshire Police'),
+            (53.40, -2.50, 'Bicycle theft', '2024-02', 'Greater Manchester Police'),
+            (51.50, -0.12, 'Other theft',   '2024-01', 'Metropolitan Police Service'),
+            (53.80, -1.50, 'Robbery',       '2024-01', 'British Transport Police'),
+            (NULL,  NULL,  'Public order',  '2024-03', 'West Yorkshire Police')
+        ) t(latitude, longitude, crime_type, _month, falls_within)
+    """)
+
+
+def test_crime_counts_conserves_filtered_input():
+    """The per-cell counts sum back to the geolocated, non-BTP input rows at every resolution."""
+    from safer_streets_tooling.transform import crime_counts
+
+    con = _connect()  # needs the h3 extension (h3_latlng_to_cell)
+    _crime_data(con)
+
+    crime_counts.build(con, [8, 9, 10], True)
+
+    for res in (8, 9, 10):
+        total = con.execute(f"SELECT SUM(count) FROM crime_counts_h3_{res}").fetchone()[0]
+        assert total == 4  # 6 rows − 1 BTP − 1 un-geolocated
+    assert crime_counts.outputs(con, [8, 9, 10]) == [f"crime_counts_h3_{r}" for r in (8, 9, 10)]
+
+
+class _DropBurglaryFromCounts:
+    """A connection proxy that silently drops Burglary rows from the count query only, so the emitted
+    table no longer sums to the (unchanged) filtered input — simulating a lossy aggregation."""
+
+    def __init__(self, con):
+        self._con = con
+
+    def execute(self, sql, *args, **kwargs):
+        if "GROUP BY" in sql:  # only the per-cell count query aggregates
+            sql = sql.replace("GROUP BY", "AND crime_type != 'Burglary' GROUP BY")
+        return self._con.execute(sql, *args, **kwargs)
+
+
+def test_crime_counts_raises_when_counts_not_conserved():
+    """If the aggregation silently drops crimes, the conservation check raises rather than emitting a skewed grid."""
+    from safer_streets_tooling.transform import crime_counts
+
+    con = _connect()
+    _crime_data(con)
+
+    with pytest.raises(ValueError, match="not conserved"):
+        crime_counts.build(_DropBurglaryFromCounts(con), [9], True)  # ty:ignore[invalid-argument-type]
+
+
 def test_step_failure_is_reraised():
     """A failing transform step is captured as Err by the node, then re-raised by build_all."""
 
