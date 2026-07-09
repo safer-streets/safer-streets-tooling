@@ -10,6 +10,46 @@ GeoParquet intermediates via a three-phase `extract → transform → load` pipe
 [`safer-streets-core`](../safer-streets-core) (editable path dependency) for the DuckDB helpers, the H3
 transforms, the data-source catalogue, and the ONS boundary downloader.
 
+## Collaboration & Ownership
+
+The maintainer must retain **ownership** of this codebase — meaning they understand every change
+well enough to explain, defend, and modify it without the agent. The agent's speed serves that
+understanding; it does not replace it. Follow these rules of engagement:
+
+1. **Plan before code, and wait for approval.** For any non-trivial change, present a plan first —
+   approach, files touched, trade-offs — and do not write code until the maintainer has understood
+   and signed off. If a decision in the plan can't be evaluated yet, stop and explain it.
+2. **Small, reviewable diffs — never a big-bang drop.** Break large work into increments that can
+   be read in one sitting and reviewed one at a time.
+3. **Leave the load-bearing parts to the maintainer when asked.** Offer to hand off the core
+   algorithm or tricky module rather than always doing everything; default to boilerplate, tests,
+   plumbing, and review.
+4. **Explain-it-back gate.** Before proposing a merge, make sure the maintainer can explain *why*
+   the change works and what the alternatives were. Offer a walk-through; act as tutor, not just
+   producer.
+5. **Justify trade-offs, not just conclusions.** State *why* this data structure, SQL shape, or
+   approach — and why not the obvious alternative. The reasoning is the transferable knowledge.
+6. **Prefer idioms the maintainer can learn from**, especially in the DuckDB spatial SQL, the
+   async DAG runners, and the H3 transforms. Flag new or unusual patterns and point to where to
+   read more, rather than using them silently.
+7. **Tests are the readable spec.** Keep them clear enough that reading the tests conveys the
+   contract even when the implementation is dense.
+
+## Task & Design Summaries
+
+**Every task/PR must be recorded** as a new entry at the top of [JOURNAL.md](JOURNAL.md).
+Each entry records:
+
+- **Why** — the motivation for the change and the problem it solves.
+- **What** — a short description of the change at a high level.
+- **Design decisions** — the choices made, the alternatives considered, and why each was accepted
+  or rejected. Capture any non-obvious trade-offs or constraints here rather than only in code
+  comments.
+- **Follow-ups** — anything deferred, and known limitations.
+
+Write the entry as part of the change, not after the fact — the journal is the durable record of
+intent that keeps the maintainer in control of the codebase's direction.
+
 ## Toolchain
 
 | Tool | Command |
@@ -136,41 +176,22 @@ When reviewing a PR or diff, check:
 
 ## Workflow
 
-1. Create a feature branch off `main` — never commit directly to `main`.
-2. Make changes under [src/safer_streets_tooling/](src/safer_streets_tooling/); for a new dataset, add
+1. Agree the plan with the maintainer before writing code (see
+   [Collaboration & Ownership](#collaboration--ownership)).
+2. Create a feature branch off `main` — never commit directly to `main`.
+3. Make changes under [src/safer_streets_tooling/](src/safer_streets_tooling/); for a new dataset, add
    a module + a registry entry.
-3. Add or update tests in [tests/](tests/) — offline-safe, coverage at/above 65%.
-4. Run the full gate suite locally (`ruff check`, `ruff format --check`, `ty check`, `pytest`).
-5. Update the docs ([README.md](README.md)) if the pipeline, CLI flags, the dataset set, or the
+4. Add or update tests in [tests/](tests/) — offline-safe, coverage at/above 65%.
+5. Add a task/design entry to [JOURNAL.md](JOURNAL.md) (see
+   [Task & Design Summaries](#task--design-summaries)).
+6. Run the full gate suite locally (`ruff check`, `ruff format --check`, `ty check`, `pytest`).
+7. Update the docs ([README.md](README.md)) if the pipeline, CLI flags, the dataset set, or the
    extract/transform DAG changed; new data-source locations go in core's `config/data_sources.json`.
-6. Commit (pre-commit hooks auto-fix formatting and re-lock `uv.lock` once configured), open a PR,
-   report CI, and **stop** — do not merge without approval.
+8. Commit (pre-commit hooks auto-fix formatting and re-lock `uv.lock` once configured), open a PR,
+   report CI, and **stop** — do not merge without approval. Before proposing the merge, apply the
+   explain-it-back gate (see [Collaboration & Ownership](#collaboration--ownership)).
 
 ## Contributions
 
-A log of the substantive changes made to this repo, newest first. Add an entry here when you land a PR
-that changes the dataset/transform set, the pipeline, or developer-facing behaviour.
-
-- **Population extracts + `population_counts` transform** (#14) — Census 2021 WP001 workplace
-  population and TS001 residential population per OA (nomis), assigned to buildings by floor area ×
-  use weight (workplace → Non Residential/Mixed, residential → Residential/Mixed, mixed 50-50) and
-  summed per res-9 cell as `population_counts_h3_9` (bundled in the default DB).
-- **Table catalogue `index.parquet`** (#11) — a required one-line `description` on every `Dataset` /
-  `TransformStep`, and a `data index` command (run by `assemble` / `build`) that writes
-  `data_dir()/index.parquet` cataloguing every extract + transform table (phase, name, description,
-  schema, geometry flag).
-- **Buildings extract + `building_counts_h3_9` transform** (#9) — Verisk UKBuildings footprints, counted
-  per resolution-9 cell split by `map_simple_use`, restricted to crime cells.
-- **CCTV extract** (#8) — OSM `man_made=surveillance` via Overpass (presence/indicative signal).
-- **Streetlights extract + `streetlight_counts_h3_9` transform** (#7) — Overture/OSM `street_lamp`,
-  counted per resolution-9 cell.
-- **`food_outlets` — drop component scores** (#6) — keep only `rating_value`.
-- **`food_outlets` — broaden takeaways to food & drink venues** (#5) — generalised the FSA takeaways
-  layer (#4) into `food_outlets`.
-- **FSA food-hygiene takeaways (E&W) extract** (#4).
-- **NAPTAN transport stops extract** (#3).
-- **CI: resolve editable core path dep by sibling checkout** (#2) — plus posix-key normalisation so
-  sync works on Windows.
-- **OAC + OAC classification, land-cover overlap split, sync refactor** (#1).
-- **Initial pipeline** — extract → transform → load with the dataset/transform registries, async DAG
-  runner, `data` CLI, cell areas, `load` step, `poi` / `schools` / `imd` layers, and Azure Blob `sync`.
+The log of substantive changes lives in [JOURNAL.md](JOURNAL.md), newest first — see
+[Task & Design Summaries](#task--design-summaries) for the entry format.

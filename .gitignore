@@ -8,3 +8,4 @@ htmlcov/
 dist/
 *.egg-info/
 .env
+.claude/
