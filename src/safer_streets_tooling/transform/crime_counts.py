@@ -1,26 +1,38 @@
-"""``crime_counts_h3_{res}`` — crimes counted per H3 cell / crime type / month."""
+"""``crime_counts_h3_{res}`` / ``crime_counts_{key}`` — crimes counted per spatial unit / crime type / month.
+
+The H3 tables index each crime's lat/lon straight to a cell; the ONS geography tables (PFA / LAD /
+MSOA / LSOA / OA) assign each crime point-in-polygon to a boundary from the corresponding boundary
+table, keyed by the same ``spatial_id`` / ``crime_type`` / ``month`` / ``count`` schema.
+"""
 
 import duckdb
 
 from safer_streets_tooling.transform.base import TransformStep, create_clause
+from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 
 # The crimes that contribute to the per-cell counts: geolocated, and not British Transport Police
 # (their crimes are reported against the rail network rather than where they occurred, so they would
-# distort the per-cell counts). Shared by the count query and the conservation check so the two can't
+# distort the per-cell counts). Shared by the count queries and the conservation checks so they can't
 # drift apart.
 _CRIME_FILTER = "latitude IS NOT NULL AND longitude IS NOT NULL AND falls_within != 'British Transport Police'"
 
 
 def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    """Create ``crime_counts_h3_{res}`` counting crimes per H3 cell / crime type / month.
+    """Create ``crime_counts_h3_{res}`` and ``crime_counts_{key}`` counting crimes per spatial unit /
+    crime type / month.
 
-    The H3 cell index is stored as its canonical lowercase-hex string in ``spatial_id``. British
-    Transport Police records (``falls_within``) are excluded: their crimes are reported against the
-    rail network rather than the place they occurred, so they would distort the per-cell counts.
+    The spatial unit is an H3 cell (its canonical lowercase-hex string) for ``crime_counts_h3_{res}``,
+    and an ONS geography code (PFA / LAD / MSOA / LSOA / OA) for ``crime_counts_{key}`` — the latter by
+    joining each crime's BNG point into the boundary table with ``ST_Contains``. British Transport
+    Police records (``falls_within``) are excluded from both: their crimes are reported against the
+    rail network rather than the place they occurred, so they would distort the counts.
 
-    Every retained crime lands in exactly one cell, so the counts must sum back to the number of input
-    rows passing ``_CRIME_FILTER``. That conservation is asserted per resolution — a mismatch means the
-    aggregation silently dropped (or duplicated) crimes and raises rather than emitting a skewed grid.
+    Every retained crime lands in exactly one H3 cell, so those counts must sum back to the number of
+    input rows passing ``_CRIME_FILTER``; a mismatch means the aggregation silently dropped (or
+    duplicated) crimes and raises rather than emitting a skewed grid. The geography counts can only
+    assert an upper bound: a crime can fall *outside* every boundary (the E&W-only layers don't cover
+    Northern Ireland, and snapped points can sit just offshore of generalised boundaries) but must
+    never land in more than one, so exceeding the input row count raises.
     """
     expected = con.execute(f"SELECT COUNT(*) FROM crime_data WHERE {_CRIME_FILTER}").fetchone()[0]  # ty:ignore[not-subscriptable]
     for res in resolutions:
@@ -42,15 +54,37 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
                 f"filter — the per-cell counts are not conserved (aggregation dropped or duplicated crimes)"
             )
 
+    # ST_Contains rather than ST_Intersects: the ONS layers tile without overlap, but a point exactly on
+    # a shared edge would otherwise be counted in both areas — dropping it is the safe failure mode
+    for key, table in GEOGRAPHY_MAPPINGS.items():
+        con.execute(f"""
+            {create_clause("TABLE", f"crime_counts_{key}", replace=replace)} AS
+            SELECT
+                b.spatial_id,
+                c.crime_type,
+                c._month AS month,
+                COUNT(*) AS count
+            FROM (SELECT crime_type, _month, geom FROM crime_data WHERE {_CRIME_FILTER}) c
+            JOIN {table} b ON ST_Contains(b.geom, c.geom)
+            GROUP BY b.spatial_id, c.crime_type, month;
+        """)
+        actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM crime_counts_{key}").fetchone()[0]  # ty:ignore[not-subscriptable]
+        if actual > expected:
+            raise ValueError(
+                f"crime_counts_{key}: counted {actual:,} crimes but only {expected:,} input rows passed the "
+                f"filter — some crimes were counted in more than one area (overlapping boundary polygons)"
+            )
+        print(f"  crime_counts_{key}: {actual:,}/{expected:,} crimes fall within a boundary")
+
 
 def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
-    return [f"crime_counts_h3_{res}" for res in resolutions]
+    return [f"crime_counts_h3_{res}" for res in resolutions] + [f"crime_counts_{key}" for key in GEOGRAPHY_MAPPINGS]
 
 
 STEP = TransformStep(
     name="crime_counts",
     build=build,
     outputs=outputs,
-    description="Crimes counted per H3 cell / crime_type / month (BTP excluded), keyed by spatial_id.",
-    extract_inputs=("crime_data",),
+    description="Crimes counted per spatial unit (H3 cell / ONS geography code) / crime_type / month (BTP excluded).",
+    extract_inputs=("crime_data", *GEOGRAPHY_MAPPINGS.values()),
 )

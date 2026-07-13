@@ -19,12 +19,14 @@ Three phases (extract → transform → load), driven by a dataset registry
    dataset can be refreshed without rebuilding everything.
 2. **transform** — the extracted parquet are loaded into a throwaway in-memory DuckDB, geometry is
    indexed, and the H3 aggregation steps (`safer_streets_tooling.transform.STEPS`) run. The BTP-filtered
-   `crime_counts_h3_*` are aggregated from `crime_data`, then every derived relation (those counts, the
+   `crime_counts_h3_*` are aggregated from `crime_data` (and `crime_counts_{key}` point-in-polygon per
+   ONS geography), then every derived relation (those counts, the
    per-cell lookups and `h3_{res}_geogs`) is written out as its own parquet under `data_dir()/transform`
    — a durable cache, so the aggregations can be rebuilt without re-extracting.
 3. **load** *(optional)* — a **minimal** consumer database is assembled from the parquet:
    `crime_counts_h3_{res}` and `h3_{res}_geogs` (the per-cell counts + attributes, joined on
-   `spatial_id`) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA), so a
+   `spatial_id`), the per-ONS-geography `crime_counts_{key}` counts, plus the ONS boundary tables they
+   reference by code (PFA / LAD / MSOA / LSOA / OA), so a
    consumer can resolve a cell's codes to boundary geometry. It is built in a `<name>.staging.db` and
    atomically promoted over the live database, so consumers only ever see a complete file. **This step is
    optional** — the parquet are the durable build outputs; the database is just a convenience bundle.
@@ -37,7 +39,8 @@ In **extract**, every dataset is an `AsyncNode` keyed by its name; `depends_on` 
 with no incoming edge start immediately and run concurrently (each blocking extractor in a worker
 thread); a dependent only starts once its dependencies have produced their parquet. In **transform**
 (run during assemble, `safer_streets_tooling.transform`), each step is likewise an `AsyncNode` keyed by
-its name with `depends_on` edges: the BTP-filtered `crime_counts_h3_N` are aggregated from `crime_data`;
+its name with `depends_on` edges: the BTP-filtered `crime_counts_h3_N` are aggregated from `crime_data`
+(and `crime_counts_{key}` point-in-polygon against each ONS boundary table);
 every H3 cell is keyed off them, then given one ONS code per geography,
 the overlapping greenspace / land-cover / road features, and its nearest retail centre — all folded
 into `h3_N_geogs`. (For brevity the transform nodes collapse the per-resolution `N ∈ {8,9,10}`; the
@@ -71,6 +74,7 @@ flowchart LR
    crime_counts_h3_8
    crime_counts_h3_9
    crime_counts_h3_10
+   crime_counts_geog["crime_counts_{key}"]
    streetlight_counts_h3_9
    building_counts_h3_9
    population_counts_h3_9
@@ -96,6 +100,12 @@ flowchart LR
     crime_data --> crime_counts_h3_8
     crime_data --> crime_counts_h3_9
     crime_data --> crime_counts_h3_10
+    crime_data --> crime_counts_geog
+    police_force_areas --> crime_counts_geog
+    local_authority_districts --> crime_counts_geog
+    msoa_2021 --> crime_counts_geog
+    lsoa_2021 --> crime_counts_geog
+    output_areas_2021 --> crime_counts_geog
     streetlights --> streetlight_counts_h3_9
     buildings --> building_counts_h3_9
     crime_counts_h3_9 --> building_counts_h3_9
@@ -138,6 +148,7 @@ flowchart LR
     crime_counts_h3_8 -.-> database
     crime_counts_h3_9 -.-> database
     crime_counts_h3_10 -.-> database
+    crime_counts_geog -.-> database
     streetlight_counts_h3_9 -.-> database
     building_counts_h3_9 -.-> database
     population_counts_h3_9 -.-> database
@@ -164,12 +175,13 @@ flowchart LR
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
     class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population extract;
-    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
+    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,crime_counts_geog,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
     class database load;
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3 aggregation
-parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `h3_*_geogs` parquet, the
+parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `crime_counts_{key}` +
+`h3_*_geogs` parquet, the
 five ONS boundary tables and the `schools` / `poi` / `naptan` / `food_outlets` / `cctv` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
 feature layers into a minimal database (dashed above — `--include` can pull in any other table). The
 `streetlight_counts` transform step aggregates the `streetlights` extract into a per-cell
@@ -299,7 +311,7 @@ respects `depends_on`:
 
 | Step | Module | Outputs | Depends on |
 | ---- | ------ | ------- | ---------- |
-| `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}` | — |
+| `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}`, `crime_counts_{key}` (per ONS geography) | — |
 | `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `streetlight_counts_h3_9` | — |
 | `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
 | `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `population_counts_h3_9` | — |

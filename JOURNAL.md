@@ -7,6 +7,44 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Per-ONS-geography crime counts (`crime_counts_{key}`)
+
+**Why** — the H3 grids are the analysis surface, but consumers also need crime counts on the standard
+ONS reporting geographies (PFA / LAD / MSOA / LSOA / OA) without re-deriving them from points.
+
+**What** — the `crime_counts` transform step now also builds one table per ONS geography,
+`crime_counts_{key}` (e.g. `crime_counts_lsoa21cd`), with the same schema as the H3 tables
+(`spatial_id`, `crime_type`, `month`, `count`) and the same BTP/un-geolocated exclusions, by
+point-in-polygon joining each crime's BNG `geom` to the boundary table. The tables are cached as
+parquet like every step output and included in the minimal consumer database.
+
+**Design decisions**
+
+- *Point-in-polygon spatial join, not attributes or H3 roll-up.* `falls_within` is the reporting
+  force (an attribute, not a location), and aggregating `crime_counts_h3_*` through the
+  `h3_*_{key}_lookup` views would be approximate (max-overlap, resolution-dependent) and circular —
+  those lookups depend on `crime_counts`. The direct join is exact and treats all five layers
+  identically. `crime_data` already carries a BNG point `geom` from the extractor, so no reprojection
+  is needed.
+- *`ST_Contains(boundary, point)`, not `ST_Intersects`.* The ONS layers tile without overlap, but a
+  point exactly on a shared edge would be counted in both areas by `ST_Intersects`; `ST_Contains`
+  drops it instead — undercounting by a measure-zero case beats silent inflation.
+- *Conservation is an upper bound here, not an equality.* The H3 counts must sum exactly to the
+  filtered input (every crime lands in one cell); the geography layers don't cover every crime
+  (PFA / MSOA / LSOA / OA are E&W-only while `crime_data` includes NI, and snapped points can sit
+  just offshore of generalised boundaries), so the build raises only when a table counts *more*
+  crimes than passed the filter (double counting) and prints per-layer coverage otherwise.
+- *Same step, not a new one.* The outputs are crime counts with the same schema and filter; a
+  separate step would duplicate the filter/conservation logic and add a DAG node for no concurrency
+  gain. The step's `extract_inputs` gains the five boundary tables so staleness tracking still works.
+- *`GEOGRAPHY_MAPPINGS` stays in `geo_lookups`* and is imported by `crime_counts` (no import cycle;
+  smallest diff). Hoisting it to `base.py` was considered and rejected as churn for no behaviour.
+
+**Follow-ups** — none. Note `crime_counts` now hard-requires the five boundary tables (they are
+`optional=False` extracts, so this only affects standalone in-memory builds without boundaries).
+
+---
+
 ---
 
 ## Pre-journal history

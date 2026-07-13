@@ -877,6 +877,9 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
     tdir.mkdir()
     # minimal tables (transform outputs, no geometry)
     write_geoparquet(con, "SELECT 'a' AS spatial_id, 5 AS count", tdir / "crime_counts_h3_8.parquet")
+    geog_counts = {f"crime_counts_{key}" for key in GEOGRAPHY_MAPPINGS}
+    for table in geog_counts:
+        write_geoparquet(con, "SELECT 'a' AS spatial_id, 5 AS count", tdir / f"{table}.parquet")
     write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_geogs.parquet")
     # the ONS boundary tables (extract, with geometry) the geogs codes resolve to — part of the minimal set
     boundaries = set(GEOGRAPHY_MAPPINGS.values())
@@ -908,7 +911,7 @@ def test_run_load_builds_minimal_db_with_optional_includes(tmp_path, monkeypatch
         out.close()
         return names
 
-    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | boundaries | features | transform_tables
+    minimal = {"crime_counts_h3_8", "h3_8_geogs"} | geog_counts | boundaries | features | transform_tables
 
     db_path = tmp_path / "out.db"
     data_pipeline.run_load(db_path, tdir, [8], edir=edir)
@@ -944,6 +947,8 @@ def test_run_load_skips_missing_optional_feature(tmp_path, monkeypatch):
     edir.mkdir()
     tdir.mkdir()
     write_geoparquet(con, "SELECT 'a' AS spatial_id, 5 AS count", tdir / "crime_counts_h3_8.parquet")
+    for key in GEOGRAPHY_MAPPINGS:
+        write_geoparquet(con, "SELECT 'a' AS spatial_id, 5 AS count", tdir / f"crime_counts_{key}.parquet")
     write_geoparquet(con, "SELECT 'a' AS spatial_id, 'L' AS lad24cd", tdir / "h3_8_geogs.parquet")
     for table in set(GEOGRAPHY_MAPPINGS.values()):
         write_geoparquet(con, "SELECT 1 AS spatial_id, ST_Point(0, 0) AS geom", edir / f"{table}.parquet")

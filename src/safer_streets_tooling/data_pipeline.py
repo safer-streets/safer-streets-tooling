@@ -148,6 +148,7 @@ def _minimal_tables(resolutions: list[int]) -> list[str]:
     """The relations the minimal consumer database needs:
 
     - ``crime_counts_h3_{res}`` — per-cell crime counts (keyed by the H3 ``spatial_id``);
+    - ``crime_counts_{key}`` — the same counts per ONS geography code (PFA / LAD / MSOA / LSOA / OA);
     - ``h3_{res}_geogs`` — per-cell attributes (also keyed by ``spatial_id``);
     - the ONS boundary tables ``h3_*_geogs`` references by code (PFA / LAD / MSOA / LSOA / OA), so a
       consumer can resolve a cell's codes to the boundary geometry;
@@ -159,7 +160,7 @@ def _minimal_tables(resolutions: list[int]) -> list[str]:
 
     The intermediate lookups and the other raw extract datasets are build inputs, not part of the output.
     """
-    counts = [f"crime_counts_h3_{res}" for res in resolutions]
+    counts = [f"crime_counts_h3_{res}" for res in resolutions] + [f"crime_counts_{key}" for key in GEOGRAPHY_MAPPINGS]
     geogs = [f"h3_{res}_geogs" for res in resolutions]
     return (
         counts
@@ -175,7 +176,8 @@ def run_load(
 ) -> None:
     """Assemble a minimal consumer database from the transform parquet, then atomically promote it.
 
-    By default the ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` parquet (under ``tdir``) plus the ONS
+    By default the ``crime_counts_h3_{res}``, per-geography ``crime_counts_{key}`` and ``h3_{res}_geogs``
+    parquet (under ``tdir``) plus the ONS
     boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA, under ``edir``) and the
     ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac (+ oac_classification), under ``edir``)
     and the ``DEFAULT_TRANSFORM_TABLES`` transform outputs (``streetlight_counts_h3_9``, under ``tdir``) are
