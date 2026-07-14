@@ -5,8 +5,9 @@ repository. It says **how to work here** — the gates to pass, the invariants t
 workflow to follow. For **what the package does** (pipeline, datasets, transform steps, modules,
 usage), see [README.md](README.md); don't duplicate that material here.
 
-In one line: `safer-streets-tooling` builds the production DuckDB database from modular, per-dataset
-GeoParquet intermediates via a three-phase `extract → transform → load` pipeline, depending on
+In one line: `safer-streets-tooling` builds the production GeoParquet outputs (consumers query them
+directly; the `load` phase that bundles them into a DuckDB database is optional and not currently
+used) via a three-phase `extract → transform → load` pipeline, depending on
 [`safer-streets-core`](../safer-streets-core) (editable path dependency) for the DuckDB helpers, the H3
 transforms, the data-source catalogue, and the ONS boundary downloader.
 

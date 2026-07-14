@@ -65,10 +65,19 @@ def test_steps_run_respecting_dependency_order():
     assert order.index("retail_centre_lookups") < order.index("geogs")
 
 
+# the distinct crime locations in _crime_data, reused to build the boundary fixtures around them
+_CITIES = {"leeds": (53.80, -1.50), "manchester": (53.40, -2.50), "london": (51.50, -0.12)}
+
+
 def _crime_data(con):
-    """Six crime_data rows: four countable, one BTP and one un-geolocated (both excluded)."""
+    """Six crime_data rows: four countable, one BTP and one un-geolocated (both excluded). Carries the
+    BNG point ``geom`` the extractor adds (the geography counts join on it)."""
     con.execute("""
-        CREATE TABLE crime_data AS SELECT * FROM (VALUES
+        CREATE TABLE crime_data AS SELECT *,
+            CASE WHEN latitude IS NULL THEN NULL
+                 ELSE ST_Transform(ST_Point(longitude, latitude), 'EPSG:4326', 'EPSG:27700', always_xy := true)
+            END AS geom
+        FROM (VALUES
             (53.80, -1.50, 'Burglary',      '2024-01', 'West Yorkshire Police'),
             (53.80, -1.50, 'Burglary',      '2024-01', 'West Yorkshire Police'),
             (53.40, -2.50, 'Bicycle theft', '2024-02', 'Greater Manchester Police'),
@@ -79,19 +88,93 @@ def _crime_data(con):
     """)
 
 
+def _boundary_tables(con, cities=tuple(_CITIES)):
+    """Every ONS boundary table gets one 1 km polygon per city, keyed by the city name, so each
+    geolocated crime falls in exactly one polygon (omit a city to leave its crimes uncovered)."""
+    values = ", ".join(f"('{city}', {lat}, {lon})" for city, (lat, lon) in _CITIES.items() if city in cities)
+    for table in GEOGRAPHY_MAPPINGS.values():
+        con.execute(f"""
+            CREATE OR REPLACE TABLE "{table}" AS
+            SELECT city AS spatial_id,
+                ST_Buffer(ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000) AS geom
+            FROM (VALUES {values}) t(city, lat, lon)
+        """)
+
+
 def test_crime_counts_conserves_filtered_input():
     """The per-cell counts sum back to the geolocated, non-BTP input rows at every resolution."""
     from safer_streets_tooling.transform import crime_counts
 
     con = _connect()  # needs the h3 extension (h3_latlng_to_cell)
     _crime_data(con)
+    _boundary_tables(con)
 
     crime_counts.build(con, [8, 9, 10], True)
 
     for res in (8, 9, 10):
         total = con.execute(f"SELECT SUM(count) FROM crime_counts_h3_{res}").fetchone()[0]
         assert total == 4  # 6 rows − 1 BTP − 1 un-geolocated
-    assert crime_counts.outputs(con, [8, 9, 10]) == [f"crime_counts_h3_{r}" for r in (8, 9, 10)]
+    assert crime_counts.outputs(con, [8, 9, 10]) == [f"crime_counts_h3_{r}" for r in (8, 9, 10)] + [
+        f"crime_counts_{key}" for key in GEOGRAPHY_MAPPINGS
+    ]
+
+
+def test_crime_counts_counts_per_ons_geography():
+    """Each ONS geography table counts the filtered crimes point-in-polygon, keyed by boundary code /
+    crime type / month — same schema and exclusions as the H3 counts."""
+    from safer_streets_tooling.transform import crime_counts
+
+    con = _connect()
+    _crime_data(con)
+    _boundary_tables(con)
+
+    crime_counts.build(con, [9], True)
+
+    for key in GEOGRAPHY_MAPPINGS:
+        per_area = dict(
+            con.execute(f"SELECT spatial_id, SUM(count) FROM crime_counts_{key} GROUP BY spatial_id").fetchall()
+        )
+        assert per_area == {"leeds": 2, "manchester": 1, "london": 1}  # BTP + un-geolocated excluded
+    row = con.execute(
+        "SELECT count FROM crime_counts_pfa23cd "
+        "WHERE spatial_id = 'leeds' AND crime_type = 'Burglary' AND month = '2024-01'"
+    ).fetchone()
+    assert row == (2,)
+
+
+def test_crime_counts_drops_crimes_outside_boundary_coverage():
+    """A crime outside every boundary polygon (e.g. NI crimes vs the E&W-only layers) is dropped from
+    the geography counts without raising — only over-counting is an error."""
+    from safer_streets_tooling.transform import crime_counts
+
+    con = _connect()
+    _crime_data(con)
+    _boundary_tables(con, cities=("leeds", "manchester"))  # london crime left uncovered
+
+    crime_counts.build(con, [9], True)
+
+    for key in GEOGRAPHY_MAPPINGS:
+        total = con.execute(f"SELECT SUM(count) FROM crime_counts_{key}").fetchone()[0]
+        assert total == 3  # the london crime falls in no polygon
+
+
+def test_crime_counts_raises_when_boundaries_overlap():
+    """Overlapping boundary polygons would count a crime in more than one area — the upper-bound
+    conservation check raises rather than emitting inflated counts."""
+    from safer_streets_tooling.transform import crime_counts
+
+    con = _connect()
+    _crime_data(con)
+    _boundary_tables(con)
+    lat, lon = _CITIES["leeds"]
+    con.execute(f"""
+        INSERT INTO police_force_areas
+        SELECT 'leeds_overlap',
+            ST_Buffer(ST_Transform(ST_Point({lon}, {lat}), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000)
+    """)
+
+    with pytest.raises(ValueError, match="more than one area"):
+        crime_counts.build(con, [9], True)
 
 
 class _DropBurglaryFromCounts:
@@ -113,6 +196,7 @@ def test_crime_counts_raises_when_counts_not_conserved():
 
     con = _connect()
     _crime_data(con)
+    _boundary_tables(con)
 
     with pytest.raises(ValueError, match="not conserved"):
         crime_counts.build(_DropBurglaryFromCounts(con), [9], True)  # ty:ignore[invalid-argument-type]
