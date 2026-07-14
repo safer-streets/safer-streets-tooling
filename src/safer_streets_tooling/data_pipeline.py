@@ -14,11 +14,13 @@ The pipeline has three phases (extract → transform → load):
      ``h3_{res}_geogs``) is written out as its own parquet under ``data_dir()/transform``. No live
      database is touched — the parquet are a durable cache of the aggregations, so they can be rebuilt
      without re-importing or re-extracting.
-  3. **load**       *(optional)* a minimal consumer database is assembled from the transform parquet —
+  3. **load**       *(optional — not currently used; consumers query the parquet directly with an
+     in-memory DuckDB, locally or from the Azure blob container ``sync`` maintains)* a minimal
+     consumer database is assembled from the transform parquet —
      ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined on
      ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
      and the schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac (+ oac_classification) feature layers,
-     plus the ``streetlight_counts_h3_9`` per-cell count —
+     plus the building / population / road-intersection per-cell counts —
      into a ``<name>.staging.db`` that is only promoted over the live database with an atomic
      ``os.replace`` once every table loaded, so read-only consumers always see a complete database.
      ``--include NAME`` adds further tables (an intermediate lookup or a feature layer). This step is
@@ -132,15 +134,18 @@ DEFAULT_FEATURE_TABLES: tuple[str, ...] = (
 )
 
 # Transform outputs included in the database by default (loaded from ``tdir``), beyond the per-resolution
-# crime counts + geogs. Each is backed by optional extracts (streetlights / buildings / the population
-# tables), so skipped if a backing parquet is absent. Note: the raw point/footprint layers are
-# deliberately *not* in DEFAULT_FEATURE_TABLES — the per-cell counts (`streetlight_counts_h3_9`,
-# `building_counts_h3_9`, `population_counts_h3_9`) are the useful form for consumers (the raw layers
-# are millions/tens of millions of rows).
+# crime counts + geogs. Each is skipped with a warning if its parquet is absent (e.g. an optional
+# extract — buildings / the population tables — was not run). Note: the raw point/footprint layers are
+# deliberately *not* in DEFAULT_FEATURE_TABLES — the per-cell counts (`building_counts_h3_9`,
+# `road_intersection_counts_h3_{res}`, etc.) are the useful form for consumers (the raw layers are
+# millions/tens of millions of rows). `streetlight_counts_h3_9` is built by the transform phase but not
+# bundled by default; pull it in with `--include streetlight_counts_h3_9`.
 DEFAULT_TRANSFORM_TABLES: tuple[str, ...] = (
-    "streetlight_counts_h3_9",
     "building_counts_h3_9",
     "population_counts_h3_9",
+    "road_intersection_counts_h3_8",
+    "road_intersection_counts_h3_9",
+    "road_intersection_counts_h3_10",
 )
 
 
@@ -155,8 +160,9 @@ def _minimal_tables(resolutions: list[int]) -> list[str]:
     - the ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac +
       ``oac_classification``; ``oac`` is the per-OA 2021 Output Area Classification code, keyed by
       ``oa21cd``, decoded to tier names via the ``oac_classification`` dimension table);
-    - the ``DEFAULT_TRANSFORM_TABLES`` transform outputs (``streetlight_counts_h3_9`` — street lights per
-      resolution-9 cell, keyed by ``spatial_id``).
+    - the ``DEFAULT_TRANSFORM_TABLES`` transform outputs (``building_counts_h3_9``,
+      ``population_counts_h3_9`` and the per-resolution ``road_intersection_counts_h3_{res}`` —
+      per-cell counts keyed by ``spatial_id``).
 
     The intermediate lookups and the other raw extract datasets are build inputs, not part of the output.
     """
@@ -180,7 +186,8 @@ def run_load(
     parquet (under ``tdir``) plus the ONS
     boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA, under ``edir``) and the
     ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac (+ oac_classification), under ``edir``)
-    and the ``DEFAULT_TRANSFORM_TABLES`` transform outputs (``streetlight_counts_h3_9``, under ``tdir``) are
+    and the ``DEFAULT_TRANSFORM_TABLES`` transform outputs (the building / population /
+    road-intersection per-cell counts, under ``tdir``) are
     imported — the per-cell counts and attributes the app joins on ``spatial_id``, the boundaries those
     cells resolve to, and the feature layers. ``include`` names further tables to add (each looked up
     under ``tdir`` then ``edir``) —
@@ -190,13 +197,14 @@ def run_load(
     *required* parquet aborts. The staging DB is only promoted over ``db_path`` with ``os.replace`` once
     every present table loaded, so consumers only ever see a complete database.
 
-    This load step is **optional**: the per-dataset and transform parquet are the durable build outputs;
-    the database is just a convenience bundle for consumers that prefer a single file.
+    This load step is **optional and not currently used**: the per-dataset and transform parquet are the
+    durable build outputs, and consumers query them directly (in-memory DuckDB, locally or from Azure
+    Blob); the database is just a convenience bundle for consumers that prefer a single file.
     """
     search_dirs = [d for d in (tdir, edir) if d is not None]
     tables = _minimal_tables(resolutions) + (include or [])
     # tables backed by an optional dataset are skipped with a warning when absent (e.g. the licensed
-    # land_cover extract, or streetlight_counts when the optional streetlights extract was skipped); a
+    # land_cover extract, or building_counts when the optional buildings extract was skipped); a
     # missing required table still aborts the build.
     optional_tables = {ds.table for ds in DATASETS if ds.optional} | set(DEFAULT_TRANSFORM_TABLES)
 
@@ -293,10 +301,11 @@ def load(
     By default ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined
     on ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
     and the schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac (+ oac_classification) feature layers,
-    plus the ``streetlight_counts_h3_9`` per-cell count, are imported. ``--include NAME`` (repeatable)
+    plus the building / population / road-intersection per-cell counts, are imported.
+    ``--include NAME`` (repeatable)
     adds further tables (an intermediate ``h3_*_lookup`` or a feature layer), looked up in the transform
-    then extract dirs. This step is optional — the parquet are the durable outputs; the database is a
-    convenience bundle.
+    then extract dirs. This step is optional and not currently used — the parquet are the durable
+    outputs, queried directly by consumers; the database is a convenience bundle.
     """
     run_load(db_path or database_path(), transform_dir(), resolutions, edir=extract_dir(), include=include)
 

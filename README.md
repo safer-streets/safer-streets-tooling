@@ -1,8 +1,9 @@
 # safer-streets-tooling
 
-Data-build tooling for the safer-streets project. Builds the production DuckDB database
-(crime + ONS boundaries + supplementary layers + H3 aggregations) from modular, per-dataset
-GeoParquet intermediates. Depends on [`safer-streets-core`](../safer-streets-core) for the database
+Data-build tooling for the safer-streets project. Builds the production GeoParquet outputs
+(crime + ONS boundaries + supplementary layers + H3 aggregations) as modular, per-dataset
+files — consumers query these directly (in-memory DuckDB, locally or from Azure Blob); an optional
+`load` step can also bundle them into a single DuckDB database file. Depends on [`safer-streets-core`](../safer-streets-core) for the database
 helpers, H3 transforms, the data-source catalogue, and the ONS boundary downloader.
 
 ## Pipeline
@@ -23,13 +24,16 @@ Three phases (extract → transform → load), driven by a dataset registry
    ONS geography), then every derived relation (those counts, the
    per-cell lookups and `h3_{res}_geogs`) is written out as its own parquet under `data_dir()/transform`
    — a durable cache, so the aggregations can be rebuilt without re-extracting.
-3. **load** *(optional)* — a **minimal** consumer database is assembled from the parquet:
-   `crime_counts_h3_{res}` and `h3_{res}_geogs` (the per-cell counts + attributes, joined on
+3. **load** *(optional — not currently used)* — a **minimal** consumer database is assembled from the
+   parquet: `crime_counts_h3_{res}` and `h3_{res}_geogs` (the per-cell counts + attributes, joined on
    `spatial_id`), the per-ONS-geography `crime_counts_{key}` counts, plus the ONS boundary tables they
    reference by code (PFA / LAD / MSOA / LSOA / OA), so a
    consumer can resolve a cell's codes to boundary geometry. It is built in a `<name>.staging.db` and
    atomically promoted over the live database, so consumers only ever see a complete file. **This step is
-   optional** — the parquet are the durable build outputs; the database is just a convenience bundle.
+   not currently required** — the parquet are the durable build outputs, and consumers query them
+   directly (an in-memory DuckDB over the parquet, locally or straight from the Azure blob container
+   `data sync` maintains). The database is just a convenience bundle for a consumer that prefers a
+   single offline file.
    `--include NAME` adds non-default tables (an intermediate `h3_*_lookup` or a feature layer), looked up
    in the transform then extract dirs.
 
@@ -149,7 +153,6 @@ flowchart LR
     crime_counts_h3_9 -.-> database
     crime_counts_h3_10 -.-> database
     crime_counts_geog -.-> database
-    streetlight_counts_h3_9 -.-> database
     building_counts_h3_9 -.-> database
     population_counts_h3_9 -.-> database
     h3_8_geogs -.-> database
@@ -180,15 +183,14 @@ flowchart LR
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3 aggregation
-parquet. The optional **load** phase then bundles the `crime_counts_h3_*` + `crime_counts_{key}` +
+parquet. The optional **load** phase (not currently used) then bundles the `crime_counts_h3_*` + `crime_counts_{key}` +
 `h3_*_geogs` parquet, the
 five ONS boundary tables and the `schools` / `poi` / `naptan` / `food_outlets` / `cctv` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
 feature layers into a minimal database (dashed above — `--include` can pull in any other table). The
 `streetlight_counts` transform step aggregates the `streetlights` extract into a per-cell
-`streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`), which
-is included in the default minimal DB (skipped if the optional `streetlights` extract was absent). The
-raw `streetlights` point layer itself is **not** bundled by default — this per-cell count is the useful
-form (the raw points are millions of rows) — but it can still be pulled in with `--include streetlights`.
+`streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`); neither
+it nor the raw `streetlights` point layer is bundled by default — pull them in with
+`--include streetlight_counts_h3_9` (or `--include streetlights` for the raw points, millions of rows).
 
 The `buildings` extract itself spatially joins each footprint to the 2021 output areas, tagging it with
 `oa21cd` (the OA21 code) of the OA containing its **centroid** (a LEFT join, so a footprint whose
@@ -360,7 +362,7 @@ uv run data extract                     # (re)build only missing parquet interme
 uv run data extract --only schools      # refresh one dataset (reads open_roads.parquet from cache)
 uv run data extract --force-download    # re-fetch every source and rebuild
 uv run data transform                   # (re)build the H3 aggregation parquet from the extract parquet
-uv run data load                        # (optional) assemble the minimal DB: crime_counts + geogs + boundaries + features
+uv run data load                        # (optional, not currently used) assemble the minimal single-file DB
 uv run data load --include road_network # …plus any extra table(s) by name
 uv run data assemble                    # transform + load in one step
 uv run data index                       # (re)write index.parquet by hand (extract/transform/assemble/build do this too)
@@ -368,12 +370,15 @@ uv run data sync                        # upload the extract + transform parquet
 uv run data sync --update newer         # two-way: upload if local newer, download if remote newer
 ```
 
-To get started quickly, just sync your `SAFER_STREETS_DATA_DIR` with the cloud (credentials needed) and build the db:
+To get started quickly, just sync your `SAFER_STREETS_DATA_DIR` with the cloud (credentials needed):
 
 ```sh
 uv run data sync --update newer         # two-way: upload if local newer, download if remote newer
-uv run data load
 ```
+
+and query the parquet directly with an in-memory DuckDB (locally, or straight from the blob container
+without syncing at all) — the current consumer workflow. `uv run data load` remains available if you
+want everything bundled into a single offline database file.
 
 `data sync` reconciles every `*.parquet` under `data_dir()/extract` and `data_dir()/transform` — plus
 the root `index.parquet` catalogue — with the
@@ -395,7 +400,7 @@ always uploaded; for one that exists on both sides `--update` decides:
    whose `extract(ctx)` writes `ctx.parquet(name)` (use `_common.write_geoparquet`). Give it a one-line
    `description` (required — surfaced in `index.parquet`).
 2. Register it in `src/safer_streets_tooling/extract/__init__.py` (after any `depends_on`).
-3. `data extract --only <name>` then `data assemble`.
+3. `data extract --only <name>` then `data transform` (and `data sync` to publish).
 
 ## Adding a transform step
 
@@ -404,4 +409,4 @@ always uploaded; for one that exists on both sides `--update` decides:
    produces, a one-line `description` (required — surfaced in `index.parquet`), and the names of any
    steps it `depends_on`.
 2. Register it in `src/safer_streets_tooling/transform/__init__.py` (after any `depends_on`).
-3. `data transform` then `data load` (or `data assemble`).
+3. `data transform` then `data sync` (add `data load` only if you also want the single-file DB bundle).
