@@ -98,7 +98,51 @@ def _import_datasets(con, sdir: Path) -> int:
     return imported
 
 
-def run_transform(edir: Path, tdir: Path, resolutions: list[int], *, rebuild: bool = False) -> None:
+# DuckDB worker threads for the transform phase. The DuckDB default (one per core) lets the
+# concurrent spatial-join steps hold per-thread operator state across every core at once, which on
+# a modest machine exhausts RAM + swap and gets the build OOM-killed.
+TRANSFORM_THREADS = 4
+
+
+def _transform_memory_limit() -> str:
+    """Conservative DuckDB memory cap for the transform: half of physical RAM (DuckDB's default is
+    80%). The headroom covers what DuckDB's accounting can't see — the Python process itself and the
+    spatial extension's GEOS allocations — so hitting the cap spills to disk instead of the OOM
+    killer reaping the process."""
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, ValueError, OSError):  # non-POSIX fallback
+        return "8GB"
+    return f"{max(1, total // 2 // 2**30)}GB"
+
+
+def _configure_transform_db(con, tdir: Path, threads: int = TRANSFORM_THREADS, memory_limit: str | None = None) -> None:
+    """Bound the transform DB's resource usage (see ``TRANSFORM_THREADS`` / ``_transform_memory_limit``).
+
+    An in-memory DuckDB gets no spill directory by default, so without one an operator that hits the
+    memory limit fails instead of spilling; ``.duckdb_spill`` under ``tdir`` is ignored by ``sync``
+    (which only picks up ``*.parquet``). ``preserve_insertion_order`` is dropped so large scans,
+    aggregations and parquet writes stream instead of buffering to preserve row order (none of the
+    transform outputs are order-sensitive)."""
+    memory_limit = memory_limit or _transform_memory_limit()
+    spill = tdir / ".duckdb_spill"
+    spill.mkdir(parents=True, exist_ok=True)
+    con.execute(f"SET threads = {threads}")
+    con.execute(f"SET memory_limit = '{memory_limit}'")
+    con.execute(f"SET temp_directory = '{spill.as_posix()}'")
+    con.execute("SET preserve_insertion_order = false")
+    print(f"  DuckDB limits: threads={threads}, memory_limit={memory_limit}, spill dir: {spill}")
+
+
+def run_transform(
+    edir: Path,
+    tdir: Path,
+    resolutions: list[int],
+    *,
+    rebuild: bool = False,
+    threads: int = TRANSFORM_THREADS,
+    memory_limit: str | None = None,
+) -> None:
     """Build the H3 aggregation parquet under ``tdir`` from the extracted dataset parquet in ``edir``.
 
     The extracted base tables are imported into a throwaway in-memory DuckDB and geometry is indexed
@@ -108,10 +152,15 @@ def run_transform(edir: Path, tdir: Path, resolutions: list[int], *, rebuild: bo
     (a durable cache the *load* step imports): a node reuses its cached output only while it is newer than
     its inputs (the extract parquet it reads + its upstream steps' outputs), else rebuilds; ``rebuild``
     forces every step. No live database is touched.
+
+    ``threads`` / ``memory_limit`` bound the throwaway DuckDB's resource usage (see
+    ``_configure_transform_db``): the concurrent spatial joins are memory-hungry, and the DuckDB
+    defaults (all cores, 80% of RAM) can drive the build into swap and the OOM killer.
     """
     print(f"\n=== Transforming (extract: {edir} → transform: {tdir}){' [rebuild]' if rebuild else ''} ===\n")
     con = duckdb_connector(writeable=True)  # in-memory; discarded once the parquet are written
     try:
+        _configure_transform_db(con, tdir, threads, memory_limit)
         _import_datasets(con, edir)
         index_geometry_tables(con)
         build_all(STEPS, con, resolutions=resolutions, replace=False, rebuild=rebuild, edir=edir, tdir=tdir)
@@ -274,10 +323,20 @@ def extract(
     run_index(ctx.staging, transform_dir(), index_path())
 
 
+_THREADS_OPTION = typer.Option(
+    TRANSFORM_THREADS, help="DuckDB worker threads for the transform (lower = lower peak memory)."
+)
+_MEMORY_LIMIT_OPTION = typer.Option(
+    None, help="DuckDB memory cap for the transform, e.g. '12GB' (default: half of physical RAM)."
+)
+
+
 @app.command("transform")
 def transform(
     resolutions: list[int] = [8, 9, 10],  # noqa: B006
     all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
+    threads: int = _THREADS_OPTION,
+    memory_limit: str | None = _MEMORY_LIMIT_OPTION,
 ) -> None:
     """Build the H3 aggregation parquet under ``data_dir()/transform`` from the extracted parquet.
 
@@ -286,7 +345,7 @@ def transform(
     output parquet already exist is skipped; ``--all`` rebuilds them all. No live database is touched;
     ``load`` imports the result.
     """
-    run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_)
+    run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_, threads=threads, memory_limit=memory_limit)
     run_index(extract_dir(), transform_dir(), index_path(), resolutions)
 
 
@@ -329,12 +388,14 @@ def assemble(
     resolutions: list[int] = [8, 9, 10],  # noqa: B006
     all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
     include: list[str] | None = None,
+    threads: int = _THREADS_OPTION,
+    memory_limit: str | None = _MEMORY_LIMIT_OPTION,
 ) -> None:
     """Transform then load: build the H3 aggregation parquet, then assemble + promote the minimal database.
 
     ``--include NAME`` (repeatable) adds extra tables to the database beyond the minimal set.
     """
-    run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_)
+    run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_, threads=threads, memory_limit=memory_limit)
     run_load(db_path or database_path(), transform_dir(), resolutions, edir=extract_dir(), include=include)
     run_index(extract_dir(), transform_dir(), index_path(), resolutions)
 
@@ -345,6 +406,8 @@ def build(
     resolutions: list[int] = [8, 9, 10],  # noqa: B006
     force_download: bool = False,
     include: list[str] | None = None,
+    threads: int = _THREADS_OPTION,
+    memory_limit: str | None = _MEMORY_LIMIT_OPTION,
 ) -> None:
     """Full pass: extract any missing parquet (``--force-download`` re-fetches all), then transform + load.
 
@@ -354,7 +417,9 @@ def build(
     """
     ctx = ExtractContext(staging=extract_dir(), force_download=force_download)
     run_extract(list(DATASETS), ctx, rebuild=force_download)
-    run_transform(ctx.staging, transform_dir(), resolutions, rebuild=force_download)
+    run_transform(
+        ctx.staging, transform_dir(), resolutions, rebuild=force_download, threads=threads, memory_limit=memory_limit
+    )
     run_load(db_path or database_path(), transform_dir(), resolutions, edir=ctx.staging, include=include)
     run_index(ctx.staging, transform_dir(), index_path(), resolutions)
 
