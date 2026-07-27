@@ -79,18 +79,20 @@ flowchart LR
    crime_counts_h3_9
    crime_counts_h3_10
    crime_counts_geog["crime_counts_{key}"]
+   crime_counts_beahiv["crime_counts_beahiv_202"]
    streetlight_counts_h3_9
    building_counts_h3_9
    population_counts_h3_9
-   h3_geogs_lookup
-   h3_greenspace_lookup
-   h3_urban_lookup
-   h3_suburban_lookup
-   h3_road_network_lookup
-   h3_retail_centres_lookup
+   geo_lookup["{grid}_{key}_lookup"]
+   greenspace_lookup["{grid}_greenspace_lookup"]
+   urban_lookup["{grid}_urban_lookup"]
+   suburban_lookup["{grid}_suburban_lookup"]
+   road_lookup["{grid}_road_network_lookup"]
+   retail_lookup["{grid}_retail_centre_lookup"]
    h3_8_geogs
    h3_9_geogs
    h3_10_geogs
+   beahiv_geogs["beahiv_202_geogs"]
 
    direction LR
    database[("safer-streets DB<br/>crime_counts + geogs + features")]
@@ -105,6 +107,7 @@ flowchart LR
     crime_data --> crime_counts_h3_9
     crime_data --> crime_counts_h3_10
     crime_data --> crime_counts_geog
+    crime_data --> crime_counts_beahiv
     police_force_areas --> crime_counts_geog
     local_authority_districts --> crime_counts_geog
     msoa_2021 --> crime_counts_geog
@@ -116,37 +119,49 @@ flowchart LR
     buildings --> population_counts_h3_9
     workplace_population --> population_counts_h3_9
     residential_population --> population_counts_h3_9
-    crime_counts_h3_8 --> h3_geogs_lookup
-    crime_counts_h3_9 --> h3_geogs_lookup
-    crime_counts_h3_10 --> h3_geogs_lookup
-    police_force_areas --> h3_geogs_lookup
-    local_authority_districts --> h3_geogs_lookup
-    msoa_2021 --> h3_geogs_lookup
-    lsoa_2021 --> h3_geogs_lookup
-    output_areas_2021 --> h3_geogs_lookup
-    open_greenspace --> h3_greenspace_lookup
-    land_cover --> h3_urban_lookup
-    land_cover --> h3_suburban_lookup
-    open_roads --> h3_road_network_lookup
-    retail_centres --> h3_retail_centres_lookup
-    h3_geogs_lookup --> h3_8_geogs
-    h3_greenspace_lookup --> h3_8_geogs
-    h3_urban_lookup --> h3_8_geogs
-    h3_suburban_lookup --> h3_8_geogs
-    h3_road_network_lookup --> h3_8_geogs
-    h3_retail_centres_lookup --> h3_8_geogs
-    h3_geogs_lookup --> h3_9_geogs
-    h3_greenspace_lookup --> h3_9_geogs
-    h3_urban_lookup --> h3_9_geogs
-    h3_suburban_lookup --> h3_9_geogs
-    h3_road_network_lookup --> h3_9_geogs
-    h3_retail_centres_lookup --> h3_9_geogs
-    h3_geogs_lookup --> h3_10_geogs
-    h3_greenspace_lookup --> h3_10_geogs
-    h3_urban_lookup --> h3_10_geogs
-    h3_suburban_lookup --> h3_10_geogs
-    h3_road_network_lookup --> h3_10_geogs
-    h3_retail_centres_lookup --> h3_10_geogs
+    crime_counts_h3_8 --> geo_lookup
+    crime_counts_h3_9 --> geo_lookup
+    crime_counts_h3_10 --> geo_lookup
+    crime_counts_beahiv --> geo_lookup
+    crime_counts_beahiv --> greenspace_lookup
+    crime_counts_beahiv --> urban_lookup
+    crime_counts_beahiv --> suburban_lookup
+    crime_counts_beahiv --> road_lookup
+    crime_counts_beahiv --> retail_lookup
+    police_force_areas --> geo_lookup
+    local_authority_districts --> geo_lookup
+    msoa_2021 --> geo_lookup
+    lsoa_2021 --> geo_lookup
+    output_areas_2021 --> geo_lookup
+    open_greenspace --> greenspace_lookup
+    land_cover --> urban_lookup
+    land_cover --> suburban_lookup
+    open_roads --> road_lookup
+    retail_centres --> retail_lookup
+    geo_lookup --> h3_8_geogs
+    greenspace_lookup --> h3_8_geogs
+    urban_lookup --> h3_8_geogs
+    suburban_lookup --> h3_8_geogs
+    road_lookup --> h3_8_geogs
+    retail_lookup --> h3_8_geogs
+    geo_lookup --> h3_9_geogs
+    greenspace_lookup --> h3_9_geogs
+    urban_lookup --> h3_9_geogs
+    suburban_lookup --> h3_9_geogs
+    road_lookup --> h3_9_geogs
+    retail_lookup --> h3_9_geogs
+    geo_lookup --> h3_10_geogs
+    greenspace_lookup --> h3_10_geogs
+    urban_lookup --> h3_10_geogs
+    suburban_lookup --> h3_10_geogs
+    road_lookup --> h3_10_geogs
+    retail_lookup --> h3_10_geogs
+    geo_lookup --> beahiv_geogs
+    greenspace_lookup --> beahiv_geogs
+    urban_lookup --> beahiv_geogs
+    suburban_lookup --> beahiv_geogs
+    road_lookup --> beahiv_geogs
+    retail_lookup --> beahiv_geogs
 
     %% load edges (optional): minimal DB = crime counts + geogs + ONS boundary tables + feature layers; --include adds more
     crime_counts_h3_8 -.-> database
@@ -178,7 +193,7 @@ flowchart LR
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
     class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population extract;
-    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,crime_counts_geog,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
+    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,crime_counts_geog,crime_counts_beahiv,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs,beahiv_geogs transform;
     class database load;
 ```
 
@@ -191,6 +206,32 @@ feature layers into a minimal database (dashed above — `--include` can pull in
 `streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`); neither
 it nor the raw `streetlights` point layer is bundled by default — pull them in with
 `--include streetlight_counts_h3_9` (or `--include streetlights` for the raw points, millions of rows).
+
+The `beahiv_counts` step counts the same crimes as `crime_counts_h3_*` on the
+[beahiv](../beahiv) equal-area hexagonal grid instead of H3 — `crime_counts_beahiv_202` (202 m side,
+a cell of ~0.106 km², within a percent of an H3 resolution-9 cell), same
+`spatial_id` / `crime_type` / `month` / `count` schema, `spatial_id` being the cell id as 16-char
+lowercase hex. Cell ids come from a **vectorised (`type="arrow"`) DuckDB UDF** over beahiv's
+`bng_to_cell`, which takes and returns pyarrow arrays — a whole 2048-row vector per call rather than
+a row at a time. Like the
+street-light counts it is built by every transform run but not bundled in the minimal database —
+`--include crime_counts_beahiv_202`.
+
+The per-cell lookups and `geogs` are parameterised by **grid**, not by H3 resolution
+([transform/grids.py](src/safer_streets_tooling/transform/grids.py)), so the BEAHIV grid gets the same
+attribute table the H3 grids do: `beahiv_202_geogs`, column for column identical to `h3_9_geogs` (ONS
+codes, overlap id lists + measures, `cell_area`, nearest retail centre), keyed by the same `spatial_id`
+as `crime_counts_beahiv_202`. A `Grid` supplies just the three things that differ between griddings —
+the table-name infix, a subquery turning each `spatial_id` into its BNG cell polygon, and the cell
+area — and everything downstream of that (max-overlap geography assignment, overlap lists, nearest
+retail centre) is shared. BEAHIV cells are natively EPSG:27700 so they need no reprojection, unlike
+the H3 boundaries; their centres come from a second vectorised UDF (DuckDB has no BEAHIV cell
+function, and cannot even cast the 16-char hex `spatial_id` to `UBIGINT`) and the hexagon itself is
+built in SQL from constant vertex offsets, since every cell is the same hexagon translated. Its
+`cell_area` is therefore the exact `3√3/2·s²` — the *planar* BNG area, matching the planar
+`{prefix}_overlap_area` columns it is the denominator for, where the H3 grids use `h3_cell_area`'s
+geodesic m². Like the counts it feeds on, `beahiv_202_geogs` is not bundled in the minimal database:
+`--include beahiv_202_geogs`.
 
 The `buildings` extract itself spatially joins each footprint to the 2021 output areas, tagging it with
 `oa21cd` (the OA21 code) of the OA containing its **centroid** (a LEFT join, so a footprint whose
@@ -314,13 +355,14 @@ respects `depends_on`:
 | Step | Module | Outputs | Depends on |
 | ---- | ------ | ------- | ---------- |
 | `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}`, `crime_counts_{key}` (per ONS geography) | — |
+| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `crime_counts_beahiv_202` | — |
 | `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `streetlight_counts_h3_9` | — |
 | `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
 | `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `population_counts_h3_9` | — |
-| `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3_{res}_{key}_lookup` | `crime_counts` |
-| `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3_{res}_{name}_lookup` | `crime_counts` |
-| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3_{res}_retail_centre_lookup` | `crime_counts` |
-| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3_{res}_geogs` | `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
+| `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `{grid}_{key}_lookup` | `crime_counts`, `beahiv_counts` |
+| `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `{grid}_{name}_lookup` | `crime_counts`, `beahiv_counts` |
+| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `{grid}_retail_centre_lookup` | `crime_counts`, `beahiv_counts` |
+| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `{grid}_geogs` (`h3_{res}_geogs`, `beahiv_202_geogs`) | `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
 
 ## Table catalogue (`index.parquet`)
 
@@ -350,7 +392,8 @@ Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
 | [extract/base.py](src/safer_streets_tooling/extract/base.py) | `Dataset` spec + `ExtractContext` |
 | [extract/__init__.py](src/safer_streets_tooling/extract/__init__.py) | Ordered `DATASETS` registry + `BY_NAME` + dependency validation |
 | [extract/_common.py](src/safer_streets_tooling/extract/_common.py) | `download`, `extract_cached`, `rename_geom_column`, `write_geoparquet`, `read_geoparquet` |
-| [transform/base.py](src/safer_streets_tooling/transform/base.py) | `TransformStep` spec + `create_clause` / `table_exists` helpers |
+| [transform/base.py](src/safer_streets_tooling/transform/base.py) | `TransformStep` spec + `create_clause` / `table_exists` / `register_udf` helpers |
+| [transform/grids.py](src/safer_streets_tooling/transform/grids.py) | `Grid` spec + the grids the lookups build over (H3 per resolution, BEAHIV) |
 | [transform/__init__.py](src/safer_streets_tooling/transform/__init__.py) | Ordered `STEPS` registry + `BY_NAME` + dependency validation |
 
 ## Usage

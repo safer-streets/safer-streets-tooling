@@ -24,16 +24,18 @@ def _step(name, build, *, outputs=lambda con, res: [], depends_on=(), extract_in
 
 
 def test_pipeline_wires_data_dependencies():
-    """crime_counts has no deps; the three lookups depend on it; geogs waits for all three."""
+    """crime_counts has no deps; the three lookups wait on both count steps (they build a set of
+    lookups per grid, H3 and BEAHIV alike); geogs waits for all three lookups."""
     con = duckdb.connect()
     pipeline = build_pipeline(STEPS, con, resolutions=[8])
 
     assert pipeline.nodes["crime_counts"].dependency_ids == ()
+    assert pipeline.nodes["beahiv_counts"].dependency_ids == ()  # independent of crime_counts
     assert pipeline.nodes["streetlight_counts"].dependency_ids == ()  # independent of crime_counts
     assert pipeline.nodes["population_counts"].dependency_ids == ()  # independent of crime_counts
-    assert pipeline.nodes["geo_lookups"].dependency_ids == ("crime_counts",)
-    assert pipeline.nodes["overlap_lookups"].dependency_ids == ("crime_counts",)
-    assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
+    assert pipeline.nodes["geo_lookups"].dependency_ids == ("crime_counts", "beahiv_counts")
+    assert pipeline.nodes["overlap_lookups"].dependency_ids == ("crime_counts", "beahiv_counts")
+    assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts", "beahiv_counts")
     assert pipeline.nodes["geogs"].dependency_ids == ("geo_lookups", "overlap_lookups", "retail_centre_lookups")
 
 
