@@ -13,8 +13,8 @@ from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 # The crimes that contribute to the per-cell counts: geolocated, and not British Transport Police
 # (their crimes are reported against the rail network rather than where they occurred, so they would
 # distort the per-cell counts). Shared by the count queries and the conservation checks so they can't
-# drift apart.
-_CRIME_FILTER = "latitude IS NOT NULL AND longitude IS NOT NULL AND falls_within != 'British Transport Police'"
+# drift apart, and by the BEAHIV grid (see transform.beahiv_counts) so both grids count the same crimes.
+CRIME_FILTER = "latitude IS NOT NULL AND longitude IS NOT NULL AND falls_within != 'British Transport Police'"
 
 
 def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
@@ -28,13 +28,13 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     rail network rather than the place they occurred, so they would distort the counts.
 
     Every retained crime lands in exactly one H3 cell, so those counts must sum back to the number of
-    input rows passing ``_CRIME_FILTER``; a mismatch means the aggregation silently dropped (or
+    input rows passing ``CRIME_FILTER``; a mismatch means the aggregation silently dropped (or
     duplicated) crimes and raises rather than emitting a skewed grid. The geography counts can only
     assert an upper bound: a crime can fall *outside* every boundary (the E&W-only layers don't cover
     Northern Ireland, and snapped points can sit just offshore of generalised boundaries) but must
     never land in more than one, so exceeding the input row count raises.
     """
-    expected = con.execute(f"SELECT COUNT(*) FROM crime_data WHERE {_CRIME_FILTER}").fetchone()[0]  # ty:ignore[not-subscriptable]
+    expected = con.execute(f"SELECT COUNT(*) FROM crime_data WHERE {CRIME_FILTER}").fetchone()[0]  # ty:ignore[not-subscriptable]
     for res in resolutions:
         con.execute(f"""
             {create_clause("TABLE", f"crime_counts_h3_{res}", replace=replace)} AS
@@ -44,7 +44,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
                 _month AS month,
                 COUNT(*) AS count
             FROM crime_data
-            WHERE {_CRIME_FILTER}
+            WHERE {CRIME_FILTER}
             GROUP BY spatial_id, crime_type, month;
         """)
         actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM crime_counts_h3_{res}").fetchone()[0]  # ty:ignore[not-subscriptable]
@@ -64,7 +64,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
                 c.crime_type,
                 c._month AS month,
                 COUNT(*) AS count
-            FROM (SELECT crime_type, _month, geom FROM crime_data WHERE {_CRIME_FILTER}) c
+            FROM (SELECT crime_type, _month, geom FROM crime_data WHERE {CRIME_FILTER}) c
             JOIN {table} b ON ST_Contains(b.geom, c.geom)
             GROUP BY b.spatial_id, c.crime_type, month;
         """)

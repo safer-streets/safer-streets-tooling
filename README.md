@@ -79,6 +79,7 @@ flowchart LR
    crime_counts_h3_9
    crime_counts_h3_10
    crime_counts_geog["crime_counts_{key}"]
+   crime_counts_beahiv["crime_counts_beahiv_202"]
    streetlight_counts_h3_9
    building_counts_h3_9
    population_counts_h3_9
@@ -105,6 +106,7 @@ flowchart LR
     crime_data --> crime_counts_h3_9
     crime_data --> crime_counts_h3_10
     crime_data --> crime_counts_geog
+    crime_data --> crime_counts_beahiv
     police_force_areas --> crime_counts_geog
     local_authority_districts --> crime_counts_geog
     msoa_2021 --> crime_counts_geog
@@ -178,7 +180,7 @@ flowchart LR
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
     class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population extract;
-    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,crime_counts_geog,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
+    class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,crime_counts_geog,crime_counts_beahiv,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
     class database load;
 ```
 
@@ -191,6 +193,15 @@ feature layers into a minimal database (dashed above — `--include` can pull in
 `streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`); neither
 it nor the raw `streetlights` point layer is bundled by default — pull them in with
 `--include streetlight_counts_h3_9` (or `--include streetlights` for the raw points, millions of rows).
+
+The `beahiv_counts` step counts the same crimes as `crime_counts_h3_*` on the
+[beahiv](../beahiv) equal-area hexagonal grid instead of H3 — `crime_counts_beahiv_202` (202 m side,
+a cell of ~0.106 km², within a percent of an H3 resolution-9 cell), same
+`spatial_id` / `crime_type` / `month` / `count` schema, `spatial_id` being the cell id as 16-char
+lowercase hex. Cell ids come from a **vectorised (`type="arrow"`) DuckDB UDF** wrapping beahiv's
+`bng_to_cell`, which encodes a whole 2048-row vector per call rather than a row at a time. Like the
+street-light counts it is built by every transform run but not bundled in the minimal database —
+`--include crime_counts_beahiv_202`.
 
 The `buildings` extract itself spatially joins each footprint to the 2021 output areas, tagging it with
 `oa21cd` (the OA21 code) of the OA containing its **centroid** (a LEFT join, so a footprint whose
@@ -314,6 +325,7 @@ respects `depends_on`:
 | Step | Module | Outputs | Depends on |
 | ---- | ------ | ------- | ---------- |
 | `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}`, `crime_counts_{key}` (per ONS geography) | — |
+| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `crime_counts_beahiv_202` | — |
 | `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `streetlight_counts_h3_9` | — |
 | `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
 | `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `population_counts_h3_9` | — |

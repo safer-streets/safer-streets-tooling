@@ -7,6 +7,61 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## BEAHIV crime counts (`crime_counts_beahiv_202`)
+
+**Why** — the analysis surface is H3, but we want the same crime counts on the BEAHIV equal-area
+hexagonal grid (`../beahiv`) to compare the two griddings on identical data. A 202 m side gives a
+cell of ~0.106 km², within a percent of an H3 resolution-9 cell, so the comparison is like for like.
+
+**What** — a new `beahiv_counts` transform step building `crime_counts_beahiv_202` with the same
+`spatial_id` / `crime_type` / `month` / `count` schema, the same BTP + un-geolocated exclusions and
+the same conservation check as `crime_counts_h3_*`. Cell ids are assigned by a vectorised
+(`type="arrow"`) DuckDB UDF wrapping beahiv's `bng_to_cell`. `crime_counts._CRIME_FILTER` became
+public `CRIME_FILTER` so both steps share one definition of "a countable crime" rather than
+duplicating it. On the full extract: 17,483,220 crimes over 221,357 cells in 3.9s (vs 234,853 cells
+and 2.1s for H3 res 9 — the UDF is ~1.9x the cost of the native C extension, not the order of
+magnitude a per-row Python UDF would be).
+
+**Design decisions**
+
+- *Vectorised UDF, not a scalar one.* A `type="arrow"` UDF is handed a whole 2048-row DuckDB vector
+  as pyarrow arrays, so beahiv's numpy path runs once per vector instead of once per row: 977 Python
+  calls per 2M rows rather than 2,000,000. A scalar UDF also holds the GIL per row, which would
+  serialise the whole query.
+- *`bng_to_cell` off `crime_data.geom`, not `latlon_to_cell` off lat/lon.* This is forced, not
+  merely preferable: **calling pyproj from DuckDB's worker threads segfaults the process** (exit
+  139, reproducible on the full extract). It survives only at `threads = 1`, and neither a lock
+  around the transform nor a thread-local `Transformer` avoids it — the numpy half of the same
+  pipeline is fine in parallel, so pyproj is the culprit. The transform phase runs with
+  `threads = 4`. Going via BNG also skips a reprojection of coordinates the extractor already
+  projected once, at roughly half the time. Verified identical cell ids to `latlon_to_cell` on 2M
+  rows before switching; a test asserts beahiv's scalar and vector overloads still agree.
+- *`spatial_id` as 16-char lowercase hex, not `UBIGINT`.* Keeps one `spatial_id` type across every
+  grid (the H3 tables store `lower(hex(...))`), so consumers don't special-case this table. The raw
+  ids exceed `int64`, so the numeric alternative would have forced an unsigned column through
+  parquet and every downstream reader. `int(spatial_id, 16)` recovers what beahiv's `decode` takes;
+  `beahiv_counts.cell_ids` does that for a list.
+- *Register the UDF only when the catalog lacks it.* The obvious idempotency idiom —
+  `remove_function` then `create_function` — does not work: once the UDF has executed over real
+  data, `remove_function` deregisters only the Python side while `duckdb_functions()` still lists
+  the name, so the re-`create_function` raises `CatalogException`. Testing the catalog instead is
+  safe because the encoding is fixed by `SIDE_LENGTH` / `ORIENTATION`, so any existing registration
+  is the same function. A test covers the rebuild path.
+- *Not in the minimal consumer database.* Like `streetlight_counts_h3_9`, it is built by every
+  transform run but left out of `_minimal_tables` — this is a comparison grid, not (yet) the
+  analysis surface. `--include crime_counts_beahiv_202` pulls it in.
+
+**Follow-ups**
+
+- The grid is a single hard-coded `SIDE_LENGTH`. If more than one side length is ever wanted, the
+  step needs parameterising the way `resolutions` parameterises the H3 steps (`resolutions` is
+  currently ignored here — the grid is metres, not an H3 resolution).
+- Worth an upstream beahiv issue: `latlon_to_cell` / `latlon_to_cell_batch` are documented for the
+  bulk case ("encoding a whole crime dataset at once") but cannot be called from a parallel query
+  engine. A pyproj-free encode path, or a documented warning, would help the next caller.
+- The `h3_*_geogs` per-cell attributes have no BEAHIV equivalent, so this table currently joins to
+  nothing. Whether the lookups should be generalised over grids is a design-review question.
+
 ## Per-ONS-geography crime counts (`crime_counts_{key}`)
 
 **Why** — the H3 grids are the analysis surface, but consumers also need crime counts on the standard

@@ -73,6 +73,31 @@ wheels = [
 ]
 
 [[package]]
+name = "beahiv"
+version = "0.1.0"
+source = { editable = "../beahiv" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pyproj" },
+    { name = "shapely" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.5" },
+    { name = "pyproj", specifier = ">=3.6" },
+    { name = "shapely", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.1" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "ruff", specifier = ">=0.8" },
+    { name = "ty", specifier = ">=0.0.63" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.6.17"
 source = { registry = "https://pypi.org/simple" }
@@ -1528,6 +1553,7 @@ name = "safer-streets-tooling"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "beahiv" },
     { name = "safer-streets-core" },
 ]
 
@@ -1541,7 +1567,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "safer-streets-core", editable = "../safer-streets-core" }]
+requires-dist = [
+    { name = "beahiv", editable = "../beahiv" },
+    { name = "safer-streets-core", editable = "../safer-streets-core" },
+]
 
 [package.metadata.requires-dev]
 dev = [
