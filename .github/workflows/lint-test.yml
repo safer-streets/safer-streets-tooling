@@ -34,11 +34,15 @@ jobs:
       with:
         repository: safer-streets/safer-streets-core
         path: safer-streets-core
+    # beahiv is a private repo, so the default GITHUB_TOKEN (scoped to this repo, plus public reads)
+    # can't see it -- this needs a PAT with read access to it. Secrets aren't available to workflow
+    # runs from forked PRs, so a fork's CI will fail at this step until beahiv is public.
     - name: Check out beahiv (editable path dependency)
       uses: actions/checkout@v6
       with:
         repository: safer-streets/beahiv
         path: beahiv
+        token: ${{ secrets.BEAHIV_TOKEN }}
     - name: "Setup uv ${{ matrix.python-version }} / ${{ matrix.os }}"
       uses: astral-sh/setup-uv@v8.1.0
       with:
