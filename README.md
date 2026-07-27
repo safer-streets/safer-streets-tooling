@@ -198,8 +198,9 @@ The `beahiv_counts` step counts the same crimes as `crime_counts_h3_*` on the
 [beahiv](../beahiv) equal-area hexagonal grid instead of H3 — `crime_counts_beahiv_202` (202 m side,
 a cell of ~0.106 km², within a percent of an H3 resolution-9 cell), same
 `spatial_id` / `crime_type` / `month` / `count` schema, `spatial_id` being the cell id as 16-char
-lowercase hex. Cell ids come from a **vectorised (`type="arrow"`) DuckDB UDF** wrapping beahiv's
-`bng_to_cell`, which encodes a whole 2048-row vector per call rather than a row at a time. Like the
+lowercase hex. Cell ids come from a **vectorised (`type="arrow"`) DuckDB UDF** over beahiv's
+`bng_to_cell`, which takes and returns pyarrow arrays — a whole 2048-row vector per call rather than
+a row at a time. Like the
 street-light counts it is built by every transform run but not bundled in the minimal database —
 `--include crime_counts_beahiv_202`.
 

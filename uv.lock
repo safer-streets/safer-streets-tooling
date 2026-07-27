@@ -82,16 +82,25 @@ dependencies = [
     { name = "shapely" },
 ]
 
+[package.optional-dependencies]
+arrow = [
+    { name = "pyarrow" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=2.5" },
+    { name = "pyarrow", marker = "extra == 'arrow'", specifier = ">=17" },
     { name = "pyproj", specifier = ">=3.6" },
     { name = "shapely", specifier = ">=2.0" },
 ]
+provides-extras = ["arrow"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "geopandas", specifier = ">=1.0" },
     { name = "pre-commit", specifier = ">=4.6.1" },
+    { name = "pyarrow", specifier = ">=17" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.8" },
     { name = "ty", specifier = ">=0.0.63" },
@@ -1553,7 +1562,7 @@ name = "safer-streets-tooling"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "beahiv" },
+    { name = "beahiv", extra = ["arrow"] },
     { name = "safer-streets-core" },
 ]
 
@@ -1568,7 +1577,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "beahiv", editable = "../beahiv" },
+    { name = "beahiv", extras = ["arrow"], editable = "../beahiv" },
     { name = "safer-streets-core", editable = "../safer-streets-core" },
 ]
 

@@ -27,7 +27,9 @@ magnitude a per-row Python UDF would be).
 - *Vectorised UDF, not a scalar one.* A `type="arrow"` UDF is handed a whole 2048-row DuckDB vector
   as pyarrow arrays, so beahiv's numpy path runs once per vector instead of once per row: 977 Python
   calls per 2M rows rather than 2,000,000. A scalar UDF also holds the GIL per row, which would
-  serialise the whole query.
+  serialise the whole query. beahiv takes and returns pyarrow directly (its `arrow` extra, which
+  this repo now depends on as `beahiv[arrow]`), so the UDF body is a single `bng_to_cell` call with
+  no conversion either side.
 - *`bng_to_cell` off `crime_data.geom`, not `latlon_to_cell` off lat/lon.* This is forced, not
   merely preferable: **calling pyproj from DuckDB's worker threads segfaults the process** (exit
   139, reproducible on the full extract). It survives only at `threads = 1`, and neither a lock
@@ -50,15 +52,19 @@ magnitude a per-row Python UDF would be).
 - *Not in the minimal consumer database.* Like `streetlight_counts_h3_9`, it is built by every
   transform run but left out of `_minimal_tables` — this is a comparison grid, not (yet) the
   analysis surface. `--include crime_counts_beahiv_202` pulls it in.
+- *An explicit unencodable-row check, on top of conservation.* beahiv maps a missing coordinate to
+  `INVALID_CELL_ID` rather than raising, so a filter-passing row with no BNG point would land in a
+  bogus cell — counted, and therefore invisible to the conservation check, which only sees totals.
+  The build asserts no row encoded to `INVALID_CELL_ID` (or NULL) and raises if any did.
 
 **Follow-ups**
 
 - The grid is a single hard-coded `SIDE_LENGTH`. If more than one side length is ever wanted, the
   step needs parameterising the way `resolutions` parameterises the H3 steps (`resolutions` is
   currently ignored here — the grid is metres, not an H3 resolution).
-- Worth an upstream beahiv issue: `latlon_to_cell` / `latlon_to_cell_batch` are documented for the
-  bulk case ("encoding a whole crime dataset at once") but cannot be called from a parallel query
-  engine. A pyproj-free encode path, or a documented warning, would help the next caller.
+- `latlon_to_cell` / `latlon_to_cell_batch` still can't be called from a parallel query engine (the
+  pyproj segfault above). The BNG path sidesteps it rather than fixing it; beahiv has no warning in
+  its docs about this yet.
 - The `h3_*_geogs` per-cell attributes have no BEAHIV equivalent, so this table currently joins to
   nothing. Whether the lookups should be generalised over grids is a design-review question.
 

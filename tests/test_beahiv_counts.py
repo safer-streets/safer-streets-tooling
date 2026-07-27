@@ -136,6 +136,21 @@ def test_udf_matches_beahiv_across_a_multi_vector_scan():
     assert mismatches == (0,)
 
 
+def test_unencodable_geometry_raises():
+    """A crime that passes the filter but has no BNG point can't be placed in a cell.
+
+    beahiv encodes a missing coordinate to INVALID_CELL_ID rather than raising, so this would
+    otherwise be a silently bogus cell — and the conservation check wouldn't notice, because the
+    crime is counted, just in the wrong place.
+    """
+    con = _connect()
+    _crime_data(con)
+    con.execute(f"INSERT INTO crime_data VALUES ({_LEEDS[0]}, {_LEEDS[1]}, 'Burglary', '2024-01', 'WYP', NULL)")
+
+    with pytest.raises(ValueError, match="did not encode to a cell"):
+        beahiv_counts.build(con, [9], True)
+
+
 def test_conservation_check_raises_on_lossy_aggregation():
     """A silently lossy aggregation raises rather than emitting a skewed grid."""
     con = _connect()

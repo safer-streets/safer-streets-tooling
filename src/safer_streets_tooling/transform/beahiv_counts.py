@@ -5,15 +5,16 @@ equal-area hexagonal grid from the ``beahiv`` package instead of H3. The default
 gives a cell of ~0.106 km², within a percent of an H3 resolution-9 cell, so the two grids are
 directly comparable.
 
-Cell ids are assigned by a **vectorised DuckDB UDF** (``type="arrow"``) wrapping beahiv's batch
-encoder: each call receives a whole 2048-row vector as pyarrow arrays and returns the encoded cell
-ids, so the per-row Python cost that a scalar UDF would pay is amortised across the vector.
+Cell ids are assigned by a **vectorised DuckDB UDF** (``type="arrow"``) over beahiv's ``bng_to_cell``,
+which takes and returns pyarrow arrays: each call receives a whole 2048-row vector and returns the
+encoded ids, so the per-row Python cost that a scalar UDF would pay is amortised across the vector.
 """
 
 import duckdb
 import numpy as np
 import pyarrow as pa
 from beahiv import Orientation, bng_to_cell
+from beahiv.cell_id import INVALID_CELL_ID
 from duckdb.sqltypes import DOUBLE, UBIGINT
 
 from safer_streets_tooling.transform.base import TransformStep, create_clause
@@ -28,8 +29,8 @@ _UDF_NAME = "beahiv_cell_from_bng"
 def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
     """Encode a vector of BNG (x, y) metres as BEAHIV cell ids.
 
-    Passing numpy arrays dispatches ``bng_to_cell`` to its vectorised overload — one call per DuckDB
-    vector, not per row.
+    A pyarrow array in gives a ``uint64`` pyarrow array back, so the DuckDB vectors pass straight
+    through to beahiv and back with no conversion here.
 
     It takes projected coordinates rather than lat/lon, for two reasons in order of importance:
 
@@ -41,13 +42,8 @@ def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
        would reproject coordinates we already hold, at roughly double the cost.
 
     Verified equivalent: identical cell ids to ``latlon_to_cell`` on 2M rows of the extract.
-
-    ``combine_chunks`` because DuckDB hands each argument over as a ``ChunkedArray`` while numpy
-    wants one contiguous buffer.
     """
-    xs = x.combine_chunks().to_numpy(zero_copy_only=False)
-    ys = y.combine_chunks().to_numpy(zero_copy_only=False)
-    return pa.array(bng_to_cell(xs, ys, SIDE_LENGTH, ORIENTATION), type=pa.uint64())
+    return bng_to_cell(x, y, SIDE_LENGTH, ORIENTATION)
 
 
 def register_udf(con: duckdb.DuckDBPyConnection) -> None:
@@ -86,7 +82,10 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     back to the filtered input row count; a mismatch raises rather than emitting a skewed grid.
 
     A crime whose BNG coordinates fall far outside Great Britain would overflow the q/r bit budget;
-    ``encode_batch`` raises in that case rather than silently wrapping the cell id.
+    beahiv raises in that case rather than silently wrapping the cell id. A *missing* coordinate is
+    the quiet failure instead — beahiv encodes NaN to ``INVALID_CELL_ID`` — so unencodable rows are
+    checked for explicitly: the filter should already have excluded them, and if one gets through it
+    is a bogus cell rather than a dropped crime, which conservation alone would not catch.
     """
     register_udf(con)
     name = table_name()
@@ -107,6 +106,16 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
         raise ValueError(
             f"{name}: counted {actual:,} crimes but {expected:,} input rows passed the filter — the "
             f"per-cell counts are not conserved (aggregation dropped or duplicated crimes)"
+        )
+
+    invalid = con.execute(
+        f"SELECT COALESCE(SUM(count), 0) FROM {name} WHERE spatial_id IS NULL OR spatial_id = ?",
+        [f"{INVALID_CELL_ID:016x}"],
+    ).fetchone()[0]  # ty:ignore[not-subscriptable]
+    if invalid:
+        raise ValueError(
+            f"{name}: {invalid:,} crimes did not encode to a cell (missing BNG coordinates) — they "
+            f"passed the filter but have no usable geometry"
         )
 
 

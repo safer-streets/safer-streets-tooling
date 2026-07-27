@@ -7,7 +7,7 @@ authors = [
 description = "Data-build tooling for safer-streets: per-dataset extract → GeoParquet → assemble DuckDB."
 requires-python = ">=3.13"
 dependencies = [
-    "beahiv",
+    "beahiv[arrow]",
     # Runtime libraries (duckdb, geopandas, pandas, pyarrow, shapely, scipy, requests, tqdm, typer,
     # networkx, odfpy, overturemaps) come transitively from safer-streets-core, which declares them all.
     "safer-streets-core",
