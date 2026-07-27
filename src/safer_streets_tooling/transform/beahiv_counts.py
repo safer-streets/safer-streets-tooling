@@ -13,15 +13,14 @@ encoded ids, so the per-row Python cost that a scalar UDF would pay is amortised
 import duckdb
 import numpy as np
 import pyarrow as pa
-from beahiv import Orientation, bng_to_cell
+from beahiv import bng_to_cell
 from beahiv.cell_id import INVALID_CELL_ID
 from duckdb.sqltypes import DOUBLE, UBIGINT
 
 from safer_streets_tooling.transform.base import TransformStep, create_clause
+from safer_streets_tooling.transform.base import register_udf as _register_udf
 from safer_streets_tooling.transform.crime_counts import CRIME_FILTER
-
-SIDE_LENGTH = 202
-ORIENTATION = Orientation.FLAT
+from safer_streets_tooling.transform.grids import ORIENTATION, SIDE_LENGTH
 
 _UDF_NAME = "beahiv_cell_from_bng"
 
@@ -47,23 +46,12 @@ def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
 
 
 def register_udf(con: duckdb.DuckDBPyConnection) -> None:
-    """Register the cell-encoding UDF on ``con``, unless the catalog already has it.
-
-    UDFs live in the catalog, which cursors share and which outlives a single ``build`` — so a
-    rebuild (or a second step on another cursor) would otherwise fail on the name already existing.
-    The catalog is the thing to test: ``remove_function`` and re-create looks like the obvious way to
-    make this idempotent, but once the UDF has *executed* over real data it only deregisters the
-    Python side — ``duckdb_functions()`` still lists the name and ``create_function`` then raises
-    ``CatalogException``. Skipping the re-registration is safe here because the encoding is fixed by
-    ``SIDE_LENGTH`` / ``ORIENTATION``, so an existing registration is by definition the same function.
-    """
-    sql = "SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = ?"
-    registered = con.execute(sql, [_UDF_NAME]).fetchone()[0]  # ty:ignore[not-subscriptable]
-    if not registered:
-        con.create_function(_UDF_NAME, _cell_from_bng, [DOUBLE, DOUBLE], UBIGINT, type="arrow")
+    """Register the cell-encoding UDF on ``con`` (idempotent — see :func:`.base.register_udf`)."""
+    _register_udf(con, _UDF_NAME, _cell_from_bng, [DOUBLE, DOUBLE], UBIGINT)
 
 
 def table_name(side_length: int = SIDE_LENGTH) -> str:
+    """This step's output table — at the default side length, ``grids.BEAHIV_GRID.counts_table``."""
     return f"crime_counts_beahiv_{side_length}"
 
 

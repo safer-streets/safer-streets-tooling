@@ -11,10 +11,12 @@ table (street-level crimes) and one boundary table per ONS geography (each with 
 and a BNG ``geom`` column). Ported from the ``duckdb-spatial`` prototype notebook (safer-streets-eda).
 """
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import duckdb
+from duckdb.sqltypes import DuckDBPyType
 
 H3_RESOLUTIONS = [8, 9, 10]
 
@@ -48,6 +50,34 @@ def create_clause(kind: str, name: str, *, replace: bool) -> str:
     replace=False -> ``CREATE {kind} IF NOT EXISTS {name}`` (kept if it already exists)
     """
     return f"CREATE OR REPLACE {kind} {name}" if replace else f"CREATE {kind} IF NOT EXISTS {name}"
+
+
+# UDFs live in the catalog, which every cursor shares, so concurrent steps race to register the same
+# name. Serialise the check-then-create so only one of them wins.
+_UDF_LOCK = threading.Lock()
+
+
+def register_udf(
+    con: duckdb.DuckDBPyConnection,
+    name: str,
+    fn: Callable[..., object],
+    params: list[DuckDBPyType],
+    return_type: DuckDBPyType,
+) -> None:
+    """Register a vectorised (``type="arrow"``) Python UDF on ``con``, unless the catalog already has it.
+
+    The catalog outlives a single ``build`` and is shared by every cursor, so a rebuild — or a second
+    step registering the same helper on another cursor — would otherwise fail on the name already
+    existing. The catalog is the thing to test: ``remove_function`` and re-create looks like the obvious
+    way to make this idempotent, but once the UDF has *executed* over real data it only deregisters the
+    Python side — ``duckdb_functions()`` still lists the name and ``create_function`` then raises
+    ``CatalogException``. Skipping the re-registration is safe because these UDFs are pure functions of
+    module-level constants, so an existing registration is by definition the same function.
+    """
+    with _UDF_LOCK:
+        sql = "SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = ?"
+        if not con.execute(sql, [name]).fetchone()[0]:  # ty:ignore[not-subscriptable]
+            con.create_function(name, fn, params, return_type, type="arrow")
 
 
 def table_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:

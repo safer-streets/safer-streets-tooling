@@ -7,6 +7,76 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Per-cell lookups parameterised by grid (`beahiv_202_geogs`)
+
+**Why** — `crime_counts_beahiv_202` landed without an equivalent of `h3_9_geogs`, so the BEAHIV grid
+joined to nothing: no ONS codes, no overlap layers, no nearest retail centre. The comparison the grid
+exists for isn't possible without the same per-cell attributes on both sides. The previous entry left
+this open as "whether the lookups should be generalised over grids is a design-review question".
+
+**What** — the answer is yes. A new `Grid`
+([transform/grids.py](src/safer_streets_tooling/transform/grids.py)) carries the three things that
+differ between griddings — the table-name infix (`h3_9` / `beahiv_202`), a subquery turning each
+`spatial_id` into its BNG cell polygon, and the cell's area — and `geo_lookups`, `overlap_lookups`,
+`retail_centre_lookups` and `geogs` now iterate grids instead of H3 resolutions. Every existing table
+name is unchanged (the H3 grid's key *is* `h3_{res}`); the new outputs are
+`beahiv_202_{key}_lookup`, `beahiv_202_{name}_lookup`, `beahiv_202_retail_centre_lookup` and
+`beahiv_202_geogs` — column for column identical to `h3_9_geogs`, asserted by a test comparing the
+two schemas. The three lookup steps gained `beahiv_counts` as a second `depends_on`.
+
+**Design decisions**
+
+- *Generalise the four steps rather than add a fifth BEAHIV-specific one.* A standalone
+  `beahiv_geogs` module would have been a smaller diff and left the H3 path untouched, but it would
+  hold a second copy of the `GEOGRAPHY_MAPPINGS` join, the `OVERLAP_FEATURES` join, the
+  nearest-retail-centre query and the wide fold — four places to keep in step every time a layer is
+  added. The grid was already an implicit parameter, spelled `h3_{res}` throughout; naming it cost
+  less than duplicating everything it varies.
+- *The cell centre from a UDF, the hexagon from SQL.* DuckDB has no BEAHIV cell function and cannot
+  even cast the 16-char hex `spatial_id` to `UBIGINT` (`from_hex` yields a BLOB; that cast is
+  unimplemented). A UDF returning the boundary as WKT — the direct analogue of the h3 extension's
+  `h3_cell_to_boundary_wkt` — would have meant formatting a WKT string per cell in Python. Instead
+  the UDF returns only the centre as a `STRUCT(x, y)` and the six vertices are constant offsets from
+  it, so the Python side is pure numpy: the ids are fixed-width hex, so `bytes.fromhex` over a joined
+  vector *is* a big-endian `uint64` buffer, and `np.frombuffer` reinterprets it with no per-row work
+  at all. 0.14 s for 250k cells end to end (the real grid has ~221k).
+- *Vertex offsets derived from beahiv, not restated.* Every cell of a given side length and
+  orientation is the same hexagon translated, so the offsets come from `cell_polygon` of a reference
+  cell minus its own centre rather than from a copy of beahiv's vertex-angle table. A test asserts
+  the SQL polygon is vertex-for-vertex `cell_polygon`'s, which catches a wrong CRS, a swapped x/y or
+  a drifted offset in one place.
+- *`cell_area` as the analytic `3√3/2·s²`.* It is a constant because the grid is equal-area, and it
+  is deliberately the *planar* BNG area — the same measure as the `{prefix}_overlap_area` columns it
+  is the denominator for. (The H3 grids' `h3_cell_area` is geodesic m², which differs from its own
+  planar BNG area by the ~0.08% grid scale factor; that inconsistency is pre-existing.) It is cast to
+  `DOUBLE` explicitly: DuckDB reads a bare decimal literal as `DECIMAL`, which would have given the
+  two `*_geogs` tables different `cell_area` types and defeated the point of matching schemas.
+- *The grid's parameters live in `grids.py`, not `beahiv_counts.py`.* Putting `SIDE_LENGTH` /
+  `ORIENTATION` in the counting step made the imports circular (`beahiv_counts` → `crime_counts` →
+  `geo_lookups` → `grids` → `beahiv_counts`). The fix is also the better model: the grid is the
+  definition, the counting step is one thing done *to* it, so `beahiv_counts` imports from `grids`.
+  A `Grid.counts_table` property spells the one naming rule both grids obey (`crime_counts_{key}`).
+- *`grids()` registers the centre UDF itself.* The grid's `cells` SQL is unusable without it, so
+  leaving each of the four steps to remember a separate `prepare` call would be a trap. Registration
+  moved to a shared `base.register_udf` and is now **lock-guarded** — the three lookup steps run
+  concurrently on their own cursors and share one catalog, so the previous check-then-create was a
+  latent race (unhit today only because a single step used it).
+- *The BEAHIV grid is skipped when its counts table is absent*, mirroring how an overlap feature is
+  skipped when its source table wasn't loaded. That keeps `outputs()` honest about what `build()`
+  will create, which is what the pipeline caches on.
+- *Not in the minimal consumer database.* Consistent with `crime_counts_beahiv_202` — this is still
+  a comparison grid, not the analysis surface. `--include beahiv_202_geogs` pulls it in.
+
+**Follow-ups**
+
+- The lookups now do a fourth pass over the feature layers (three H3 resolutions + BEAHIV), so the
+  overlap joins cost roughly a third more. Not measured on the full extract yet.
+- Still one hard-coded `SIDE_LENGTH`. `grids()` returning a list makes a second BEAHIV grid a
+  one-line change now, but `beahiv_counts` would still need parameterising to populate it.
+- `cell_area` means geodesic m² for H3 and planar m² for BEAHIV. Both are self-consistent with the
+  overlap areas they sit beside, but a consumer comparing `cell_area` *across* grids is comparing
+  two slightly different measures.
+
 ## BEAHIV crime counts (`crime_counts_beahiv_202`)
 
 **Why** — the analysis surface is H3, but we want the same crime counts on the BEAHIV equal-area

@@ -28,9 +28,9 @@ STEPS: tuple[TransformStep, ...] = (
     building_counts.STEP,  # depends on crime_counts: buildings per res-9 cell, restricted to its cells
     population_counts.STEP,  # independent: OA residential + workplace population per res-9 cell via buildings
     road_intersection_counts.STEP,  # depends on crime_counts: intersections per cell, restricted to its cells
-    geo_lookups.STEP,  # depends on crime_counts
-    overlap_lookups.STEP,  # depends on crime_counts
-    retail_centre_lookups.STEP,  # depends on crime_counts
+    geo_lookups.STEP,  # depends on both count steps: one lookup per grid (see transform.grids)
+    overlap_lookups.STEP,  # ditto
+    retail_centre_lookups.STEP,  # ditto
     geogs.STEP,  # depends on the three lookups
 )
 
