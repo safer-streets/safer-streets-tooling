@@ -1,10 +1,14 @@
-"""Step registry for the H3 transform pipeline.
+"""Step registry for the transform pipeline.
 
-``STEPS`` is the ordered catalogue the transform orchestrator runs. Each entry builds one set of H3
-aggregation relations (counts, the per-cell lookups, or ``h3_{res}_geogs``) and declares the relation
-names it produces (so they can be cached as parquet). Steps are ordered so that every ``depends_on``
-precedes its dependent (validated at import time), and the pipeline wires them into an ``AsyncPipeline``
-— mirroring how ``safer_streets_tooling.extract`` turns ``Dataset`` entries into nodes.
+``STEPS`` is the ordered catalogue the transform orchestrator runs. Each entry builds one set of
+aggregation relations (counts, the per-cell lookups, or the ``*_geogs`` attributes) and declares the
+relation names it produces (so they can be cached as parquet). Steps are ordered so that every
+``depends_on`` precedes its dependent (validated at import time), and the pipeline wires them into an
+``AsyncPipeline`` — mirroring how ``safer_streets_tooling.extract`` turns ``Dataset`` entries into nodes.
+
+The steps come in two families over the two spatial units: the H3 grid at each requested resolution,
+and the Home Office hotspot hexes (the ``hotspot_*`` steps, a no-op when that optional extract is
+absent). Both produce the same relations keyed by ``spatial_id``, differing only in the unit's name.
 """
 
 from safer_streets_tooling.transform import (
@@ -12,6 +16,9 @@ from safer_streets_tooling.transform import (
     crime_counts,
     geo_lookups,
     geogs,
+    hotspot_counts,
+    hotspot_geogs,
+    hotspot_lookups,
     overlap_lookups,
     population_counts,
     retail_centre_lookups,
@@ -30,6 +37,9 @@ STEPS: tuple[TransformStep, ...] = (
     overlap_lookups.STEP,  # depends on crime_counts
     retail_centre_lookups.STEP,  # depends on crime_counts
     geogs.STEP,  # depends on the three lookups
+    hotspot_counts.STEP,  # independent: the same counts on the hotspot hexes (their own grid)
+    hotspot_lookups.STEP,  # independent: the three lookups on the hotspot hexes
+    hotspot_geogs.STEP,  # depends on hotspot_lookups
 )
 
 

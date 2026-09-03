@@ -1,7 +1,8 @@
-"""``building_counts_h3_9`` — buildings counted per resolution-9 H3 cell and ``map_simple_use``."""
+"""``building_counts_h3_9`` / ``building_counts_hotspots`` — buildings counted per cell and ``map_simple_use``."""
 
 import duckdb
 
+from safer_streets_tooling.transform import hotspots
 from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
 
 BUILDINGS_TABLE = "buildings"
@@ -34,6 +35,29 @@ def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]
     if not table_exists(con, BUILDINGS_TABLE):
         return []
     return [f"building_counts_h3_{RESOLUTION}"]
+
+
+def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``building_counts_hotspots`` counting buildings per hotspot hex / ``map_simple_use``.
+
+    The hexes don't line up with the H3 grid, so each footprint is placed by its centroid (the point the
+    extract's ``h3_9_id`` also comes from) rather than reusing that column. No restriction to the crime
+    grid is needed: the hotspot hexes *are* the grid. No-op if either input is absent.
+    """
+    if not (table_exists(con, BUILDINGS_TABLE) and hotspots.available(con)):
+        return
+    con.execute(f"""
+        {create_clause("TABLE", "building_counts_hotspots", replace=replace)} AS
+        SELECT spatial_id, map_simple_use, COUNT(*) AS building_count
+        FROM ({hotspots.placed_points(BUILDINGS_TABLE, "s.map_simple_use", point="ST_Centroid(s.geom)")})
+        GROUP BY spatial_id, map_simple_use;
+    """)
+
+
+def hotspot_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    if not (table_exists(con, BUILDINGS_TABLE) and hotspots.available(con)):
+        return []
+    return ["building_counts_hotspots"]
 
 
 STEP = TransformStep(

@@ -157,5 +157,9 @@
     "sheet": "Data",
     "header_row": 3,
     "note": "Welsh Index of Multiple Deprivation 2025 index and domain scores by small area (open data, gov.wales)."
+  },
+  "hotspots": {
+    "path": "ho/hotspots.geoparquet",
+    "note": "Home Office hotspot hexes: the 350m hex-grid cells flagged as hotspots for one or more offence classes (the `hits` letters). Supplied directly rather than downloaded, so the GeoParquet is placed by hand at this path (relative to the data directory). Already BNG (EPSG:27700)."
   }
 }

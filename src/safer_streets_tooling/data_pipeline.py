@@ -61,7 +61,9 @@ from safer_streets_core.utils import blob_storage_url, data_dir, database_path
 from safer_streets_tooling.extract import BY_NAME, DATASETS, ExtractContext, run_extract
 from safer_streets_tooling.index import INDEX_NAME, build_index
 from safer_streets_tooling.transform import STEPS, build_all
+from safer_streets_tooling.transform.base import H3_RESOLUTIONS
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
+from safer_streets_tooling.transform.hotspots import HOTSPOT_UNIT
 
 app = typer.Typer(help="Build the crime + boundaries + H3 DuckDB database from per-dataset parquet intermediates.")
 
@@ -180,6 +182,7 @@ DEFAULT_FEATURE_TABLES: tuple[str, ...] = (
     "land_cover",
     "oac",
     "oac_classification",
+    "hotspots",  # the hotspot hexes themselves: the geometry the hotspot counts/geogs are keyed by
 )
 
 # Transform outputs included in the database by default (loaded from ``tdir``), beyond the per-resolution
@@ -187,14 +190,20 @@ DEFAULT_FEATURE_TABLES: tuple[str, ...] = (
 # extract — buildings / the population tables — was not run). Note: the raw point/footprint layers are
 # deliberately *not* in DEFAULT_FEATURE_TABLES — the per-cell counts (`building_counts_h3_9`,
 # `road_intersection_counts_h3_{res}`, etc.) are the useful form for consumers (the raw layers are
-# millions/tens of millions of rows). `streetlight_counts_h3_9` is built by the transform phase but not
-# bundled by default; pull it in with `--include streetlight_counts_h3_9`.
+# millions/tens of millions of rows); the hotspot hexes are the exception, since they are the geometry
+# their counts are keyed by. `streetlight_counts_h3_9` (and its hotspot twin) is built by the transform
+# phase but not bundled by default; pull it in with `--include streetlight_counts_h3_9`.
 DEFAULT_TRANSFORM_TABLES: tuple[str, ...] = (
     "building_counts_h3_9",
     "population_counts_h3_9",
-    "road_intersection_counts_h3_8",
     "road_intersection_counts_h3_9",
-    "road_intersection_counts_h3_10",
+    # the hotspot-hex grid: the same counts + attributes keyed by the hex spatial_id (absent unless the
+    # optional hotspots extract ran, in which case each is skipped with a warning like any other)
+    f"crime_counts_{HOTSPOT_UNIT.key}",
+    f"{HOTSPOT_UNIT.key}_geogs",
+    f"building_counts_{HOTSPOT_UNIT.key}",
+    f"population_counts_{HOTSPOT_UNIT.key}",
+    f"road_intersection_counts_{HOTSPOT_UNIT.key}",
 )
 
 
@@ -211,7 +220,7 @@ def _minimal_tables(resolutions: list[int]) -> list[str]:
       ``oa21cd``, decoded to tier names via the ``oac_classification`` dimension table);
     - the ``DEFAULT_TRANSFORM_TABLES`` transform outputs (``building_counts_h3_9``,
       ``population_counts_h3_9`` and the per-resolution ``road_intersection_counts_h3_{res}`` —
-      per-cell counts keyed by ``spatial_id``).
+      per-cell counts keyed by ``spatial_id`` — plus the hotspot-hex counts and ``hotspots_geogs``).
 
     The intermediate lookups and the other raw extract datasets are build inputs, not part of the output.
     """
@@ -333,7 +342,7 @@ _MEMORY_LIMIT_OPTION = typer.Option(
 
 @app.command("transform")
 def transform(
-    resolutions: list[int] = [8, 9, 10],  # noqa: B006
+    resolutions: list[int] = H3_RESOLUTIONS,
     all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
     threads: int = _THREADS_OPTION,
     memory_limit: str | None = _MEMORY_LIMIT_OPTION,
@@ -352,7 +361,7 @@ def transform(
 @app.command("load")
 def load(
     db_path: Path | None = None,
-    resolutions: list[int] = [8, 9, 10],  # noqa: B006
+    resolutions: list[int] = H3_RESOLUTIONS,
     include: list[str] | None = None,
 ) -> None:
     """Assemble a minimal database from the transform parquet, then atomically swap it in.
@@ -370,7 +379,7 @@ def load(
 
 
 @app.command("index")
-def index(resolutions: list[int] = [8, 9, 10]) -> None:  # noqa: B006
+def index(resolutions: list[int] = H3_RESOLUTIONS) -> None:
     """Write ``index.parquet`` cataloguing every extract + transform table currently on disk.
 
     One row per parquet under ``data_dir()/extract`` and ``data_dir()/transform``: its phase, name,
@@ -385,7 +394,7 @@ def index(resolutions: list[int] = [8, 9, 10]) -> None:  # noqa: B006
 @app.command("assemble")
 def assemble(
     db_path: Path | None = None,
-    resolutions: list[int] = [8, 9, 10],  # noqa: B006
+    resolutions: list[int] = H3_RESOLUTIONS,
     all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
     include: list[str] | None = None,
     threads: int = _THREADS_OPTION,
@@ -403,7 +412,7 @@ def assemble(
 @app.command("build")
 def build(
     db_path: Path | None = None,
-    resolutions: list[int] = [8, 9, 10],  # noqa: B006
+    resolutions: list[int] = H3_RESOLUTIONS,
     force_download: bool = False,
     include: list[str] | None = None,
     threads: int = _THREADS_OPTION,

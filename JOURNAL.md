@@ -7,6 +7,70 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Drop H3 r8/r10; aggregate onto the Home Office hotspot hexes
+
+**Why** — resolutions 8 and 10 tripled the transform's cost and parquet footprint for grids nobody
+consumes. What is wanted instead is the grid the Home Office hotspot analysis uses: the 4,433 350m hex
+cells flagged as hotspots (supplied as a GeoParquet, columns `hex_index` / `pfa` / `hits`, BNG). A hex
+is ~105,400 m² — near enough an H3 r9 cell (~105,300 m²) that the two grids are directly comparable.
+
+**What** — `H3_RESOLUTIONS` is now `[9]` (and the CLI defaults follow the constant instead of repeating
+`[8, 9, 10]`). A new optional `hotspots` extract loads the polygons (renaming `hex_index` →
+`spatial_id`), and three new transform steps — `hotspot_counts` → `hotspot_lookups` → `hotspot_geogs` —
+rebuild the whole per-cell family on them: `crime_counts_hotspots`,
+`{streetlight,building,population,road_intersection}_counts_hotspots`, `hotspots_{key}_lookup`,
+`hotspots_{name}_lookup`, `hotspots_retail_centre_lookup` and `hotspots_geogs`. Everything is keyed by
+`spatial_id`, so consumers join the hotspot family exactly as they join the H3 one.
+
+**Design decisions**
+
+- *A `SpatialUnit` rather than a parallel set of copied modules.* Every relation name is
+  `<family>_h3_{res}` or `h3_{res}_<family>`, so treating `h3_9` as a *unit key* reproduces today's
+  names exactly and `hotspots` gives the new ones for free. `SpatialUnit` holds only what the per-cell
+  SQL varies on — the key, a subquery yielding each cell's `spatial_id` + BNG `cell_geom`, and the cell
+  area expression — so `geo_lookups` / `overlap_lookups` / `retail_centre_lookups` / `geogs` each got one
+  `build_unit` that both families call. No lookup or geogs SQL is duplicated.
+- *…but the counts keep two code paths.* Placing a *point* differs fundamentally between the units: H3
+  uses `h3_latlng_to_cell` or a precomputed `h3_9_id` column, a hex needs a point-in-polygon join. A
+  single abstraction would have forced the H3 counts through geometry (slower, and for `crime_counts` a
+  WGS-84 → BNG → WGS-84 round trip on the input it currently reads as lat/lon). So each counts module
+  keeps its `build` and gained a `build_hotspots`, and `hotspot_counts` only wires them together —
+  ~10 lines of SQL each, against rewriting the paths the H3 outputs depend on.
+- *Three hotspot steps, not nine.* One step per counts module would have doubled the DAG for no
+  concurrency gain (they share one connection anyway) and split `index.parquet` descriptions
+  needlessly; one step per *family* (counts / lookups / geogs) mirrors the H3 subgraph's shape and gives
+  each hotspot relation an independent parquet cache. `hotspot_geogs` is the only one with a
+  `depends_on`: the hex cells come from the extract, not from `crime_counts`, so the counts and lookups
+  are independent roots.
+- *The hexes enter through the extract phase.* Reading `data_dir()/ho/hotspots.geoparquet` directly from
+  a transform step would have bypassed the architecture: as a `Dataset` it is RTree-indexed by
+  `index_geometry_tables`, staleness-tracked via `extract_inputs`, catalogued in `index.parquet`, synced
+  to blob, and — being `optional` — its absence makes every hotspot step a clean no-op, exactly like the
+  other licensed/manual layers. The path lives in `config/data_sources.json`, not in code.
+- *The hotspot population allocation places buildings with an **outer** join.* The OA shares are
+  normalised over whatever building set the query is given, so filtering to in-hex buildings first would
+  hand a hex the *whole* OA's population instead of its share. Buildings outside the grid therefore stay
+  in the window and are dropped afterwards (`WHERE spatial_id IS NOT NULL`). The H3 path is unaffected
+  (every building has a cell) and now shares the same `_allocation_sql`.
+- *Hotspot crime counts reuse the ONS geography count and its check.* The hexes are just another
+  non-overlapping polygon layer, so `ST_Contains` + the "counted in more than one area" upper bound
+  apply unchanged. Note the limitation: that bound is against the *whole* filtered input, and the
+  hotspot grid covers a small fraction of it, so it would only catch gross double-counting. The supplied
+  grid was checked for overlaps (none) when this was written.
+- *The H3 cells subquery now de-duplicates ids before materialising boundaries* (what
+  `retail_centre_lookups` already did) rather than `DISTINCT`-ing over geometry in the geography and
+  overlap lookups. Same result, less work — worth having given the recent OOM tuning.
+
+**Follow-ups**
+
+- The r8/r10 parquet already written under `data_dir()/transform` (and their blob copies) are now
+  orphaned — nothing rebuilds them, but `index.parquet` will keep cataloguing the local ones until they
+  are deleted by hand.
+- `building_counts` and `population_counts` each spatially join the buildings layer against the hexes;
+  if that proves slow at full scale, materialise one building → hex lookup and share it.
+- The `hits` letters (which offence classes flagged a hex) are carried through unparsed; if consumers
+  need per-class hotspot flags, split them into boolean columns in the extract.
+
 ## BEAHIV 202m hex grid extract (`beahiv_202`)
 
 **Why** — evaluation work in `safer-streets-eda` needs the BEAHIV 202m hex grid over England & Wales

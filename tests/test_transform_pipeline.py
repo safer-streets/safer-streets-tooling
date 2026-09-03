@@ -36,6 +36,12 @@ def test_pipeline_wires_data_dependencies():
     assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["geogs"].dependency_ids == ("geo_lookups", "overlap_lookups", "retail_centre_lookups")
 
+    # the hotspot hexes are their own grid (cells come from the extract, not from crime_counts), so
+    # only hotspot_geogs waits on anything
+    assert pipeline.nodes["hotspot_counts"].dependency_ids == ()
+    assert pipeline.nodes["hotspot_lookups"].dependency_ids == ()
+    assert pipeline.nodes["hotspot_geogs"].dependency_ids == ("hotspot_lookups",)
+
 
 def test_steps_run_respecting_dependency_order():
     """build_all runs crime_counts before every lookup, and every lookup before geogs."""
@@ -99,6 +105,21 @@ def _boundary_tables(con, cities=tuple(_CITIES)):
                 ST_Buffer(ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000) AS geom
             FROM (VALUES {values}) t(city, lat, lon)
         """)
+
+
+def _hotspot_table(con, cities=("leeds",), radius=1000):
+    """A hotspots table with one polygon per named city, standing in for the 350m hex grid: a partial
+    grid (only some cities) is the realistic case — the hexes cover only the flagged parts of the map."""
+    values = ", ".join(f"('{city}', {lat}, {lon})" for city, (lat, lon) in _CITIES.items() if city in cities)
+    con.execute(f"""
+        CREATE OR REPLACE TABLE hotspots AS
+        SELECT
+            city AS spatial_id,
+            'Test Constabulary' AS pfa,
+            'VRSK' AS hits,
+            ST_Buffer(ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true), {radius}) AS geom
+        FROM (VALUES {values}) t(city, lat, lon)
+    """)
 
 
 def test_crime_counts_conserves_filtered_input():
@@ -513,3 +534,157 @@ def test_road_intersection_counts_noop_without_road_intersections_table():
     con = duckdb.connect()
     road_intersection_counts.build(con, [9], True)  # no road_intersections table → must not raise
     assert road_intersection_counts.outputs(con, [9]) == []
+
+
+def test_crime_counts_hotspots_counts_per_hex():
+    """The hotspot hexes are counted like any other non-overlapping polygon layer: same
+    spatial_id / crime_type / month / count schema, same BTP + un-geolocated exclusions. Crimes outside
+    the (partial) hotspot grid simply don't appear."""
+    from safer_streets_tooling.transform import crime_counts
+
+    con = _connect()
+    _crime_data(con)
+    _hotspot_table(con, cities=("leeds", "manchester"))  # london is not a hotspot
+
+    crime_counts.build_hotspots(con, True)
+
+    per_hex = dict(
+        con.execute("SELECT spatial_id, SUM(count) FROM crime_counts_hotspots GROUP BY spatial_id").fetchall()
+    )
+    assert per_hex == {"leeds": 2, "manchester": 1}  # BTP, un-geolocated and the london crime excluded
+    assert crime_counts.hotspot_outputs(con) == ["crime_counts_hotspots"]
+
+
+def test_crime_counts_hotspots_raises_when_hexes_overlap():
+    """Overlapping hexes would count a crime twice — the same upper-bound check as the ONS geographies
+    raises rather than emitting inflated counts. (Like that check it is an upper bound on the *whole*
+    input, so it only catches double-counting once the grid covers enough of it.)"""
+    from safer_streets_tooling.transform import crime_counts
+
+    con = _connect()
+    _crime_data(con)
+    _hotspot_table(con, cities=tuple(_CITIES))
+    lat, lon = _CITIES["leeds"]
+    con.execute(f"""
+        INSERT INTO hotspots
+        SELECT 'leeds_overlap', 'Test Constabulary', 'V',
+            ST_Buffer(ST_Transform(ST_Point({lon}, {lat}), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000)
+    """)
+
+    with pytest.raises(ValueError, match="more than one area"):
+        crime_counts.build_hotspots(con, True)
+
+
+def test_point_layer_counts_per_hex():
+    """Street lights and road intersections are placed in a hex by their BNG point (no H3 detour), and
+    buildings by their footprint centroid — the point their h3_9_id also comes from."""
+    from safer_streets_tooling.transform import building_counts, road_intersection_counts, streetlight_counts
+
+    con = _connect()
+    _hotspot_table(con, cities=("leeds", "manchester"))
+    leeds, london = _CITIES["leeds"], _CITIES["london"]
+    con.execute(f"""
+        CREATE TABLE streetlights AS SELECT
+            ST_Transform(pt, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom, 'x' AS h3_9_id
+        FROM (VALUES (ST_Point({leeds[1]}, {leeds[0]})), (ST_Point({leeds[1]}, {leeds[0]})),
+                     (ST_Point({london[1]}, {london[0]}))) t(pt)
+    """)
+    con.execute("CREATE TABLE road_intersections AS SELECT geom FROM streetlights")
+    # footprints: a 50m buffer round each point, so the centroid is what decides the hex
+    con.execute("""
+        CREATE TABLE buildings AS
+        SELECT ST_Buffer(geom, 50) AS geom, 'Residential' AS map_simple_use, 'x' AS h3_9_id FROM streetlights
+    """)
+
+    streetlight_counts.build_hotspots(con, True)
+    building_counts.build_hotspots(con, True)
+    road_intersection_counts.build_hotspots(con, True)
+
+    assert dict(con.execute("SELECT spatial_id, streetlight_count FROM streetlight_counts_hotspots").fetchall()) == {
+        "leeds": 2
+    }  # the london light is outside the grid
+    assert dict(
+        con.execute("SELECT spatial_id, road_intersection_count FROM road_intersection_counts_hotspots").fetchall()
+    ) == {"leeds": 2}
+    assert con.execute(
+        "SELECT spatial_id, map_simple_use, building_count FROM building_counts_hotspots"
+    ).fetchall() == [("leeds", "Residential", 2)]
+
+
+def _hotspot_population_inputs(con):
+    """One OA whose three residential buildings straddle the grid: two inside the leeds hex, one not."""
+    leeds, london = _CITIES["leeds"], _CITIES["london"]
+    con.execute(f"""
+        CREATE TABLE buildings AS SELECT
+            oa21cd, map_simple_use, premise_area, gross_area, 'x' AS h3_9_id,
+            ST_Transform(pt, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
+        FROM (VALUES
+            ('OA1', 'Residential', 100.0, 100.0, ST_Point({leeds[1]}, {leeds[0]})),
+            ('OA1', 'Residential', 100.0, 100.0, ST_Point({leeds[1]}, {leeds[0]})),
+            ('OA1', 'Residential', 100.0, 100.0, ST_Point({london[1]}, {london[0]}))
+        ) t(oa21cd, map_simple_use, premise_area, gross_area, pt)
+    """)
+    con.execute("CREATE TABLE workplace_population AS SELECT 'OA1' AS spatial_id, 60 AS workplace_population")
+    con.execute(
+        "CREATE TABLE residential_population AS "
+        "SELECT 'OA1' AS spatial_id, 300 AS household_population, 0 AS communal_population"
+    )
+
+
+def test_population_counts_hotspots_allocates_only_the_hexes_share():
+    """The OA shares are worked out over *every* building, then the ones outside the grid are dropped —
+    so a hex holding two of an OA's three equal buildings gets two thirds of its population, not all of
+    it (which is what renormalising within the grid would give)."""
+    from safer_streets_tooling.transform import population_counts
+
+    con = _connect()
+    _hotspot_table(con)  # leeds only
+    _hotspot_population_inputs(con)
+
+    population_counts.build_hotspots(con, True)
+
+    rows = con.execute(
+        "SELECT spatial_id, residential_population, workplace_population FROM population_counts_hotspots"
+    ).fetchall()
+    assert len(rows) == 1
+    spatial_id, residential, workplace = rows[0]
+    assert spatial_id == "leeds"
+    assert residential == pytest.approx(200.0)  # 2 of the OA's 3 equal buildings, not the whole 300
+    assert workplace == pytest.approx(0.0)  # no Non Residential / Mixed Use building to take it
+    assert population_counts.hotspot_outputs(con) == ["population_counts_hotspots"]
+
+
+def test_hotspot_lookups_and_geogs_describe_each_hex():
+    """The hotspot lookups + geogs are the H3 ones on a different set of cells: each hex maps to the ONS
+    code it overlaps most, and hotspots_geogs carries that code plus the hex's own polygon area."""
+    from safer_streets_tooling.transform import hotspot_geogs, hotspot_lookups
+
+    con = _connect()
+    _boundary_tables(con)
+    _hotspot_table(con, cities=("leeds", "manchester"))
+
+    hotspot_lookups.build(con, [9], True)
+    hotspot_geogs.build(con, [9], True)
+
+    assert dict(con.execute("SELECT spatial_id, lad24cd FROM hotspots_lad24cd_lookup").fetchall()) == {
+        "leeds": "leeds",
+        "manchester": "manchester",
+    }
+    rows = dict(con.execute("SELECT spatial_id, cell_area FROM hotspots_geogs").fetchall())
+    assert rows.keys() == {"leeds", "manchester"}
+    for area in rows.values():
+        assert float(area) == pytest.approx(3.14e6, rel=0.01)  # the 1km-radius fixture polygon, in m²
+    assert set(hotspot_lookups.outputs(con, [9])) >= {f"hotspots_{key}_lookup" for key in GEOGRAPHY_MAPPINGS}
+    assert hotspot_geogs.outputs(con, [9]) == ["hotspots_geogs"]
+
+
+def test_hotspot_steps_are_noops_without_the_hotspots_table():
+    """Every hotspot step is a clean no-op (no relation, no output) when the optional extract is absent."""
+    from safer_streets_tooling.transform import hotspot_counts, hotspot_geogs, hotspot_lookups
+
+    con = _connect()
+    _crime_data(con)  # a source layer is present; only the hexes are missing
+
+    for step in (hotspot_counts, hotspot_lookups, hotspot_geogs):
+        step.build(con, [9], True)  # must not raise
+        assert step.outputs(con, [9]) == []
