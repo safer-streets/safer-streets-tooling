@@ -60,6 +60,16 @@ rebuild the whole per-cell family on them: `crime_counts_hotspots`,
 - *The H3 cells subquery now de-duplicates ids before materialising boundaries* (what
   `retail_centre_lookups` already did) rather than `DISTINCT`-ing over geometry in the geography and
   overlap lookups. Same result, less work — worth having given the recent OOM tuning.
+- *Fixed the `geogs` base geography while generalising it.* `_BASE_KEY` was `"lad24"`, which is not a
+  key of `GEOGRAPHY_MAPPINGS` (`"lad24cd"` is), so the `else next(iter(...))` fallback silently based
+  every `*_geogs` table on the **first** mapping — the E&W-only PFA layer — instead of the full-UK LAD
+  layer its docstring promised. Cells covered by a LAD but no PFA were dropped: `h3_9_geogs` gains
+  12,524 rows (222,397 → 234,921), all Northern Ireland, now carrying `lad24cd` with the E&W-only codes
+  NULL. `hotspots_geogs` is unchanged (the hex grid is E&W-only anyway). The fallback is gone —
+  a `_BASE_KEY` that isn't in the mapping now raises at import, the way the other registry
+  invariants do — and the column order changes (`lad24cd` now precedes `pfa23cd`; consumers select by
+  name). A regression test pins the promise: a Scotland/NI cell present only in the LAD lookup survives
+  with the other codes NULL.
 
 **Follow-ups**
 

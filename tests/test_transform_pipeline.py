@@ -688,3 +688,22 @@ def test_hotspot_steps_are_noops_without_the_hotspots_table():
     for step in (hotspot_counts, hotspot_lookups, hotspot_geogs):
         step.build(con, [9], True)  # must not raise
         assert step.outputs(con, [9]) == []
+
+
+def test_geogs_keeps_cells_outside_the_ew_only_layers():
+    """geogs is based on the full-UK LAD lookup, so a cell in Scotland or NI — covered by LAD but by
+    none of the E&W-only layers (PFA / MSOA / LSOA / OA) — is still a row, with those codes NULL.
+    Basing it on an E&W-only layer instead would silently drop the cell."""
+    con = _connect()
+    cell = con.execute("SELECT lower(hex(h3_latlng_to_cell(55.95, -3.19, 9)))").fetchone()[0]  # Edinburgh
+
+    con.execute(f"CREATE TABLE h3_9_lad24cd_lookup AS SELECT '{cell}' AS spatial_id, 'S12000036' AS lad24cd")
+    for key in GEOGRAPHY_MAPPINGS:
+        if key != "lad24cd":  # the E&W-only layers have no row for this cell
+            con.execute(f"CREATE TABLE h3_9_{key}_lookup AS SELECT '' AS spatial_id, '' AS {key} WHERE false")
+
+    geogs.build(con, [9], True)
+
+    assert con.execute("SELECT spatial_id, lad24cd, pfa23cd, oa21cd FROM h3_9_geogs").fetchall() == [
+        (cell, "S12000036", None, None)
+    ]

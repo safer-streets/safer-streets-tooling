@@ -19,8 +19,15 @@ from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 from safer_streets_tooling.transform.overlap_lookups import OVERLAP_FEATURES
 from safer_streets_tooling.transform.retail_centre_lookups import RETAIL_CENTRES_TABLE
 
-# the geography used as the base table for the *_geogs tables (broadest coverage: incl. NI/Scotland)
-_BASE_KEY = "lad24"
+# the geography used as the base table for the *_geogs tables (broadest coverage: incl. NI/Scotland).
+# Validated at import: a key that isn't in the mapping used to fall back to the first geography
+# (E&W-only PFA), silently narrowing every *_geogs table instead of failing.
+_BASE_KEY = "lad24cd"
+
+if _BASE_KEY not in GEOGRAPHY_MAPPINGS:
+    raise ValueError(
+        f"geogs base geography {_BASE_KEY!r} is not one of GEOGRAPHY_MAPPINGS: {', '.join(GEOGRAPHY_MAPPINGS)}"
+    )
 
 
 def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool) -> None:
@@ -39,7 +46,7 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
     while ``road_overlap_length`` (m) is the *total* road length within the cell. When retail centres are
     present, the nearest centre's ``retail_centre_id`` and ``retail_centre_distance`` are added.
     """
-    base = _BASE_KEY if _BASE_KEY in GEOGRAPHY_MAPPINGS else next(iter(GEOGRAPHY_MAPPINGS))
+    base = _BASE_KEY
     others = [key for key in GEOGRAPHY_MAPPINGS if key != base]
     present = [f for f in OVERLAP_FEATURES if table_exists(con, f.table)]
     has_retail = table_exists(con, RETAIL_CENTRES_TABLE)
