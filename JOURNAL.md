@@ -7,6 +7,56 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## BEAHIV 202m hex grid extract (`beahiv_202`)
+
+**Why** — evaluation work in `safer-streets-eda` needs the BEAHIV 202m hex grid over England & Wales
+as a first-class build output rather than a notebook cell rebuilt by hand each session. Consumers also
+need to know *how much* of a cell falls in each police force area, so counts on a boundary cell can be
+apportioned instead of double-counted.
+
+**What** — a new extract dataset, `beahiv_202`, derived from the `police_force_areas` boundaries (no
+download). One row per (cell, force): `spatial_id` (the beahiv cell id), `proportion` (share of the
+cell's area inside that force), `pfa24cd`, `pfa24nm`, `geom` (the hex outline). Roughly 1.5m rows over
+~1.46m distinct cells — a cell straddling a boundary appears once per force it touches, and its
+proportions sum to 1 (less on a coast, where the remainder is sea).
+
+**Design decisions**
+
+- *Extract, not transform.* The grid is a spatial unit, matching how the Home Office `hotspots` hex
+  grid is treated, even though it is derived rather than downloaded. Rejected putting it in
+  `transform/` — nothing aggregates onto it yet, and its inputs are boundaries, not counts.
+- *`proportion` computed in two stages.* Which cells straddle a boundary comes from one prepared
+  `contains_properly` pass (~0.1s for 100k cells). The alternative — a second
+  `polyfill(predicate="full")` diffed against the overlap set — gives the identical set but costs
+  another full polyfill pass (~10s for the largest force), and the cell polygons are needed anyway.
+- *Quadtree tiling before clipping.* Only the ~4% straddling cells need a real clip, but clipping each
+  against a force's whole outline is O(its vertices): 44s for Devon & Cornwall's 4,064 edge cells
+  against its 813k-vertex boundary. Subdividing the outline once into <=5k-vertex tiles and clipping
+  against an STRtree over those is 2.4s, and agrees with the direct clip to 1.3e-9 m². The tiles are
+  disjoint, so per-cell areas simply add.
+- *Recursion terminates on a progress check, not a depth cap.* Clipping adds vertices along the cut, so
+  a quadrant can come back no simpler than its parent (a box is 5 coordinates however finely it is
+  split; so is a cluster of near-coincident vertices). Such a part is taken as a leaf, which keeps the
+  vertex count strictly decreasing down every recursive path. A depth cap was rejected as it either
+  fires too early on real data or still explodes to 4^depth tiles.
+- *Rows inserted per force off an Arrow table.* A row-wise `executemany` over ~1.5m rows is far slower,
+  and cannot infer the parameter type `ST_GeomFromText` needs.
+- *Geometry is stored.* Every hex outline is recoverable from its cell id via `bh.cell_polygon`, so the
+  `geom` column is redundant and makes the parquet large. Kept for consistency with every other
+  geometry dataset (and so it is RTree-indexed on assemble); dropping it is a cheap change later.
+- *beahiv becomes a tooling dependency* (`../beahiv`, editable path source), alongside
+  `safer-streets-core`. It could not go in core — AGENTS.md forbids changes there.
+- *Optional.* Nothing depends on `beahiv_202` yet, so a failure should not abort the build.
+
+**Follow-ups**
+
+- Not wired into the transform phase: no `crime_counts_beahiv_202` or equivalent. If the grid becomes a
+  third spatial unit alongside H3 and the hotspot hexes, that is a separate change.
+- The extract is single-threaded per force and takes ~2 minutes for all 43; it holds one
+  `asyncio.to_thread` worker for that time but does not block other datasets.
+- `SIDE_LENGTH` / `ORIENTATION` are module constants. If other resolutions are wanted, they should
+  become dataset parameters (and the name pattern `beahiv_{side_length}` already anticipates that).
+
 ## Per-ONS-geography crime counts (`crime_counts_{key}`)
 
 **Why** — the H3 grids are the analysis surface, but consumers also need crime counts on the standard
