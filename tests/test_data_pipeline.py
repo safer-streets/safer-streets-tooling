@@ -744,7 +744,9 @@ def _write_wimd_ods(path: Path) -> None:
             "Housing": [1.0, 2.0, 3.0],
         }
     )
-    wimd.to_excel(path, sheet_name="Data", startrow=3, index=False, engine="odf")
+    # odfpy writes the .ods the WIMD loader reads back with engine="odf"; pandas' own annotation
+    # lists only the xlsx writers, hence the suppression.
+    wimd.to_excel(path, sheet_name="Data", startrow=3, index=False, engine="odf")  # ty:ignore[invalid-argument-type]
 
 
 def test_imd_england_downloads_when_missing(tmp_path, monkeypatch):
