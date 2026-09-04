@@ -10,6 +10,8 @@ dependencies = [
     # Runtime libraries (duckdb, geopandas, pandas, pyarrow, shapely, scipy, requests, tqdm, typer,
     # networkx, odfpy, overturemaps) come transitively from safer-streets-core, which declares them all.
     "safer-streets-core",
+    # the hex indexing library behind the beahiv_202 grid extract
+    "beahiv",
 ]
 
 [project.scripts]
@@ -17,6 +19,7 @@ data = "safer_streets_tooling.data_pipeline:main"
 
 [tool.uv.sources]
 safer-streets-core = { path = "../safer-streets-core", editable = true }
+beahiv = { path = "../beahiv", editable = true }
 
 [dependency-groups]
 dev = [

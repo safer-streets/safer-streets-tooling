@@ -74,6 +74,7 @@ flowchart LR
    oac_classification
    workplace_population
    residential_population
+   beahiv_202
 
    crime_counts_h3_8
    crime_counts_h3_9
@@ -116,6 +117,7 @@ flowchart LR
     buildings --> population_counts_h3_9
     workplace_population --> population_counts_h3_9
     residential_population --> population_counts_h3_9
+    police_force_areas --> beahiv_202
     crime_counts_h3_8 --> h3_geogs_lookup
     crime_counts_h3_9 --> h3_geogs_lookup
     crime_counts_h3_10 --> h3_geogs_lookup
@@ -177,7 +179,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
-    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population extract;
+    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv_202 extract;
     class crime_counts_h3_8,crime_counts_h3_9,crime_counts_h3_10,crime_counts_geog,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_8_geogs,h3_9_geogs,h3_10_geogs transform;
     class database load;
 ```
@@ -271,6 +273,7 @@ absence). Registry order respects `depends_on`:
 | `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
 | `residential_population` | [residential_population.py](src/safer_streets_tooling/extract/residential_population.py) | no | — |
+| `beahiv_202` | [beahiv_202.py](src/safer_streets_tooling/extract/beahiv_202.py) | no | `police_force_areas` (the grid is derived from the force boundaries) |
 
 ## Data-quality caveats
 
