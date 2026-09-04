@@ -20,6 +20,7 @@ from safer_streets_tooling.extract import (
     cctv,
     food_outlets,
     greenspace,
+    hotspots,
     imd,
     land_cover,
     naptan,
@@ -549,6 +550,43 @@ def test_retail_centres_extracts_and_reprojects(tmp_path, monkeypatch):
     con.close()
 
 
+# --- hotspot hexes ---
+
+
+def test_hotspots_missing_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(hotspots, "data_dir", lambda: tmp_path)
+    with pytest.raises(FileNotFoundError, match="hotspot hexes not found"):
+        hotspots.extract(_ctx(tmp_path))
+
+
+def test_hotspots_extracts_keyed_by_spatial_id(tmp_path, monkeypatch):
+    """The supplied GeoParquet is already BNG, so the extract only renames the hex id to spatial_id —
+    the key every hotspot relation (and its consumers) joins on."""
+    monkeypatch.setattr(hotspots, "data_dir", lambda: tmp_path)
+    source = tmp_path / data_source("hotspots")["path"]
+    source.parent.mkdir(parents=True, exist_ok=True)
+    gpd.GeoDataFrame(
+        {"hex_index": ["hex_1", "hex_2"], "pfa": ["West Yorkshire", "West Yorkshire"], "hits": ["VRSK", "VK"]},
+        geometry=[
+            Polygon([(420000, 430000), (420350, 430000), (420350, 430350), (420000, 430350)]),
+            Polygon([(430000, 440000), (430350, 440000), (430350, 440350), (430000, 440350)]),
+        ],
+        crs="EPSG:27700",
+    ).to_parquet(source)
+    _connect().close()  # skip early if extensions unavailable
+
+    hotspots.extract(_ctx(tmp_path))
+
+    con = _read_parquet(tmp_path / "hotspots.parquet")
+    assert con.execute("SELECT spatial_id, pfa, hits FROM t ORDER BY spatial_id").fetchall() == [
+        ("hex_1", "West Yorkshire", "VRSK"),
+        ("hex_2", "West Yorkshire", "VK"),
+    ]
+    # geometry carried through as BNG metres (no reprojection)
+    assert con.execute("SELECT MIN(ST_XMin(geom)) FROM t").fetchone()[0] == pytest.approx(420000)
+    con.close()
+
+
 # --- schools / isochrones ---
 
 _SQUARE_ROADS = """
@@ -706,7 +744,9 @@ def _write_wimd_ods(path: Path) -> None:
             "Housing": [1.0, 2.0, 3.0],
         }
     )
-    wimd.to_excel(path, sheet_name="Data", startrow=3, index=False, engine="odf")
+    # odfpy writes the .ods the WIMD loader reads back with engine="odf"; pandas' own annotation
+    # lists only the xlsx writers, hence the suppression.
+    wimd.to_excel(path, sheet_name="Data", startrow=3, index=False, engine="odf")  # ty:ignore[invalid-argument-type]
 
 
 def test_imd_england_downloads_when_missing(tmp_path, monkeypatch):

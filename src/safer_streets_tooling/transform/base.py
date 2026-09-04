@@ -1,10 +1,15 @@
-"""Step primitives shared by the H3 transform pipeline.
+"""Step primitives shared by the transform pipeline.
 
-A :class:`TransformStep` describes one H3 aggregation step: how to *build* its relations against a
+A :class:`TransformStep` describes one aggregation step: how to *build* its relations against a
 DuckDB connection, which relation names it *outputs* (so the pipeline can cache/skip it), and which
 other steps it ``depends_on``. The registry in ``safer_streets_tooling.transform`` lists the steps in
 dependency order and the pipeline wires them into an ``AsyncPipeline`` — mirroring how the extract
 phase turns ``Dataset`` entries into nodes.
+
+A :class:`SpatialUnit` describes the *grid* a step aggregates onto — an H3 resolution, or the Home
+Office hotspot hexes (``safer_streets_tooling.transform.hotspots``). Both are keyed by ``spatial_id``
+and their relation names differ only by the unit's ``key``, so the per-cell steps build the same SQL
+for either.
 
 The transforms operate on an open, writable DuckDB connection that already contains a ``crime_data``
 table (street-level crimes) and one boundary table per ONS geography (each with a ``spatial_id`` code
@@ -16,7 +21,48 @@ from dataclasses import dataclass, field
 
 import duckdb
 
-H3_RESOLUTIONS = [8, 9, 10]
+H3_RESOLUTIONS = [9]
+
+
+@dataclass(frozen=True)
+class SpatialUnit:
+    """One grid the per-cell transforms aggregate onto (an H3 resolution, or the hotspot hexes).
+
+    ``key`` is the infix every relation name carries — ``h3_9`` gives ``crime_counts_h3_9`` /
+    ``h3_9_geogs``, ``hotspots`` gives ``crime_counts_hotspots`` / ``hotspots_geogs``.
+
+    ``cells`` is a subquery yielding one row per unit: its ``spatial_id`` and ``cell_geom``, the unit's
+    boundary in BNG (the CRS every geometry the lookups intersect it with is in). ``area`` is the unit's
+    area in m² as an expression usable in ``geogs``, where the base relation is aliased ``base``;
+    ``area_join`` is any extra join that expression needs.
+    """
+
+    key: str
+    cells: str
+    area: str
+    area_join: str = ""
+
+
+def h3_unit(res: int) -> SpatialUnit:
+    """The H3 grid at resolution ``res``, whose cells are those carrying crimes.
+
+    The cells are taken from ``crime_counts_h3_{res}`` (so the grid is exactly the crime grid),
+    de-duplicated as ids before their boundary is materialised — much cheaper than a DISTINCT over the
+    polygons. ``h3_cell_area`` gives the cell's true (geodesic) area straight from the id.
+    """
+    return SpatialUnit(
+        key=f"h3_{res}",
+        cells=f"""
+            SELECT
+                spatial_id,
+                ST_Transform(
+                    ST_GeomFromText(h3_cell_to_boundary_wkt(spatial_id)),
+                    'EPSG:4326', 'EPSG:27700', always_xy := true
+                ) AS cell_geom
+            FROM (SELECT DISTINCT spatial_id FROM crime_counts_h3_{res})
+        """,
+        area="h3_cell_area(base.spatial_id, 'm^2')",
+    )
 
 
 @dataclass(frozen=True)

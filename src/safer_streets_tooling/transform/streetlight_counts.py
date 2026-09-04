@@ -1,7 +1,8 @@
-"""``streetlight_counts_h3_9`` — street lights counted per resolution-9 H3 cell."""
+"""``streetlight_counts_h3_9`` / ``streetlight_counts_hotspots`` — street lights counted per cell."""
 
 import duckdb
 
+from safer_streets_tooling.transform import hotspots
 from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
 
 STREETLIGHTS_TABLE = "streetlights"
@@ -32,6 +33,28 @@ def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]
     if not table_exists(con, STREETLIGHTS_TABLE):
         return []
     return [f"streetlight_counts_h3_{RESOLUTION}"]
+
+
+def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``streetlight_counts_hotspots`` counting street lights per hotspot hex.
+
+    The hexes don't line up with the H3 grid, so unlike the res-9 count this can't reuse the extract's
+    ``h3_9_id`` and places each light by its BNG point instead. No-op if either input is absent.
+    """
+    if not (table_exists(con, STREETLIGHTS_TABLE) and hotspots.available(con)):
+        return
+    con.execute(f"""
+        {create_clause("TABLE", "streetlight_counts_hotspots", replace=replace)} AS
+        SELECT spatial_id, COUNT(*) AS streetlight_count
+        FROM ({hotspots.placed_points(STREETLIGHTS_TABLE)})
+        GROUP BY spatial_id;
+    """)
+
+
+def hotspot_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    if not (table_exists(con, STREETLIGHTS_TABLE) and hotspots.available(con)):
+        return []
+    return ["streetlight_counts_hotspots"]
 
 
 STEP = TransformStep(

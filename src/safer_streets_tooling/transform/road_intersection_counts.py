@@ -1,7 +1,8 @@
-"""``road_intersection_counts_h3_{res}`` — road intersections counted per H3 cell."""
+"""``road_intersection_counts_h3_{res}`` / ``road_intersection_counts_hotspots`` — road intersections counted per cell."""
 
 import duckdb
 
+from safer_streets_tooling.transform import hotspots
 from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
 
 ROAD_INTERSECTIONS_TABLE = "road_intersections"
@@ -41,6 +42,29 @@ def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]
     if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
         return []
     return [f"road_intersection_counts_h3_{res}" for res in resolutions]
+
+
+def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``road_intersection_counts_hotspots`` counting road intersections per hotspot hex.
+
+    The intersection nodes are already BNG points, so unlike the H3 counts (which transform back to
+    WGS-84 to take a cell id) this is a plain point-in-polygon join. No restriction to the crime grid is
+    needed: the hotspot hexes *are* the grid. No-op if either input is absent.
+    """
+    if not (table_exists(con, ROAD_INTERSECTIONS_TABLE) and hotspots.available(con)):
+        return
+    con.execute(f"""
+        {create_clause("TABLE", "road_intersection_counts_hotspots", replace=replace)} AS
+        SELECT spatial_id, COUNT(*) AS road_intersection_count
+        FROM ({hotspots.placed_points(ROAD_INTERSECTIONS_TABLE)})
+        GROUP BY spatial_id;
+    """)
+
+
+def hotspot_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    if not (table_exists(con, ROAD_INTERSECTIONS_TABLE) and hotspots.available(con)):
+        return []
+    return ["road_intersection_counts_hotspots"]
 
 
 STEP = TransformStep(
