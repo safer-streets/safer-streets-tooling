@@ -36,7 +36,8 @@ pass ``--db-path`` to override.
 ``sync`` reconciles the extract + transform parquet (and the ``index.parquet`` catalogue) with the
 ``phase2`` Azure Blob Storage container (account URL from ``SAFER_STREETS_BLOB_STORAGE``); it is
 independent of the build phases. Most policies are upload-only; ``--update newer`` is a two-way sync
-(upload if local is newer, download if remote is).
+(upload if local is newer, download if remote is). The hotspot tables never take part in it — see
+``safer_streets_tooling.local_only``.
 
 Adding a dataset: write a module under ``safer_streets_tooling/extract/`` exposing a ``DATASET`` and
 register it in ``safer_streets_tooling/extract/__init__.py``. Then ``data extract --only <name>``
@@ -60,6 +61,7 @@ from safer_streets_core.utils import blob_storage_url, data_dir, database_path
 
 from safer_streets_tooling.extract import BY_NAME, DATASETS, ExtractContext, run_extract
 from safer_streets_tooling.index import INDEX_NAME, build_index
+from safer_streets_tooling.local_only import is_local_only
 from safer_streets_tooling.transform import STEPS, build_all
 from safer_streets_tooling.transform.base import H3_RESOLUTIONS
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
@@ -462,13 +464,15 @@ class _BlobStore(Protocol):
 
 def _local_parquet(root: Path) -> dict[str, Path]:
     """Local extract + transform parquet (+ the root ``index.parquet`` catalogue when present),
-    keyed by blob name (path relative to ``root``)."""
+    keyed by blob name (path relative to ``root``). Local-only tables are filtered out here rather than
+    at each call site, so every sync policy inherits the exclusion (see ``safer_streets_tooling.local_only``)."""
     files = {
         # as_posix() so the key matches the blob name (forward slashes) on Windows too, where
         # str(Path) would use backslashes and never match the remote "extract/..." names.
         parquet.relative_to(root).as_posix(): parquet
         for d in (extract_dir(), transform_dir())
         for parquet in d.glob("*.parquet")
+        if not is_local_only(parquet.name)
     }
     index = root / f"{INDEX_NAME}.parquet"
     if index.exists():
@@ -476,11 +480,37 @@ def _local_parquet(root: Path) -> dict[str, Path]:
     return files
 
 
+def _local_only_files(root: Path) -> list[str]:
+    """Blob names of the local parquet held back from the sync, so a run says what it withheld rather
+    than silently doing less than it claims."""
+    return sorted(
+        parquet.relative_to(root).as_posix()
+        for d in (extract_dir(), transform_dir())
+        for parquet in d.glob("*.parquet")
+        if is_local_only(parquet.name)
+    )
+
+
 def _remote_parquet(storage: _BlobStore) -> set[str]:
-    """Names of the parquet blobs under the extract/ + transform/ prefixes, plus the root index."""
+    """Names of the parquet blobs under the extract/ + transform/ prefixes, plus the root index.
+
+    Local-only names are dropped from *this* side too, not just the local one: under ``--update newer`` a
+    remote-only blob is downloaded, so leaving one visible would pull a local-only table back down (and, on
+    a later run, push it straight back up) purely because a previous sync had put it there."""
     names = {name for prefix in SYNC_PREFIXES for name in storage.list(startswith=prefix) if name.endswith(".parquet")}
     names.update(name for name in storage.list(startswith=INDEX_NAME) if name == f"{INDEX_NAME}.parquet")
-    return names
+    return {name for name in names if not is_local_only(name)}
+
+
+def _local_only_blobs(storage: _BlobStore) -> list[str]:
+    """Local-only blobs already in the container — left untouched by the sync (it never deletes), but
+    reported so they can be purged deliberately."""
+    return sorted(
+        name
+        for prefix in SYNC_PREFIXES
+        for name in storage.list(startswith=prefix)
+        if name.endswith(".parquet") and is_local_only(name)
+    )
 
 
 def _download(storage: _BlobStore, root: Path, name: str, src_mtime: float) -> None:
@@ -566,6 +596,10 @@ def sync(
     - ``newer``     two-way: upload if local is newer, download if remote is newer
     - ``different`` upload-only; overwrite if the md5 sums differ
     - ``force``     upload-only; always overwrite
+
+    Local-only tables — the hotspot hexes and every relation built on them, see
+    ``safer_streets_tooling.local_only`` — are excluded under every policy, in both directions, and any
+    already sitting in the container is reported at the end (sync itself never deletes).
     """
     account_url = blob_storage_url()
     storage = AzureBlobStorage(account_url, AZURE_CONTAINER, readonly=False)
@@ -573,12 +607,20 @@ def sync(
 
     arrow = "↔" if update is UpdatePolicy.NEWER else "→"
     print(f"\n=== Syncing parquet {arrow} {account_url}/{AZURE_CONTAINER} [update={update}] ===\n")
+    for name in _local_only_files(root):
+        print(f"    {name}: held back (local-only)")
     if update is UpdatePolicy.NEWER:
         uploaded, downloaded, skipped = _sync_newer(storage, root)
         print(f"\n=== Done. {uploaded} uploaded, {downloaded} downloaded, {skipped} skipped → {AZURE_CONTAINER} ===")
     else:
         uploaded, skipped = _sync_upload(storage, root, update)
         print(f"\n=== Done. {uploaded} uploaded, {skipped} skipped → {AZURE_CONTAINER} ===")
+
+    # sync never deletes, so a blob uploaded before the exclusion existed would sit there unnoticed.
+    if stale := _local_only_blobs(storage):
+        print(f"\n!!! {len(stale)} local-only blob(s) already in {AZURE_CONTAINER} — remove them:")
+        for name in stale:
+            print(f"      {name}")
 
 
 def main() -> None:

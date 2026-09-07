@@ -35,7 +35,7 @@ def extract(ctx: ExtractContext) -> None:
     try:
         con.execute(f"""
             CREATE TABLE hotspots AS
-            SELECT hex_index AS spatial_id, pfa, hits, geometry AS geom
+            SELECT hex_index AS spatial_id, pfa, geometry AS geom
             FROM read_parquet('{path.as_posix()}');
         """)
         row_count = con.execute("SELECT COUNT(*) FROM hotspots").fetchone()[0]  # ty:ignore[not-subscriptable]
@@ -49,5 +49,5 @@ DATASET = Dataset(
     name="hotspots",
     table="hotspots",
     extract=extract,
-    description="Home Office hotspot hexes (350m grid), keyed by spatial_id, with their force area and offence-class hits.",
+    description="Home Office hotspot hexes (350m grid), keyed by spatial_id, with their force area.",
 )

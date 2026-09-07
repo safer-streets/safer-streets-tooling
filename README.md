@@ -361,12 +361,21 @@ cell is an id lookup, in a hex a point-in-polygon join — so each counts module
 Every command that (re)builds parquet (`extract` / `transform` / `assemble` / `build`) rewrites
 `data_dir()/index.parquet` (also available standalone as `data index`): one row per parquet
 under `extract/` and `transform/`, with its `phase`, `name`, a one-line `description`, its
-`n_rows` / `n_columns` / `columns` schema summary, a `has_geometry` flag and `last_modified` — the
+`n_rows` / `n_columns` / `columns` schema summary, a `has_geometry` flag, a `local_only` flag and
+`last_modified` — the
 parquet's mtime (UTC), i.e. when the table was last built (`sync` preserves it across machines). The
 descriptions come from
 the registries — `Dataset.description` (extract) and `TransformStep.description` (transform) — which are
-**required** (validated at import), so every table in the catalogue is described. Keep those fields
-current when a table changes and the catalogue follows.
+**required** (validated at import), so every shareable table in the catalogue is described. Keep those
+fields current when a table changes and the catalogue follows.
+
+`local_only` is `is_local_only(name)` — the same predicate `sync` filters on, so the flag cannot drift
+from what actually reaches the container. The catalogue covers every table that was built and the flag
+says which of them exist on this machine only, so a consumer reading the index from the blob container
+can tell a table it will not find there from one that was never built (see
+[What never syncs](#what-never-syncs)). A flagged row's `description` is left **blank**: the catalogue
+travels and the description is the one field that says what the table *is*, so the row records only
+that the table exists and is not in the container.
 
 ## Key modules
 
@@ -376,6 +385,7 @@ Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
 | ---- | ---- |
 | [data_pipeline.py](src/safer_streets_tooling/data_pipeline.py) | `data` CLI: `extract` / `transform` / `load` / `assemble` / `build` / `index` / `sync` commands |
 | [index.py](src/safer_streets_tooling/index.py) | `build_index`: writes `index.parquet` cataloguing every extract + transform table (name, description, schema) |
+| [local_only.py](src/safer_streets_tooling/local_only.py) | `is_local_only`: which tables stay local — the hotspot family, excluded from `sync` and flagged in `index.parquet` |
 | [extract/pipeline.py](src/safer_streets_tooling/extract/pipeline.py) | Concurrent extract phase: `DatasetExtractNode`, `build_pipeline`, `run_extract` |
 | [transform/pipeline.py](src/safer_streets_tooling/transform/pipeline.py) | Concurrent transform phase: `TransformNode`, `build_pipeline`, `build_all` |
 | [async_pipeline.py](src/safer_streets_tooling/async_pipeline.py) | DAG runner over `AsyncNode`s (`graphlib.TopologicalSorter` + `asyncio.gather`) |
@@ -428,6 +438,25 @@ always uploaded; for one that exists on both sides `--update` decides:
   remote's so repeated runs don't ping-pong.
 - `different` — upload-only; overwrite if the md5 sums differ
 - `force` — upload-only; always overwrite
+
+### What never syncs
+
+The Home Office hotspot hexes are supplied in confidence, so neither they nor anything derived from
+them may reach the shared container. [local_only.py](src/safer_streets_tooling/local_only.py) holds that
+rule as a set of spatial-unit keys (currently just `hotspots`) and matches any table named after one —
+the bare key (`hotspots`), the `hotspots_*` prefix (`hotspots_geogs`, `hotspots_lad24cd_lookup`, …) and
+the `*_hotspots` suffix (`crime_counts_hotspots`, `building_counts_hotspots`, …). Because the whole
+family is named off the unit key, a hotspot step added later is excluded without editing anything.
+
+The exclusion applies under **every** `--update` policy and in **both** directions: a matching local
+parquet is never uploaded, and a matching blob is never downloaded (so a copy from before this rule
+existed cannot be pulled back onto a machine, nor re-uploaded from there). Each run prints what it held
+back. `index.parquet` still catalogues these tables, marked `local_only` and with a blank `description`
+— the catalogue does travel, so their names, row counts and column names do reach the container even
+though no row data and no description ever does.
+
+`sync` never deletes, so blobs uploaded before the exclusion existed are still in the container; a run
+lists any it finds under a `local-only blob(s) already in phase2` warning, to be removed by hand.
 
 ## Adding a dataset
 

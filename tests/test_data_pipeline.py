@@ -31,6 +31,7 @@ from safer_streets_tooling.extract import (
     streetlights,
 )
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
+from safer_streets_tooling.local_only import is_local_only
 from safer_streets_tooling.transform import TransformStep
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 
@@ -566,7 +567,7 @@ def test_hotspots_extracts_keyed_by_spatial_id(tmp_path, monkeypatch):
     source = tmp_path / data_source("hotspots")["path"]
     source.parent.mkdir(parents=True, exist_ok=True)
     gpd.GeoDataFrame(
-        {"hex_index": ["hex_1", "hex_2"], "pfa": ["West Yorkshire", "West Yorkshire"], "hits": ["VRSK", "VK"]},
+        {"hex_index": ["hex_1", "hex_2"], "pfa": ["West Yorkshire", "West Yorkshire"]},
         geometry=[
             Polygon([(420000, 430000), (420350, 430000), (420350, 430350), (420000, 430350)]),
             Polygon([(430000, 440000), (430350, 440000), (430350, 440350), (430000, 440350)]),
@@ -578,9 +579,9 @@ def test_hotspots_extracts_keyed_by_spatial_id(tmp_path, monkeypatch):
     hotspots.extract(_ctx(tmp_path))
 
     con = _read_parquet(tmp_path / "hotspots.parquet")
-    assert con.execute("SELECT spatial_id, pfa, hits FROM t ORDER BY spatial_id").fetchall() == [
-        ("hex_1", "West Yorkshire", "VRSK"),
-        ("hex_2", "West Yorkshire", "VK"),
+    assert con.execute("SELECT spatial_id, pfa FROM t ORDER BY spatial_id").fetchall() == [
+        ("hex_1", "West Yorkshire"),
+        ("hex_2", "West Yorkshire"),
     ]
     # geometry carried through as BNG metres (no reprojection)
     assert con.execute("SELECT MIN(ST_XMin(geom)) FROM t").fetchone()[0] == pytest.approx(420000)
@@ -1147,6 +1148,69 @@ def test_sync_includes_the_root_index_parquet(monkeypatch, tmp_path):
     up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
     assert (up, down, skipped) == (0, 1, 0)
     assert (tmp_path / "index.parquet").read_bytes() == b"new-remote-index"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "extract/hotspots.parquet",  # the hexes themselves
+        "transform/hotspots_geogs.parquet",  # a relation keyed on the unit
+        "transform/hotspots_lad24cd_lookup.parquet",
+        "transform/crime_counts_hotspots.parquet",  # counts aggregated onto the unit
+        "transform/streetlight_counts_hotspots.parquet",
+    ],
+)
+def test_local_only_names_are_recognised(name):
+    assert is_local_only(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["extract/crime_data.parquet", "transform/h3_9_geogs.parquet", "transform/crime_counts_h3_9.parquet"],
+)
+def test_shareable_names_are_not_local_only(name):
+    assert not is_local_only(name)
+
+
+def test_sync_never_uploads_local_only_parquet(monkeypatch, tmp_path):
+    """The hotspot family stays local under every policy, alongside an ordinary table that does upload."""
+    edir, tdir = _sync_dirs(monkeypatch, tmp_path)
+    _write_local(edir / "hotspots.parquet", b"hexes", mtime=5000.0)
+    _write_local(tdir / "crime_counts_hotspots.parquet", b"counts", mtime=5000.0)
+    _write_local(tdir / "hotspots_geogs.parquet", b"geogs", mtime=5000.0)
+    _write_local(tdir / "crime_counts_h3_9.parquet", b"h3", mtime=5000.0)
+
+    storage = _FakeBlobStorage()
+    up, skipped = data_pipeline._sync_upload(storage, tmp_path, UpdatePolicy.IGNORE)
+    assert (up, skipped) == (1, 0)  # the hotspot three were never even considered
+    assert set(storage.blobs) == {"transform/crime_counts_h3_9.parquet"}
+
+    storage = _FakeBlobStorage()
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (1, 0, 0)
+    assert set(storage.blobs) == {"transform/crime_counts_h3_9.parquet"}
+
+
+def test_sync_newer_leaves_a_pre_existing_local_only_blob_alone(monkeypatch, tmp_path):
+    """A blob from before the exclusion is neither downloaded (it would land back on disk) nor re-uploaded
+    — and no local copy is created for it."""
+    edir, _ = _sync_dirs(monkeypatch, tmp_path)
+    storage = _FakeBlobStorage()
+    storage.put("extract/hotspots.parquet", b"remote-hexes", ts=6000.0)
+
+    up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
+    assert (up, down, skipped) == (0, 0, 0)
+    assert not (edir / "hotspots.parquet").exists()
+    assert storage.blobs["extract/hotspots.parquet"][0] == b"remote-hexes"  # untouched, not deleted
+    assert data_pipeline._local_only_blobs(storage) == ["extract/hotspots.parquet"]
+
+
+def test_sync_reports_what_it_held_back(monkeypatch, tmp_path):
+    edir, tdir = _sync_dirs(monkeypatch, tmp_path)
+    _write_local(edir / "hotspots.parquet", b"hexes", mtime=5000.0)
+    _write_local(tdir / "crime_counts_h3_9.parquet", b"h3", mtime=5000.0)
+
+    assert data_pipeline._local_only_files(tmp_path) == ["extract/hotspots.parquet"]
 
 
 def test_sync_remote_only_index_is_downloaded(monkeypatch, tmp_path):

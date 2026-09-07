@@ -46,6 +46,7 @@ def test_build_index_rows_and_schema(dirs, tmp_path):
         "n_rows",
         "n_columns",
         "has_geometry",
+        "local_only",
         "columns",
         "last_modified",
     ]
@@ -92,3 +93,33 @@ def test_descriptions_come_from_the_registries(dirs, tmp_path):
     assert idx.loc["poi", "description"] == poi_desc
     # streetlight_counts_h3_9 is only described because its source (streetlights) is present as a view
     assert idx.loc["streetlight_counts_h3_9", "description"].strip()
+
+
+def test_local_only_flags_the_hotspot_family(dirs, tmp_path):
+    """The hotspot tables are catalogued like any other; the flag is what marks them as not synced."""
+    edir, tdir = dirs
+    _write(edir / "hotspots.parquet", spatial_id=["hex_1"], pfa=["West Yorkshire"], geom=[b"\x00"])
+    _write(tdir / "hotspots_geogs.parquet", spatial_id=["hex_1"], lad24cd=["E08000035"])
+    _write(tdir / "crime_counts_hotspots.parquet", spatial_id=["hex_1"], count=[3])
+    out = tmp_path / "index.parquet"
+
+    count = build_index(edir, tdir, out, resolutions=[9])
+    assert count == 7  # the four shareable tables plus the three hotspot ones
+
+    idx = pd.read_parquet(out).set_index("name")
+    flagged = set(idx.index[idx["local_only"]])
+    assert flagged == {"hotspots", "hotspots_geogs", "crime_counts_hotspots"}
+    # blank descriptions: the catalogue is synced, so a flagged row says only that the table exists
+    assert (idx.loc[sorted(flagged), "description"] == "").all()
+    # ...while the registry description that was suppressed is genuinely non-empty
+    assert next(ds.description for ds in DATASETS if ds.name == "hotspots").strip()
+
+
+def test_local_only_is_false_for_shareable_tables(dirs, tmp_path):
+    edir, tdir = dirs
+    out = tmp_path / "index.parquet"
+    build_index(edir, tdir, out, resolutions=[9])
+    idx = pd.read_parquet(out).set_index("name")
+
+    assert not idx["local_only"].any()
+    assert idx["local_only"].dtype == bool  # a plain flag, never a nullable/object column
