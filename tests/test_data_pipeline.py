@@ -696,7 +696,7 @@ def test_schools_builds_isochrones(tmp_path, monkeypatch):
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
     assert {"urn", "geom", "isochrone", "isochrone_area_km2"} <= cols
     # H3 cell ids (resolutions 8-11) derived from the school location
-    assert {"h3_8_id", "h3_9_id", "h3_10_id", "h3_11_id"} <= cols
+    assert {"h3_9_id"} <= cols
     assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
     # the closed school (status 4) is filtered out
     assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1

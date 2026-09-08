@@ -123,10 +123,7 @@ def extract(ctx: ExtractContext) -> None:
             )
             SELECT
                 * EXCLUDE pt,
-                lower(hex(h3_latlng_to_cell(ST_Y(pt), ST_X(pt), 8)))  AS h3_8_id,
                 lower(hex(h3_latlng_to_cell(ST_Y(pt), ST_X(pt), 9)))  AS h3_9_id,
-                lower(hex(h3_latlng_to_cell(ST_Y(pt), ST_X(pt), 10))) AS h3_10_id,
-                lower(hex(h3_latlng_to_cell(ST_Y(pt), ST_X(pt), 11))) AS h3_11_id
             FROM pts;
         """)
 
