@@ -1062,6 +1062,13 @@ class _FakeBlobStorage:
     def needs_update(self, root_path: Path, filename: str, policy: UpdatePolicy) -> bool:
         return filename not in self.blobs  # only the IGNORE branch is exercised here
 
+    # satisfy the protocol
+    def delete_file(self, filename: str) -> bool:
+        raise NotImplementedError()
+
+    def write_buffer(self, data: BytesIO, name: str):
+        raise NotImplementedError()
+
 
 def _sync_dirs(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
     edir, tdir = tmp_path / "extract", tmp_path / "transform"

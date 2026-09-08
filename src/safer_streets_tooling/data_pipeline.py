@@ -45,10 +45,7 @@ and ``data assemble``.
 """
 
 import os
-from collections.abc import Iterable
-from io import BytesIO
 from pathlib import Path
-from typing import Any, Protocol
 
 import typer
 from safer_streets_core.database import (
@@ -56,7 +53,7 @@ from safer_streets_core.database import (
     index_geometry_tables,
     read_geoparquet,
 )
-from safer_streets_core.file_storage import AzureBlobStorage, UpdatePolicy, blob_mtime
+from safer_streets_core.file_storage import AzureBlobStorage, DataSource, UpdatePolicy, blob_mtime
 from safer_streets_core.utils import blob_storage_url, data_dir, database_path
 
 from safer_streets_tooling.extract import BY_NAME, DATASETS, ExtractContext, run_extract
@@ -451,17 +448,6 @@ SYNC_PREFIXES: tuple[str, ...] = ("extract/", "transform/")
 _MTIME_TOLERANCE_S = 5.0
 
 
-class _BlobStore(Protocol):
-    """The blob-storage surface the sync helpers use (satisfied structurally by ``AzureBlobStorage``);
-    typing against it keeps the reconcile logic testable with an in-memory fake."""
-
-    def list(self, startswith: str | None = None) -> Iterable[str]: ...
-    def read(self, filename: str) -> BytesIO: ...
-    def metadata(self, filename: str) -> Any: ...
-    def write_file(self, root_path: Path, filename: str, *, overwrite: bool = False) -> bool: ...
-    def needs_update(self, root_path: Path, filename: str, policy: UpdatePolicy) -> bool: ...
-
-
 def _local_parquet(root: Path) -> dict[str, Path]:
     """Local extract + transform parquet (+ the root ``index.parquet`` catalogue when present),
     keyed by blob name (path relative to ``root``). Local-only tables are filtered out here rather than
@@ -491,7 +477,7 @@ def _local_only_files(root: Path) -> list[str]:
     )
 
 
-def _remote_parquet(storage: _BlobStore) -> set[str]:
+def _remote_parquet(storage: DataSource) -> set[str]:
     """Names of the parquet blobs under the extract/ + transform/ prefixes, plus the root index.
 
     Local-only names are dropped from *this* side too, not just the local one: under ``--update newer`` a
@@ -502,7 +488,7 @@ def _remote_parquet(storage: _BlobStore) -> set[str]:
     return {name for name in names if not is_local_only(name)}
 
 
-def _local_only_blobs(storage: _BlobStore) -> list[str]:
+def _local_only_blobs(storage: DataSource) -> list[str]:
     """Local-only blobs already in the container — left untouched by the sync (it never deletes), but
     reported so they can be purged deliberately."""
     return sorted(
@@ -513,7 +499,7 @@ def _local_only_blobs(storage: _BlobStore) -> list[str]:
     )
 
 
-def _download(storage: _BlobStore, root: Path, name: str, src_mtime: float) -> None:
+def _download(storage: DataSource, root: Path, name: str, src_mtime: float) -> None:
     """Write the blob ``name`` to ``root / name`` and stamp it with the blob's recorded source mtime
     (so a subsequent ``newer`` sync sees the two as in-sync rather than re-transferring)."""
     dest = root / name
@@ -522,13 +508,13 @@ def _download(storage: _BlobStore, root: Path, name: str, src_mtime: float) -> N
     os.utime(dest, (src_mtime, src_mtime))
 
 
-def _upload(storage: _BlobStore, root: Path, name: str) -> None:
+def _upload(storage: DataSource, root: Path, name: str) -> None:
     """Upload ``root / name``. ``write_file`` records the local mtime as the blob's ``src_mtime``
     metadata, so the local file and blob already agree on modification time — no re-stamping needed."""
     storage.write_file(root, name, overwrite=True)
 
 
-def _sync_newer(storage: _BlobStore, root: Path) -> tuple[int, int, int]:
+def _sync_newer(storage: DataSource, root: Path) -> tuple[int, int, int]:
     """Two-way reconcile of the extract + transform parquet by modification time: upload local-only
     and locally-newer files, download remote-only and remotely-newer ones. Returns (up, down, skipped)."""
     local = _local_parquet(root)
@@ -560,7 +546,7 @@ def _sync_newer(storage: _BlobStore, root: Path) -> tuple[int, int, int]:
     return uploaded, downloaded, skipped
 
 
-def _sync_upload(storage: _BlobStore, root: Path, update: UpdatePolicy) -> tuple[int, int]:
+def _sync_upload(storage: DataSource, root: Path, update: UpdatePolicy) -> tuple[int, int]:
     """Upload local parquet, deferring the overwrite-or-skip decision for existing blobs to ``update``.
     Returns (uploaded, skipped)."""
     uploaded = skipped = 0
