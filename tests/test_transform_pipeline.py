@@ -163,7 +163,7 @@ def test_crime_counts_counts_per_ons_geography():
         )
         assert per_area == {"leeds": 2, "manchester": 1, "london": 1}  # BTP + un-geolocated excluded
     row = con.execute(
-        "SELECT count FROM crime_counts_pfa23cd "
+        "SELECT count FROM crime_counts_pfa24cd "
         "WHERE spatial_id = 'leeds' AND crime_type = 'Burglary' AND month = '2024-01'"
     ).fetchone()
     assert row == (2,)
@@ -710,6 +710,6 @@ def test_geogs_keeps_cells_outside_the_ew_only_layers():
 
     geogs.build(con, [9], True)
 
-    assert con.execute("SELECT spatial_id, lad24cd, pfa23cd, oa21cd FROM h3_9_geogs").fetchall() == [
+    assert con.execute("SELECT spatial_id, lad24cd, pfa24cd, oa21cd FROM h3_9_geogs").fetchall() == [
         (cell, "S12000036", None, None)
     ]

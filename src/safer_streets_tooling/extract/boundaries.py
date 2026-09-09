@@ -43,7 +43,7 @@ def _make_extract(layer_key: str, table: str):
 # one-line description per boundary table, surfaced in the index.parquet catalogue. Any table without an
 # entry falls back to a generic phrasing.
 _DESCRIPTIONS = {
-    "police_force_areas": "ONS Police Force Area boundaries (E&W), id renamed to spatial_id (pfa23cd).",
+    "police_force_areas": "ONS Police Force Area boundaries (E&W), id renamed to spatial_id (pfa24cd).",
     "local_authority_districts": "ONS Local Authority District boundaries (UK), spatial_id = lad24cd.",
     "msoa_2021": "ONS 2021 MSOA boundaries (E&W), spatial_id = msoa21cd.",
     "lsoa_2021": "ONS 2021 LSOA boundaries (E&W), spatial_id = lsoa21cd.",

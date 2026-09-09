@@ -7,7 +7,7 @@ from safer_streets_tooling.transform.base import SpatialUnit, TransformStep, cre
 # short code -> boundary table name (the tables created by ons_boundaries.load_all).
 # lad24 is listed for full-UK coverage; it is used as the base for the *_geogs tables.
 GEOGRAPHY_MAPPINGS = {
-    "pfa23cd": "police_force_areas",
+    "pfa24cd": "police_force_areas",
     "lad24cd": "local_authority_districts",
     "msoa21cd": "msoa_2021",
     "lsoa21cd": "lsoa_2021",

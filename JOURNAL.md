@@ -24,6 +24,16 @@ trio: `crime_counts_beahiv_202`, `beahiv_202_{key}_lookup`, `beahiv_202_{name}_l
 and `_expected` become the public `CRIME_FILTER` / `expected_crimes`, so both count paths share one
 definition of "a countable crime" rather than duplicating it.
 
+Also folded in: **`pfa23cd` → `pfa24cd`**. The previous entry's PR switched the PFA layer from Dec 2023
+BGC to Dec 2024 BFE (`PFA23CD` → `PFA24CD` in `config/data_sources.json`) but left the
+`GEOGRAPHY_MAPPINGS` key — and the `boundaries` description — naming the 2023 vintage, so `pfa23cd` has
+been labelling 2024 codes ever since. Unrelated to this grid, but this change *mints* new relations
+from that key (`beahiv_202_pfa23cd_lookup`, `beahiv_202_geogs.pfa23cd`), and shipping brand-new tables
+already carrying the wrong vintage — then renaming them twice — is worse than correcting it here. It
+renames `crime_counts_pfa23cd`, `h3_9_pfa23cd_lookup`, `hotspots_pfa23cd_lookup` and the `pfa23cd`
+column of all three `*_geogs`, so **consumers joining on `pfa23cd` must be updated** and the
+correspondingly-named parquet in the data dir are orphaned.
+
 Verified on the full extract (17,812,176 rows, `threads = 4` as the transform phase actually runs):
 
 | | BEAHIV 202 m | H3 res 9 |
