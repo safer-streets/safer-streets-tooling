@@ -18,19 +18,19 @@ from safer_streets_tooling.transform import (
     road_intersection_counts,
     streetlight_counts,
 )
-from safer_streets_tooling.transform.base import TransformStep
+from safer_streets_tooling.transform.base import Grid, TransformStep
 
 # the modules whose counts have a hotspot-hex equivalent; each exposes build_hotspots / hotspot_outputs
 _MODULES = (crime_counts, streetlight_counts, building_counts, population_counts, road_intersection_counts)
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    """Build every hotspot count. ``resolutions`` is ignored — the hexes are their own grid."""
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Build every hotspot count."""
     for module in _MODULES:
         module.build_hotspots(con, replace)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     return [name for module in _MODULES for name in module.hotspot_outputs(con)]
 
 
@@ -38,6 +38,7 @@ STEP = TransformStep(
     name="hotspot_counts",
     build=build,
     outputs=outputs,
+    grid=Grid.HO,
     description="Crime / street light / building / population / road-intersection counts per Home Office hotspot hex, keyed by spatial_id.",
     extract_inputs=(
         "hotspots",

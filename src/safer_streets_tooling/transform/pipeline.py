@@ -22,7 +22,10 @@ from safer_streets_core.database import read_geoparquet, write_geoparquet
 from safer_streets_tooling.async_node import AsyncNode
 from safer_streets_tooling.async_pipeline import AsyncPipeline
 from safer_streets_tooling.result import Ok, Result
-from safer_streets_tooling.transform.base import H3_RESOLUTIONS, TransformStep
+from safer_streets_tooling.transform.base import Grid, TransformStep
+
+# every grid family, the default for a build that doesn't narrow to a subset (`data transform --grid`)
+ALL_GRIDS: tuple[Grid, ...] = tuple(Grid)
 
 
 class TransformNode(AsyncNode[None, None]):
@@ -47,7 +50,6 @@ class TransformNode(AsyncNode[None, None]):
         step: TransformStep,
         upstream: Sequence[TransformStep],
         con: duckdb.DuckDBPyConnection,
-        resolutions: list[int],
         edir: Path | None,
         tdir: Path | None,
         *,
@@ -57,7 +59,6 @@ class TransformNode(AsyncNode[None, None]):
         self._step = step
         self._upstream = upstream
         self._con = con
-        self._resolutions = resolutions
         self._edir = edir
         self._tdir = tdir
         self._replace = replace
@@ -75,7 +76,7 @@ class TransformNode(AsyncNode[None, None]):
             paths += [self._edir / f"{name}.parquet" for name in self._step.extract_inputs]
         if self._tdir is not None:
             for up in self._upstream:
-                paths += [self._tdir / f"{out}.parquet" for out in up.outputs(cur, self._resolutions)]
+                paths += [self._tdir / f"{out}.parquet" for out in up.outputs(cur)]
         return [p for p in paths if p.exists()]
 
     def _is_fresh(self, output_paths: list[Path], input_paths: list[Path]) -> bool:
@@ -88,7 +89,7 @@ class TransformNode(AsyncNode[None, None]):
 
     def _run(self) -> None:
         cur = self._con.cursor()
-        names = self._step.outputs(cur, self._resolutions) if self._tdir is not None else []
+        names = self._step.outputs(cur) if self._tdir is not None else []
         paths = {n: self._tdir / f"{n}.parquet" for n in names} if self._tdir is not None else {}
 
         if names and not self._rebuild and self._is_fresh(list(paths.values()), self._input_paths(cur)):
@@ -97,7 +98,7 @@ class TransformNode(AsyncNode[None, None]):
             print(f"[transform] {self._step.name}: cached output up to date ({len(names)} relation(s))")
             return
 
-        self._step.build(cur, self._resolutions, self._replace)
+        self._step.build(cur, self._replace)
         for name, path in paths.items():
             write_geoparquet(cur, f'SELECT * FROM "{name}"', path)
         if names:
@@ -108,7 +109,7 @@ def build_pipeline(
     steps: Sequence[TransformStep],
     con: duckdb.DuckDBPyConnection,
     *,
-    resolutions: list[int] = H3_RESOLUTIONS,
+    grids: Sequence[Grid] = ALL_GRIDS,
     replace: bool = True,
     rebuild: bool = False,
     edir: Path | None = None,
@@ -117,17 +118,23 @@ def build_pipeline(
 ) -> AsyncPipeline:
     """Wire ``steps`` into an :class:`AsyncPipeline`; ``depends_on`` become the graph edges.
 
+    ``grids`` selects which grid families take part (see :class:`~.base.Grid`); a step whose ``grid`` is
+    not listed is left out of the pipeline entirely. Each family is self-contained, so no edge ever
+    crosses between them — and an edge to a step outside the set is dropped anyway, as with an
+    ``--only`` subset in the extract phase.
+
     When ``tdir`` is given, each node caches its outputs there and reuses them only while they are newer
     than the step's inputs (``extract_inputs`` parquet under ``edir`` + the upstream steps' outputs under
     ``tdir``); a stale or missing output is rebuilt, unless ``rebuild`` forces every step. With
     ``tdir=None`` the relations are built in ``con`` only (no caching)."""
-    by_name = {step.name: step for step in steps}
+    selected = [step for step in steps if step.grid in grids]
+    by_name = {step.name: step for step in selected}
     pipeline = AsyncPipeline(verbose=verbose)
-    for step in steps:
+    for step in selected:
         upstream = [by_name[dep] for dep in step.depends_on if dep in by_name]
         pipeline.add(
             step.name,
-            TransformNode(step, upstream, con, resolutions, edir, tdir, replace=replace, rebuild=rebuild),
+            TransformNode(step, upstream, con, edir, tdir, replace=replace, rebuild=rebuild),
         )
     return pipeline
 
@@ -136,7 +143,7 @@ def build_all(
     steps: Sequence[TransformStep],
     con: duckdb.DuckDBPyConnection,
     *,
-    resolutions: list[int] = H3_RESOLUTIONS,
+    grids: Sequence[Grid] = ALL_GRIDS,
     replace: bool = True,
     rebuild: bool = False,
     edir: Path | None = None,
@@ -145,6 +152,7 @@ def build_all(
 ) -> None:
     """Run all ``steps`` as an :class:`AsyncPipeline` over the shared connection ``con``.
 
+    ``grids`` narrows the run to those grid families (default: all three; see :func:`build_pipeline`).
     The independent lookup steps run concurrently (each on its own ``con.cursor()``); ``geogs`` waits for
     them. As in ``extract.run_extract``, ``AsyncNode.__call__`` captures any exception as ``Err`` so the
     pipeline never aborts mid-flight; each node's result is then unwrapped here, re-raising the first
@@ -154,7 +162,7 @@ def build_all(
     (``CREATE ... IF NOT EXISTS``) rather than rebuilt (``CREATE OR REPLACE``).
     """
     pipeline = build_pipeline(
-        steps, con, resolutions=resolutions, replace=replace, rebuild=rebuild, edir=edir, tdir=tdir, verbose=verbose
+        steps, con, grids=grids, replace=replace, rebuild=rebuild, edir=edir, tdir=tdir, verbose=verbose
     )
     asyncio.run(pipeline())
     for node_id in pipeline.nodes:

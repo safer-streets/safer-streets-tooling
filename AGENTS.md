@@ -6,8 +6,7 @@ workflow to follow. For **what the package does** (pipeline, datasets, transform
 usage), see [README.md](README.md); don't duplicate that material here.
 
 In one line: `safer-streets-tooling` builds the production GeoParquet outputs (consumers query them
-directly; the `load` phase that bundles them into a DuckDB database is optional and not currently
-used) via a three-phase `extract → transform → load` pipeline, depending on
+directly) via a two-phase `extract → transform` pipeline, depending on
 [`safer-streets-core`](../safer-streets-core) (editable path dependency) for the DuckDB helpers, the H3
 transforms, the data-source catalogue, and the ONS boundary downloader.
 
@@ -116,8 +115,8 @@ Overture S3 is unreachable, mirroring the existing tests.
 - **Geometry is British National Grid (EPSG:27700) everywhere.** Coordinates are the contract; CRS
   metadata is not. Sources in another CRS (e.g. retail centres in WGS-84) are reprojected to BNG
   **inside their extractor** before being written. DuckDB's GeoParquet writer tags geometry as
-  `OGC:CRS84`; that label is harmless and is stripped to a bare `GEOMETRY` on assemble by
-  `index_geometry_tables`. Write geometry with `write_geoparquet`; read it back with `read_geoparquet`.
+  `OGC:CRS84`; that label is harmless and is stripped to a bare `GEOMETRY` when the transform phase
+  imports the extract parquet (`index_geometry_tables`). Write geometry with `write_geoparquet`; read it back with `read_geoparquet`.
 - **Adding a dataset is additive.** Write a module under [extract/](src/safer_streets_tooling/extract/)
   exposing `DATASET = Dataset(...)` whose `extract(ctx)` does its work in its own
   `duckdb_connector()` and writes `ctx.parquet(name)`, then register it in
@@ -126,18 +125,24 @@ Overture S3 is unreachable, mirroring the existing tests.
   go in core's `config/data_sources.json` (read via `data_source`), not hard-coded here.
 - **Every table is described.** `Dataset` and `TransformStep` each carry a required one-line
   `description`, surfaced in the `index.parquet` catalogue (`data index`, rewritten by every command
-  that (re)builds parquet: `extract` / `transform` / `assemble` / `build`).
+  that (re)builds parquet: `extract` / `transform` / `build`).
   The registry validators reject a blank one at import. When you add or change a table, set / update its
   `description` in the same change — it is the single source of truth the catalogue is built from.
 - **Adding a transform step is additive too.** Write a module under
   [transform/](src/safer_streets_tooling/transform/) exposing `STEP = TransformStep(...)` with
-  `build(con, resolutions, replace)`, `outputs(con, resolutions)`, and `depends_on`, then register it in
+  `build(con, replace)`, `outputs(con)`, the `grid` family it builds onto (`Grid.H3` / `Grid.HO` /
+  `Grid.BEAHIV`, selected by `data transform --grid`) and `depends_on`, then register it in
   [transform/__init__.py](src/safer_streets_tooling/transform/__init__.py) **after** any `depends_on`.
   The pipeline caches each step by its declared `outputs`, so keep `outputs` in step with what `build`
-  creates.
-- **The assemble phase must stay atomic.** It writes a `<name>.staging.db` and only promotes it with
-  `os.replace` once import + index + transforms have all succeeded. Never let a read-only consumer see
-  a half-built database.
+  creates — with one deliberate exception: a relation another step folds in wholesale (the
+  `{unit}_{key}_lookup` geography lookups, whose codes become columns of `{unit}_geogs`) is left out of
+  `outputs` so it stays in memory rather than becoming a second copy on disk. A step omitting an output
+  carries no mtime, so give its consumer the `depends_on` / `extract_inputs` it would otherwise lose,
+  or a refreshed input will leave a stale cached output in place.
+- **Grid families stay self-contained.** A step may only `depends_on` steps of its own `grid` (checked
+  at import): `--grid` builds a subset by dropping every other step, so a cross-family edge would run a
+  step against relations that were never built. The H3 resolutions come from `H3_RESOLUTIONS`, not from
+  a parameter — which grids a run covers is the knob, a resolution is a property of the H3 gridding.
 - **Extract concurrency model.** Each dataset is a `DatasetExtractNode`; its blocking work runs via
   `asyncio.to_thread`, so multiple in-memory DuckDB connections run in parallel (this is safe — each
   extractor owns its connection). `depends_on` become graph edges; under `--only` subsets, edges to
@@ -172,10 +177,10 @@ When reviewing a PR or diff, check:
 1. **CRS correctness** — every geometry is BNG by the time it is written; non-BNG sources are
    reprojected in the extractor, not later.
 2. **Registry, not control flow** — new datasets / transform steps are added via a module + registry
-   entry, with correct `optional`/`geometry`/`depends_on` (datasets) or `outputs`/`depends_on` (steps),
+   entry, with correct `optional`/`geometry`/`depends_on` (datasets) or `outputs`/`grid`/`depends_on` (steps),
    a non-empty `description`, and each `depends_on` precedes its entry in `DATASETS` / `STEPS`.
-3. **Assemble integrity** — still staging + atomic `os.replace`? Geometry tables indexed before the
-   transforms run?
+3. **Transform integrity** — geometry tables indexed before the transforms run? Each step's `grid`
+   correct, and its `depends_on` within that family?
 4. **Extract robustness** — optional-source failures become skips, required failures abort; `--only`
    subsets don't deadlock on absent dependencies; no shared mutable state across the concurrent nodes.
 5. **Offline-safe tests** — pass without network / data dir / API key; skip cleanly when extensions or

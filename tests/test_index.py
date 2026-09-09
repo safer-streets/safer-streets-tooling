@@ -36,7 +36,7 @@ def test_build_index_rows_and_schema(dirs, tmp_path):
     edir, tdir = dirs
     out = tmp_path / "index.parquet"
 
-    count = build_index(edir, tdir, out, resolutions=[9])
+    count = build_index(edir, tdir, out)
     assert count == 4
 
     idx = pd.read_parquet(out).set_index("name")
@@ -66,7 +66,7 @@ def test_last_modified_is_the_parquet_mtime(dirs, tmp_path):
     edir, tdir = dirs
     os.utime(edir / "poi.parquet", (5_000_000.0, 5_000_000.0))
     out = tmp_path / "index.parquet"
-    build_index(edir, tdir, out, resolutions=[9])
+    build_index(edir, tdir, out)
     idx = pd.read_parquet(out).set_index("name")
 
     assert idx.loc["poi", "last_modified"] == datetime.fromtimestamp(5_000_000.0, tz=UTC)
@@ -75,7 +75,7 @@ def test_last_modified_is_the_parquet_mtime(dirs, tmp_path):
 def test_geometry_flag_tracks_the_geom_column(dirs, tmp_path):
     edir, tdir = dirs
     out = tmp_path / "index.parquet"
-    build_index(edir, tdir, out, resolutions=[9])
+    build_index(edir, tdir, out)
     idx = pd.read_parquet(out).set_index("name")
 
     assert bool(idx.loc["poi", "has_geometry"]) is True
@@ -86,7 +86,7 @@ def test_descriptions_come_from_the_registries(dirs, tmp_path):
     """Extract rows take Dataset.description; an optional-gated transform output takes its step's."""
     edir, tdir = dirs
     out = tmp_path / "index.parquet"
-    build_index(edir, tdir, out, resolutions=[9])
+    build_index(edir, tdir, out)
     idx = pd.read_parquet(out).set_index("name")
 
     poi_desc = next(ds.description for ds in DATASETS if ds.name == "poi")
@@ -103,7 +103,7 @@ def test_local_only_flags_the_hotspot_family(dirs, tmp_path):
     _write(tdir / "crime_counts_hotspots.parquet", spatial_id=["hex_1"], count=[3])
     out = tmp_path / "index.parquet"
 
-    count = build_index(edir, tdir, out, resolutions=[9])
+    count = build_index(edir, tdir, out)
     assert count == 7  # the four shareable tables plus the three hotspot ones
 
     idx = pd.read_parquet(out).set_index("name")
@@ -118,7 +118,7 @@ def test_local_only_flags_the_hotspot_family(dirs, tmp_path):
 def test_local_only_is_false_for_shareable_tables(dirs, tmp_path):
     edir, tdir = dirs
     out = tmp_path / "index.parquet"
-    build_index(edir, tdir, out, resolutions=[9])
+    build_index(edir, tdir, out)
     idx = pd.read_parquet(out).set_index("name")
 
     assert not idx["local_only"].any()

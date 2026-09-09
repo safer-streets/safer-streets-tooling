@@ -58,11 +58,11 @@ def test_counts_conserve_filtered_input():
     con = _connect()
     _crime_data(con)
 
-    beahiv_counts.build(con, [9], True)
+    beahiv_counts.build(con, True)
 
     total = con.execute(f"SELECT SUM(count) FROM {TABLE}").fetchone()[0]
     assert total == 3  # 5 rows − 1 BTP − 1 un-geolocated
-    assert beahiv_counts.outputs(con, [9]) == [TABLE]
+    assert beahiv_counts.outputs(con) == [TABLE]
 
 
 def test_cell_ids_match_beahiv_scalar_encoder():
@@ -70,7 +70,7 @@ def test_cell_ids_match_beahiv_scalar_encoder():
     con = _connect()
     _crime_data(con)
 
-    beahiv_counts.build(con, [9], True)
+    beahiv_counts.build(con, True)
 
     per_cell = dict(con.execute(f"SELECT spatial_id, SUM(count) FROM {TABLE} GROUP BY spatial_id").fetchall())
     assert per_cell == {
@@ -88,7 +88,7 @@ def test_spatial_id_is_a_signed_integer_on_the_declared_grid():
     con = _connect()
     _crime_data(con)
 
-    beahiv_counts.build(con, [9], True)
+    beahiv_counts.build(con, True)
 
     dtype = con.execute(
         "SELECT data_type FROM information_schema.columns WHERE table_name = ? AND column_name = 'spatial_id'",
@@ -108,7 +108,7 @@ def test_counts_keyed_by_crime_type_and_month():
     con = _connect()
     _crime_data(con)
 
-    beahiv_counts.build(con, [9], True)
+    beahiv_counts.build(con, True)
 
     rows = con.execute(f"SELECT crime_type, month, count FROM {TABLE} ORDER BY crime_type").fetchall()
     assert rows == [("Bicycle theft", "2024-02", 1), ("Burglary", "2024-01", 2)]
@@ -119,8 +119,8 @@ def test_build_is_idempotent():
     con = _connect()
     _crime_data(con)
 
-    beahiv_counts.build(con, [9], True)
-    beahiv_counts.build(con, [9], True)
+    beahiv_counts.build(con, True)
+    beahiv_counts.build(con, True)
 
     assert con.execute(f"SELECT SUM(count) FROM {TABLE}").fetchone()[0] == 3
 
@@ -157,7 +157,7 @@ def test_unencodable_geometry_raises():
     con.execute(f"INSERT INTO crime_data VALUES ({_LEEDS[0]}, {_LEEDS[1]}, 'Burglary', '2024-01', 'WYP', NULL)")
 
     with pytest.raises(ValueError, match="did not encode to a cell"):
-        beahiv_counts.build(con, [9], True)
+        beahiv_counts.build(con, True)
 
 
 def test_conservation_check_raises_on_lossy_aggregation():
@@ -178,7 +178,7 @@ def test_conservation_check_raises_on_lossy_aggregation():
             return self._con.execute(sql, *args, **kwargs)
 
     with pytest.raises(ValueError, match="not conserved"):
-        beahiv_counts.build(_DropBurglary(con), [9], True)  # ty:ignore[invalid-argument-type]
+        beahiv_counts.build(_DropBurglary(con), True)  # ty:ignore[invalid-argument-type]
 
 
 def test_scalar_and_vector_bng_to_cell_agree():

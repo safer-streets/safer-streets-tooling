@@ -1,7 +1,7 @@
 """Shared helpers for dataset extractors.
 
 Downloading, zip-member extraction, and geometry-column normalisation. The parquet read/write
-primitives that move data between the in-memory *extract* phase and the *assemble* phase live in
+primitives that move data between the in-memory *extract* phase and the *transform* phase live in
 ``safer_streets_core.database`` (``write_geoparquet`` / ``read_geoparquet``).
 
 Geometry is British National Grid (EPSG:27700) everywhere by convention. Sources supplied in another

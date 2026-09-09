@@ -3,12 +3,12 @@
 import duckdb
 
 from safer_streets_tooling.transform import hotspots
-from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
+from safer_streets_tooling.transform.base import H3_RESOLUTIONS, Grid, TransformStep, create_clause, table_exists
 
 ROAD_INTERSECTIONS_TABLE = "road_intersections"
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``road_intersection_counts_h3_{res}`` counting road intersections per H3 cell.
 
     Keyed by ``spatial_id`` (the lowercase-hex cell, matching ``crime_counts_h3_{res}`` /
@@ -21,7 +21,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     """
     if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
         return
-    for res in resolutions:
+    for res in H3_RESOLUTIONS:
         con.execute(f"""
             {create_clause("TABLE", f"road_intersection_counts_h3_{res}", replace=replace)} AS
             WITH cells AS (
@@ -38,10 +38,10 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
         """)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
         return []
-    return [f"road_intersection_counts_h3_{res}" for res in resolutions]
+    return [f"road_intersection_counts_h3_{res}" for res in H3_RESOLUTIONS]
 
 
 def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
@@ -71,6 +71,7 @@ STEP = TransformStep(
     name="road_intersection_counts",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="Road intersections (OS Open Roads junctions/roundabouts) counted per H3 cell, keyed by spatial_id.",
     depends_on=("crime_counts",),
     extract_inputs=(ROAD_INTERSECTIONS_TABLE,),

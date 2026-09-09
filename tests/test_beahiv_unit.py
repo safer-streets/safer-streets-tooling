@@ -57,9 +57,9 @@ def _crime_counts(con, beahiv_too=True):
                 ST_Buffer(ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000) AS geom
             FROM (VALUES {", ".join(f"('{c}', {lat}, {lon})" for c, (lat, lon) in _CITIES.items())}) t(city, lat, lon)
         """)
-    crime_counts.build(con, [9], True)
+    crime_counts.build(con, True)
     if beahiv_too:
-        beahiv_counts.build(con, [9], True)
+        beahiv_counts.build(con, True)
 
 
 def test_cell_geom_matches_beahiv_cell_polygon():
@@ -134,10 +134,10 @@ def test_steps_are_a_noop_without_the_counts():
     _crime_counts(con, beahiv_too=False)
 
     assert not beahiv.available(con)
-    beahiv_lookups.build(con, [9], True)
-    beahiv_geogs.build(con, [9], True)
-    assert beahiv_lookups.outputs(con, [9]) == []
-    assert beahiv_geogs.outputs(con, [9]) == []
+    beahiv_lookups.build(con, True)
+    beahiv_geogs.build(con, True)
+    assert beahiv_lookups.outputs(con) == []
+    assert beahiv_geogs.outputs(con) == []
 
 
 def test_lookup_and_geogs_steps_build_the_beahiv_relations():
@@ -149,14 +149,15 @@ def test_lookup_and_geogs_steps_build_the_beahiv_relations():
             ST_Buffer(ST_Transform(ST_Point(-1.501, 53.801), 'EPSG:4326', 'EPSG:27700', always_xy := true), 50) AS geom
     """)
 
-    beahiv_lookups.build(con, [9], True)
-    beahiv_geogs.build(con, [9], True)
+    beahiv_lookups.build(con, True)
+    beahiv_geogs.build(con, True)
 
-    assert beahiv_lookups.outputs(con, [9]) == [
-        *(f"{KEY}_{key}_lookup" for key in GEOGRAPHY_MAPPINGS),
-        f"{KEY}_retail_centre_lookup",
-    ]
-    assert beahiv_geogs.outputs(con, [9]) == [f"{KEY}_geogs"]
+    # the geography lookups are built (geogs reads them) but not published: their codes are columns of
+    # beahiv_202_geogs over the same cells, so a parquet each would be the same data twice
+    assert beahiv_lookups.outputs(con) == [f"{KEY}_retail_centre_lookup"]
+    for key in GEOGRAPHY_MAPPINGS:
+        assert con.execute(f"SELECT COUNT(*) FROM {KEY}_{key}_lookup").fetchone()[0] > 0
+    assert beahiv_geogs.outputs(con) == [f"{KEY}_geogs"]
     assert con.execute(f"SELECT COUNT(*) FROM {KEY}_geogs").fetchone()[0] > 0
 
 
@@ -171,12 +172,12 @@ def test_geogs_schema_matches_h3_apart_from_the_id_type():
     con = _connect()
     _crime_counts(con)
 
-    geo_lookups.build(con, [9], True)
-    overlap_lookups.build(con, [9], True)
-    retail_centre_lookups.build(con, [9], True)
-    geogs.build(con, [9], True)
-    beahiv_lookups.build(con, [9], True)
-    beahiv_geogs.build(con, [9], True)
+    geo_lookups.build(con, True)
+    overlap_lookups.build(con, True)
+    retail_centre_lookups.build(con, True)
+    geogs.build(con, True)
+    beahiv_lookups.build(con, True)
+    beahiv_geogs.build(con, True)
 
     def schema(table):
         return con.execute(
@@ -200,7 +201,7 @@ def test_cells_land_in_the_right_geography():
     """
     con = _connect()
     _crime_counts(con)
-    beahiv_lookups.build(con, [9], True)
+    beahiv_lookups.build(con, True)
 
     per_cell = dict(
         con.execute(f"""
@@ -217,4 +218,6 @@ def test_steps_registered_in_dependency_order():
     names = [step.name for step in STEPS]
     assert names.index("beahiv_counts") < names.index("beahiv_lookups") < names.index("beahiv_geogs")
     assert beahiv_lookups.STEP.depends_on == ("beahiv_counts",)
-    assert beahiv_geogs.STEP.depends_on == ("beahiv_lookups",)
+    # geogs also lists beahiv_counts directly: the geography lookups between them publish no parquet,
+    # so they carry no mtime for the staleness check
+    assert beahiv_geogs.STEP.depends_on == ("beahiv_counts", "beahiv_lookups")

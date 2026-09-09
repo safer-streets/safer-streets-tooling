@@ -7,18 +7,18 @@ The hotspot counterpart of ``h3_{res}_geogs``: same columns, same scope (see
 
 import duckdb
 
-from safer_streets_tooling.transform import geogs, hotspots
-from safer_streets_tooling.transform.base import TransformStep
+from safer_streets_tooling.transform import geo_lookups, geogs, hotspots
+from safer_streets_tooling.transform.base import Grid, TransformStep
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    """Build ``hotspots_geogs``. ``resolutions`` is ignored — the hexes are their own grid."""
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Build ``hotspots_geogs``."""
     if not hotspots.available(con):
         return
     geogs.build_unit(con, hotspots.HOTSPOT_UNIT, replace)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     return [f"{hotspots.HOTSPOT_UNIT.key}_geogs"] if hotspots.available(con) else []
 
 
@@ -26,6 +26,10 @@ STEP = TransformStep(
     name="hotspot_geogs",
     build=build,
     outputs=outputs,
+    grid=Grid.HO,
     description="One row per hotspot hex: ONS codes, overlap id lists + measures, cell_area, nearest retail centre.",
     depends_on=("hotspot_lookups",),
+    # the hexes and the boundary layers are read through the geography lookups, which publish no
+    # parquet, so this step needs their mtimes itself to notice a refreshed input (see :mod:`.geogs`)
+    extract_inputs=("hotspots", *geo_lookups.STEP.extract_inputs),
 )

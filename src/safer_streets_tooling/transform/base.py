@@ -9,7 +9,8 @@ phase turns ``Dataset`` entries into nodes.
 A :class:`SpatialUnit` describes the *grid* a step aggregates onto — an H3 resolution, or the Home
 Office hotspot hexes (``safer_streets_tooling.transform.hotspots``). Both are keyed by ``spatial_id``
 and their relation names differ only by the unit's ``key``, so the per-cell steps build the same SQL
-for either.
+for either. Each step declares which :class:`Grid` family it belongs to, so a build can be narrowed to
+one grid (``data transform --grid beahiv``) by filtering the registry.
 
 The transforms operate on an open, writable DuckDB connection that already contains a ``crime_data``
 table (street-level crimes) and one boundary table per ONS geography (each with a ``spatial_id`` code
@@ -19,11 +20,28 @@ and a BNG ``geom`` column). Ported from the ``duckdb-spatial`` prototype noteboo
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import duckdb
 from duckdb.sqltypes import DuckDBPyType
 
 H3_RESOLUTIONS = [9]
+
+
+class Grid(StrEnum):
+    """The spatial-unit families a transform step can belong to — the values of ``data transform --grid``.
+
+    A family is the set of steps building onto one set of units: ``h3`` the per-resolution H3 cells,
+    ``ho`` the Home Office hotspot hexes, ``beahiv`` the BEAHIV equal-area hexes, and ``ons`` the ONS
+    geographies (PFA / LAD / MSOA / LSOA / OA — polygons rather than a grid, but the same relations
+    keyed the same way). Each family is self-contained — its steps read the extract tables and their
+    own family's relations, never another family's — so any subset can be built on its own.
+    """
+
+    H3 = "h3"
+    HO = "ho"
+    BEAHIV = "beahiv"
+    ONS = "ons"
 
 
 @dataclass(frozen=True)
@@ -69,21 +87,26 @@ def h3_unit(res: int) -> SpatialUnit:
 
 @dataclass(frozen=True)
 class TransformStep:
-    """One H3 aggregation step in the transform pipeline.
+    """One aggregation step in the transform pipeline.
 
-    ``build(con, resolutions, replace)`` creates the step's relations; ``outputs(con, resolutions)``
-    returns the relation names it produces (used to cache them as parquet and skip rebuilds).
-    ``description`` is a one-line human summary of the relation(s) the step produces, surfaced in the
-    ``index.parquet`` catalogue (keep it current when the outputs change). ``depends_on`` lists the names
-    of steps whose relations this one reads. ``extract_inputs`` lists the extract dataset names this step
-    reads (their parquet live in the extract dir); together with the output parquet of its ``depends_on``
-    steps they are the step's inputs for staleness checks — the cached output is reused only when it
-    exists *and* is newer than every input.
+    ``build(con, replace)`` creates the step's relations; ``outputs(con)`` returns the relation names it
+    produces (used to cache them as parquet and skip rebuilds). The H3 steps take their resolutions from
+    :data:`H3_RESOLUTIONS` rather than a parameter: which *grids* a build covers is chosen per step
+    (``grid``, selected by ``data transform --grid``), and a resolution is a property of the H3 gridding
+    itself, not a per-run knob.
+    ``grid`` is the :class:`Grid` family the step builds onto, so a run can be narrowed to a subset of
+    the grids. ``description`` is a one-line human summary of the relation(s) the step produces, surfaced
+    in the ``index.parquet`` catalogue (keep it current when the outputs change). ``depends_on`` lists the
+    names of steps whose relations this one reads. ``extract_inputs`` lists the extract dataset names this
+    step reads (their parquet live in the extract dir); together with the output parquet of its
+    ``depends_on`` steps they are the step's inputs for staleness checks — the cached output is reused
+    only when it exists *and* is newer than every input.
     """
 
     name: str
-    build: Callable[[duckdb.DuckDBPyConnection, list[int], bool], None]
-    outputs: Callable[[duckdb.DuckDBPyConnection, list[int]], list[str]]
+    build: Callable[[duckdb.DuckDBPyConnection, bool], None]
+    outputs: Callable[[duckdb.DuckDBPyConnection], list[str]]
+    grid: Grid
     description: str = ""
     depends_on: tuple[str, ...] = field(default_factory=tuple)
     extract_inputs: tuple[str, ...] = field(default_factory=tuple)

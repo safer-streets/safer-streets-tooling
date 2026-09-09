@@ -9,13 +9,13 @@ hexes, the cells come from the crime counts, so this waits on ``beahiv_counts``.
 import duckdb
 
 from safer_streets_tooling.transform import beahiv, geo_lookups, overlap_lookups, retail_centre_lookups
-from safer_streets_tooling.transform.base import TransformStep
+from safer_streets_tooling.transform.base import Grid, TransformStep
 
 _MODULES = (geo_lookups, overlap_lookups, retail_centre_lookups)
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    """Build every BEAHIV lookup. ``resolutions`` is ignored — the hexes are their own grid."""
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Build every BEAHIV lookup."""
     if not beahiv.available(con):
         return
     beahiv.register_udfs(con)  # BEAHIV_UNIT.cells calls the cell-polygon UDF
@@ -23,11 +23,12 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
         module.build_unit(con, beahiv.BEAHIV_UNIT, replace)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not beahiv.available(con):
         return []
+    # the geography lookups are deliberately absent: they are in-memory intermediates folded into
+    # beahiv_202_geogs, which carries every code over the same cells (see :mod:`.geo_lookups`)
     return [
-        *geo_lookups.unit_outputs(beahiv.BEAHIV_UNIT),
         *overlap_lookups.unit_outputs(con, beahiv.BEAHIV_UNIT),
         *retail_centre_lookups.unit_outputs(con, beahiv.BEAHIV_UNIT),
     ]
@@ -37,6 +38,7 @@ STEP = TransformStep(
     name="beahiv_lookups",
     build=build,
     outputs=outputs,
+    grid=Grid.BEAHIV,
     description="Per-cell lookups on the BEAHIV grid: its ONS geography codes (max-overlap), every overlapping feature, and its nearest retail centre.",
     depends_on=("beahiv_counts",),
     extract_inputs=(

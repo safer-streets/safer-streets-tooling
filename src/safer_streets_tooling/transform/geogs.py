@@ -14,7 +14,15 @@ once per LSOA isn't duplicated across every cell in that LSOA.
 
 import duckdb
 
-from safer_streets_tooling.transform.base import SpatialUnit, TransformStep, create_clause, h3_unit, table_exists
+from safer_streets_tooling.transform.base import (
+    H3_RESOLUTIONS,
+    Grid,
+    SpatialUnit,
+    TransformStep,
+    create_clause,
+    h3_unit,
+    table_exists,
+)
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 from safer_streets_tooling.transform.overlap_lookups import OVERLAP_FEATURES
 from safer_streets_tooling.transform.retail_centre_lookups import RETAIL_CENTRES_TABLE
@@ -90,19 +98,24 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
     """)
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    for res in resolutions:
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    for res in H3_RESOLUTIONS:
         build_unit(con, h3_unit(res), replace)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
-    return [f"h3_{res}_geogs" for res in resolutions]
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    return [f"h3_{res}_geogs" for res in H3_RESOLUTIONS]
 
 
 STEP = TransformStep(
     name="geogs",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="One row per H3 cell: ONS codes, overlap id lists + measures, cell_area, nearest retail centre.",
-    depends_on=("geo_lookups", "overlap_lookups", "retail_centre_lookups"),
+    # crime_counts and the boundary tables are listed even though geo_lookups sits between: that step
+    # publishes no parquet (its lookups are in-memory), so it carries no mtime for the staleness check
+    # and a refreshed cell set or boundary layer would otherwise leave this cached output in place.
+    depends_on=("crime_counts", "geo_lookups", "overlap_lookups", "retail_centre_lookups"),
+    extract_inputs=tuple(GEOGRAPHY_MAPPINGS.values()),
 )

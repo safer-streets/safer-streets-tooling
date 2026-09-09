@@ -11,7 +11,7 @@ plausibly live and work.
 import duckdb
 
 from safer_streets_tooling.transform import hotspots
-from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
+from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, table_exists
 
 BUILDINGS_TABLE = "buildings"
 WORKPLACE_TABLE = "workplace_population"
@@ -115,7 +115,7 @@ def _report_allocated(con: duckdb.DuckDBPyConnection, table: str) -> None:
     )
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``population_counts_h3_9``: the OA populations assigned to buildings, then summed per cell.
 
     Each building's share of its OA (buildings carry ``oa21cd`` from the extract) is its total floor
@@ -130,7 +130,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     building of the right type (its population has nowhere to land), and buildings whose centroid falls
     in no OA (they receive nothing). The allocated shares of the source totals are reported. No-op if
     any input table is absent, or if the buildings table predates the size columns.
-    ``resolutions`` is ignored — this is only produced at resolution 9.
+    Only resolution 9 is ever produced — the buildings extract carries a single ``h3_9_id``.
 
     The allocation itself lives in :func:`_allocation_sql`, shared with the hotspot-hex version.
     """
@@ -144,7 +144,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     _report_allocated(con, f"population_counts_h3_{RESOLUTION}")
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not (
         all(table_exists(con, t) for t in (BUILDINGS_TABLE, WORKPLACE_TABLE, RESIDENTIAL_TABLE))
         and _has_size_columns(con)
@@ -194,6 +194,7 @@ STEP = TransformStep(
     name="population_counts",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="Census 2021 residential (TS001) + workplace (WP001) population per res-9 cell, allocated via buildings by floor area × use weight.",
     extract_inputs=(BUILDINGS_TABLE, WORKPLACE_TABLE, RESIDENTIAL_TABLE),
 )

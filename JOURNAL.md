@@ -7,6 +7,104 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## The per-geography lookups stop being published tables
+
+**Why** — `{unit}_{key}_lookup` (five per grid: `h3_9_lad24cd_lookup`, `hotspots_oa21cd_lookup`, …) is
+one row per cell carrying one ONS code, and `{unit}_geogs` carries every one of those codes as a column
+over the same cells. Fifteen parquet of duplicated data, and two places to look up a cell's LSOA — with
+nothing saying which is authoritative.
+
+**What** — `geo_lookups.build_unit` still builds the lookups (`geogs` joins them), but as tables in the
+transform's in-memory DuckDB rather than views, and the step declares no `outputs`, so none of them is
+written to parquet or catalogued. `geo_lookups.unit_outputs` is deleted and `hotspot_lookups` /
+`beahiv_lookups` drop it from their `outputs` — they still publish their overlap and retail lookups.
+
+Verified before removing, on the built parquet in the data dir: for all five geographies on the
+hotspots grid, `hotspots_{key}_lookup` and `hotspots_geogs` agree exactly — 4,433 cells each way, zero
+rows on either side of an anti-join, zero differing codes. `*_geogs` takes its cell set from the
+`lad24cd` lookup, so the check that matters is whether another key's lookup covers cells LAD's does
+not: on both national grids (`h3_9`, 234,921 cells; `beahiv_202`, 221,428) every E&W-only lookup is a
+strict subset — 0 cells outside. Nothing is lost. A regression test asserts the same equivalence on the
+fixture grid, so this stays true.
+
+**Design decisions**
+
+- **Tables, not views.** Keeping them as views would have removed the second copy just as well, but
+  then `geogs`' single query re-runs all five max-overlap joins inline — five spatial joins in one
+  query, on a phase already tuned down to `threads = 4` to stay out of the OOM killer. Materialising in
+  memory keeps the peak where it is today and actually saves a pass: a cold build used to run each
+  join twice (once to write the parquet, once when `geogs` read the view).
+- **Staleness had to be re-declared.** A step with no `outputs` has no parquet and therefore no mtime,
+  so the chain "boundaries refreshed → `geo_lookups` rebuilt → `geogs` rebuilt" lost its middle link.
+  `geogs` now lists the boundary tables in `extract_inputs` and `crime_counts` in `depends_on`
+  directly (`beahiv_geogs` likewise on `beahiv_counts`; `hotspot_geogs` on `hotspots` + boundaries) —
+  which is honest, since with the lookups unmaterialised those *are* the inputs it reads through.
+- **The overlap lookups stay published.** They look like the same case but are not: `*_geogs` keeps
+  only `{prefix}_ids` and one aggregate (MAX area / SUM length), so the per-feature overlap areas and
+  the descriptive columns (greenspace function, road type, school name) exist only in the lookup.
+
+**Follow-ups**
+
+- `{unit}_retail_centre_lookup` *is* fully reproduced by `*_geogs` (`retail_centre_id` +
+  `retail_centre_distance`, one row per cell) — the same argument applies, but it was outside the ask.
+- The already-built lookup parquet are now orphaned: they stay in `data_dir()/transform` (and in the
+  `phase2` container, which `sync` never deletes) and, since no step claims them any more, `data index`
+  will catalogue them with a blank description. They need deleting by hand — the same clean-up the
+  `pfa23cd` → `pfa24cd` rename left behind.
+
+## `--grid` replaces `--resolutions`; the `load` phase is removed
+
+**Why** — two things had outlived their design. `--resolutions` dated from when the H3 grid was built
+at several resolutions; `H3_RESOLUTIONS` has been `[9]` since r8/10/11 were dropped, so the flag was a
+knob that could only be set to its default, while the choice a run actually wants to make — *which of
+the three grids to build* — could not be expressed at all. Rebuilding just the BEAHIV grid meant
+rebuilding the H3 and hotspot families with it. And the `load` phase bundled the parquet into a
+single-file DuckDB that nothing consumes: consumers query the parquet directly, locally or from the
+blob container.
+
+**What** — the `resolutions` parameter is gone from the transform contract: steps are now
+`build(con, replace)` / `outputs(con)`, and the H3 steps read `H3_RESOLUTIONS` directly. In its place
+each `TransformStep` declares a `grid` — `Grid.H3` / `Grid.HO` / `Grid.BEAHIV` — and `build_pipeline`
+filters the registry by the requested families, so `data transform --grid beahiv` (repeatable, all
+three by default) builds one grid and leaves the others' parquet untouched. `_validate` now rejects a
+`depends_on` that crosses families, which is what makes the filter safe.
+
+The `load` command, `assemble`, `run_load`, `_minimal_tables` and the `DEFAULT_FEATURE_TABLES` /
+`DEFAULT_TRANSFORM_TABLES` sets are deleted, with their tests; `build` is now extract + transform. The
+pipeline is two phases, and `index.parquet` (which catalogues what is on disk, not what was just built)
+no longer takes a resolution list either.
+
+**Design decisions**
+
+- **Filter the registry, don't parameterise the steps.** The alternative was to pass the selected
+  grids down to every `build` and let each step decide — the shape `resolutions` had. That repeats the
+  same guard in fifteen modules and leaves each step free to ignore it; a `grid` field plus one filter
+  in `build_pipeline` puts the decision in the registry, where `depends_on` and `outputs` already live.
+- **Grid families must be self-contained, and that is now enforced.** Filtering assumes no step reads
+  another family's relations. That was already true (the hotspot and BEAHIV steps read the extract
+  tables and their own counts), but nothing said so, so a later cross-family `depends_on` would have
+  turned a `--grid` subset into a build against relations that were never created. The import-time
+  check in `_validate` makes it a rule rather than a coincidence.
+- **Resolution is not a run-time knob.** Keeping `resolutions` threaded through as a library parameter
+  defaulting to `H3_RESOLUTIONS` would have made a smaller diff, but it leaves a parameter no CLI
+  exposes and no caller varies. A resolution is a property of the H3 gridding; if a second resolution
+  is ever wanted, `H3_RESOLUTIONS` is the one place to add it and every H3 step follows.
+- **`--grid ho`, not `--grid hotspots`.** The flag names the *family* (Home Office), not the relation
+  prefix. The unit key stays `hotspots`, so the table names and the `local_only` rule are unchanged.
+- **Delete `load` rather than deprecate it.** It has been documented as "optional — not currently
+  used" for some time; keeping a deprecated command means keeping its code, its tests and its share of
+  the docs current for a feature nobody runs. It is recoverable from git if a single-file bundle is
+  ever wanted again.
+
+**Follow-ups**
+
+- `crime_counts` still builds the per-ONS-geography counts (`crime_counts_pfa24cd`, …) alongside the
+  H3 counts, so they belong to the `h3` family: `--grid beahiv` alone does not refresh them. They are
+  not a grid at all; if that becomes awkward, they want a step (and possibly a family) of their own.
+- `data transform --grid` does not prune: narrowing a run leaves the other families' parquet in place,
+  stale rather than removed. That is the intended behaviour (the parquet are a cache), but a
+  `--grid`-aware `sync` cannot tell a stale family from a current one.
+
 ## The BEAHIV grid as a third spatial unit (`crime_counts_beahiv_202`, `beahiv_202_geogs`)
 
 **Why** — the `beahiv_202` extract landed as a grid nothing was counted onto, so the BEAHIV gridding

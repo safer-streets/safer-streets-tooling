@@ -12,16 +12,16 @@ from beahiv import INVALID_CELL_ID
 
 from safer_streets_tooling.beahiv_grid import SIDE_LENGTH
 from safer_streets_tooling.transform import beahiv
-from safer_streets_tooling.transform.base import TransformStep, create_clause
+from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause
 from safer_streets_tooling.transform.crime_counts import CRIME_FILTER, expected_crimes
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``crime_counts_beahiv_202`` counting crimes per BEAHIV cell / crime type / month.
 
-    ``resolutions`` is ignored — the grid is parameterised by a side length in metres, not by an H3
-    resolution. ``spatial_id`` is the cell id as a ``BIGINT`` (see :mod:`.beahiv`), the same column
-    ``beahiv_202`` and ``beahiv_202_geogs`` are keyed by.
+    The grid is parameterised by a side length in metres, not by an H3 resolution. ``spatial_id`` is the
+    cell id as a ``BIGINT`` (see :mod:`.beahiv`), the same column ``beahiv_202`` and ``beahiv_202_geogs``
+    are keyed by.
 
     Exclusions are ``crime_counts``' :data:`~.crime_counts.CRIME_FILTER` verbatim (un-geolocated and
     British Transport Police), so this grid counts exactly the crimes the H3 grids do and the two are
@@ -67,7 +67,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     print(f"  {name}: {actual:,} crimes in {cells:,} cells")
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     return [beahiv.COUNTS_TABLE]
 
 
@@ -75,6 +75,7 @@ STEP = TransformStep(
     name="beahiv_counts",
     build=build,
     outputs=outputs,
+    grid=Grid.BEAHIV,
     description=f"Crimes counted per BEAHIV {SIDE_LENGTH}m-side flat hexagonal cell / crime_type / month (BTP excluded).",
     extract_inputs=("crime_data",),
 )

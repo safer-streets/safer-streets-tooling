@@ -38,7 +38,8 @@ class Dataset:
     dataset should be skipped. ``description`` is a one-line human summary of the table, surfaced in the
     ``index.parquet`` catalogue (keep it current when the table changes). ``optional`` datasets are
     skipped with a warning on failure, required ones abort the build. ``geometry`` flags that the table
-    carries a ``geom`` column (so it is RTree-indexed on assemble). ``depends_on`` lists other dataset
+    carries a ``geom`` column (so it is RTree-indexed when the transform imports it). ``depends_on``
+    lists other dataset
     names whose parquet this extractor reads, and must precede this one in ``DATASETS``.
     """
 

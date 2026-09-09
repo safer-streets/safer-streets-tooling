@@ -1,14 +1,14 @@
 # safer-streets-tooling
 
 Data-build tooling for the safer-streets project. Builds the production GeoParquet outputs
-(crime + ONS boundaries + supplementary layers + H3 aggregations) as modular, per-dataset
-files — consumers query these directly (in-memory DuckDB, locally or from Azure Blob); an optional
-`load` step can also bundle them into a single DuckDB database file. Depends on [`safer-streets-core`](../safer-streets-core) for the database
+(crime + ONS boundaries + supplementary layers + per-cell aggregations) as modular, per-dataset
+files — consumers query these directly (in-memory DuckDB, locally or from Azure Blob). Depends on
+[`safer-streets-core`](../safer-streets-core) for the database
 helpers, H3 transforms, the data-source catalogue, and the ONS boundary downloader.
 
 ## Pipeline
 
-Three phases (extract → transform → load), driven by a dataset registry
+Two phases (extract → transform), driven by a dataset registry
 (`safer_streets_tooling.extract.DATASETS`) and a transform-step registry
 (`safer_streets_tooling.transform.STEPS`):
 
@@ -24,33 +24,32 @@ Three phases (extract → transform → load), driven by a dataset registry
    ONS geography), then every derived relation (those counts, the
    per-cell lookups and `h3_{res}_geogs`) is written out as its own parquet under `data_dir()/transform`
    — a durable cache, so the aggregations can be rebuilt without re-extracting. The same relations are
-   also built on the Home Office hotspot hexes (`crime_counts_hotspots`, `hotspots_geogs`, …); see
-   [Spatial units](#spatial-units).
-3. **load** *(optional — not currently used)* — a **minimal** consumer database is assembled from the
-   parquet: `crime_counts_h3_{res}` and `h3_{res}_geogs` (the per-cell counts + attributes, joined on
-   `spatial_id`), the per-ONS-geography `crime_counts_{key}` counts, plus the ONS boundary tables they
-   reference by code (PFA / LAD / MSOA / LSOA / OA), so a
-   consumer can resolve a cell's codes to boundary geometry. It is built in a `<name>.staging.db` and
-   atomically promoted over the live database, so consumers only ever see a complete file. **This step is
-   not currently required** — the parquet are the durable build outputs, and consumers query them
-   directly (an in-memory DuckDB over the parquet, locally or straight from the Azure blob container
-   `data sync` maintains). The database is just a convenience bundle for a consumer that prefers a
-   single offline file.
-   `--include NAME` adds non-default tables (an intermediate `h3_*_lookup` or a feature layer), looked up
-   in the transform then extract dirs.
+   also built on the Home Office hotspot hexes (`crime_counts_hotspots`, `hotspots_geogs`, …) and on
+   the BEAHIV grid; see [Spatial units](#spatial-units). `--grid` narrows a run to one or more of the
+   three grid families (`h3` / `ho` / `beahiv`); by default all three are built.
+
+The parquet **are** the deliverable: consumers query them directly (an in-memory DuckDB over the
+parquet, locally or straight from the Azure blob container `data sync` maintains).
 
 ### Extract & transform DAG
 
 In **extract**, every dataset is an `AsyncNode` keyed by its name; `depends_on` are the edges. Nodes
 with no incoming edge start immediately and run concurrently (each blocking extractor in a worker
 thread); a dependent only starts once its dependencies have produced their parquet. In **transform**
-(run during assemble, `safer_streets_tooling.transform`), each step is likewise an `AsyncNode` keyed by
+(`safer_streets_tooling.transform`), each step is likewise an `AsyncNode` keyed by
 its name with `depends_on` edges: the BTP-filtered `crime_counts_h3_N` are aggregated from `crime_data`
 (and `crime_counts_{key}` point-in-polygon against each ONS boundary table);
 every H3 cell is keyed off them, then given one ONS code per geography,
 the overlapping greenspace / land-cover / road features, and its nearest retail centre — all folded
 into `h3_N_geogs`. (For brevity the transform nodes collapse the per-resolution `N`, currently just
 `{9}`; the geography / overlap / retail lookups all draw their cell set from `crime_counts_h3_N`.)
+
+The per-geography lookups (`h3_N_{key}_lookup` and their hotspot / BEAHIV twins) are **build
+intermediates**, materialised in the transform's in-memory DuckDB and never written out: `*_geogs`
+carries every code as a column over exactly the same cells, so publishing both would be the same data
+twice and two places to look for a cell's LSOA. The overlap lookups *are* published, because `*_geogs`
+keeps only an id list and one aggregate measure per layer — the per-feature overlap areas and the
+descriptive columns (greenspace function, road type, school name) live only in the lookup.
 
 The same relations are built a second time on the **Home Office hotspot hexes** — the `hotspots`
 extract's 350m hex-grid polygons — by the `hotspot_counts` / `hotspot_lookups` / `hotspot_geogs` steps,
@@ -96,7 +95,7 @@ flowchart LR
    streetlight_counts_h3_9
    building_counts_h3_9
    population_counts_h3_9
-   h3_geogs_lookup
+   h3_geogs_lookup["h3_N_{key}_lookup<br/>(in-memory, not published)"]
    h3_greenspace_lookup
    h3_urban_lookup
    h3_suburban_lookup
@@ -111,7 +110,6 @@ flowchart LR
    beahiv_202_geogs
 
    direction LR
-   database[("safer-streets DB<br/>crime_counts + geogs + features")]
 
     %% extract edges
     open_roads --> schools
@@ -184,50 +182,18 @@ flowchart LR
     retail_centres --> beahiv_lookups
     beahiv_lookups --> beahiv_202_geogs
 
-    %% load edges (optional): minimal DB = crime counts + geogs + ONS boundary tables + feature layers; --include adds more
-    crime_counts_h3_9 -.-> database
-    crime_counts_geog -.-> database
-    building_counts_h3_9 -.-> database
-    population_counts_h3_9 -.-> database
-    h3_9_geogs -.-> database
-    hotspot_counts -.-> database
-    hotspots_geogs -.-> database
-    crime_counts_beahiv_202 -.-> database
-    beahiv_202_geogs -.-> database
-    hotspots -.-> database
-    police_force_areas -.-> database
-    local_authority_districts -.-> database
-    msoa_2021 -.-> database
-    lsoa_2021 -.-> database
-    output_areas_2021 -.-> database
-    schools -.-> database
-    poi -.-> database
-    naptan -.-> database
-    food_outlets -.-> database
-    cctv -.-> database
-    imd_scores_pct -.-> database
-    land_cover -.-> database
-    oac -.-> database
-    oac_classification -.-> database
-
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
-    classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
     class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv_202,hotspots extract;
     class crime_counts_h3_9,crime_counts_geog,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,crime_counts_beahiv_202,beahiv_lookups,beahiv_202_geogs transform;
-    class database load;
 ```
 
-Each extract node writes `<name>.parquet`; the **transform** phase turns those into the H3 aggregation
-parquet. The optional **load** phase (not currently used) then bundles the `crime_counts_h3_*` + `crime_counts_{key}` +
-`h3_*_geogs` parquet, the
-five ONS boundary tables and the `schools` / `poi` / `naptan` / `food_outlets` / `cctv` / `imd_scores_pct` / `land_cover` / `oac` (+ `oac_classification`)
-feature layers into a minimal database (dashed above — `--include` can pull in any other table). The
-`streetlight_counts` transform step aggregates the `streetlights` extract into a per-cell
-`streetlight_counts_h3_9` (count of street lights per resolution-9 cell, keyed by `spatial_id`); neither
-it nor the raw `streetlights` point layer is bundled by default — pull them in with
-`--include streetlight_counts_h3_9` (or `--include streetlights` for the raw points, millions of rows).
+Each extract node writes `<name>.parquet`; the **transform** phase turns those into the per-cell
+aggregation parquet, one per relation. Those parquet are the build's output — a consumer joins the
+counts to the `*_geogs` on `spatial_id` and the ONS boundary tables by code. The `streetlight_counts`
+transform step aggregates the `streetlights` extract into a per-cell `streetlight_counts_h3_9` (count of
+street lights per resolution-9 cell, keyed by `spatial_id`).
 
 The `buildings` extract itself spatially joins each footprint to the 2021 output areas, tagging it with
 `oa21cd` (the OA21 code) of the OA containing its **centroid** (a LEFT join, so a footprint whose
@@ -243,9 +209,8 @@ Likewise the `building_counts` transform step aggregates the `buildings` extract
 footprints) into `building_counts_h3_9` — the count of buildings per resolution-9 cell **split by
 `map_simple_use`** (Residential / Non Residential / Mixed Use), keyed by `spatial_id`. Each building is
 placed by its footprint centroid, and the output is restricted to cells present in `crime_counts_h3_9`
-so it lines up with the crime grid (≈83% of all footprints fall in a crime cell). It is bundled in the
-default minimal DB (skipped if the optional `buildings` extract was absent); the raw `buildings` layer
-(tens of millions of polygons) is **not** bundled by default but can be pulled in with `--include buildings`.
+so it lines up with the crime grid (≈83% of all footprints fall in a crime cell). The per-cell counts
+are the useful form for a consumer; the raw `buildings` layer is tens of millions of polygons.
 
 Two attribute-only extracts hold the Census 2021 populations per 2021 output area, both keyed by
 `spatial_id` (the OA21 code). `workplace_population` is the **WP001** count (nomis bulk download): the
@@ -280,7 +245,8 @@ OSM coverage of the `streetlights` and `cctv` layers is uneven — see
 [Data-quality caveats](#data-quality-caveats) below.
 
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
-`OGC:CRS84`, which is stripped to a bare `GEOMETRY` on load (the coordinates are the contract).
+`OGC:CRS84`, which is stripped to a bare `GEOMETRY` when the transform imports it (the coordinates are
+the contract).
 
 ## Datasets
 
@@ -350,32 +316,34 @@ each exposing a `STEP`. Each step writes the relations it produces out as parque
 `data_dir()/transform`; a step whose outputs already exist is skipped unless `--all`. Registry order
 respects `depends_on`:
 
-| Step | Module | Outputs | Depends on |
-| ---- | ------ | ------- | ---------- |
-| `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `crime_counts_h3_{res}`, `crime_counts_{key}` (per ONS geography) | — |
-| `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `streetlight_counts_h3_9` | — |
-| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
-| `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `population_counts_h3_9` | — |
-| `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3_{res}_{key}_lookup` | `crime_counts` |
-| `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3_{res}_{name}_lookup` | `crime_counts` |
-| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3_{res}_retail_centre_lookup` | `crime_counts` |
-| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3_{res}_geogs` | `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
-| `hotspot_counts` | [hotspot_counts.py](src/safer_streets_tooling/transform/hotspot_counts.py) | `crime_counts_hotspots`, `{streetlight,building,population,road_intersection}_counts_hotspots` | — |
-| `hotspot_lookups` | [hotspot_lookups.py](src/safer_streets_tooling/transform/hotspot_lookups.py) | `hotspots_{key}_lookup`, `hotspots_{name}_lookup`, `hotspots_retail_centre_lookup` | — |
-| `hotspot_geogs` | [hotspot_geogs.py](src/safer_streets_tooling/transform/hotspot_geogs.py) | `hotspots_geogs` | `hotspot_lookups` |
-| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `crime_counts_beahiv_202` | — |
-| `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv_202_{key}_lookup`, `beahiv_202_{name}_lookup`, `beahiv_202_retail_centre_lookup` | `beahiv_counts` |
-| `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv_202_geogs` | `beahiv_lookups` |
+| Step | Module | `--grid` | Outputs | Depends on |
+| ---- | ------ | -------- | ------- | ---------- |
+| `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `h3` | `crime_counts_h3_{res}`, `crime_counts_{key}` (per ONS geography) | — |
+| `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `h3` | `streetlight_counts_h3_9` | — |
+| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `h3` | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
+| `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `h3` | `population_counts_h3_9` | — |
+| `road_intersection_counts` | [road_intersection_counts.py](src/safer_streets_tooling/transform/road_intersection_counts.py) | `h3` | `road_intersection_counts_h3_{res}` | `crime_counts` |
+| `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3` | *(none — `h3_{res}_{key}_lookup` stays in memory, folded into `h3_{res}_geogs`)* | `crime_counts` |
+| `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3` | `h3_{res}_{name}_lookup` | `crime_counts` |
+| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3` | `h3_{res}_retail_centre_lookup` | `crime_counts` |
+| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3` | `h3_{res}_geogs` | `crime_counts`, `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
+| `hotspot_counts` | [hotspot_counts.py](src/safer_streets_tooling/transform/hotspot_counts.py) | `ho` | `crime_counts_hotspots`, `{streetlight,building,population,road_intersection}_counts_hotspots` | — |
+| `hotspot_lookups` | [hotspot_lookups.py](src/safer_streets_tooling/transform/hotspot_lookups.py) | `ho` | `hotspots_{name}_lookup`, `hotspots_retail_centre_lookup` (the `hotspots_{key}_lookup` stay in memory) | — |
+| `hotspot_geogs` | [hotspot_geogs.py](src/safer_streets_tooling/transform/hotspot_geogs.py) | `ho` | `hotspots_geogs` | `hotspot_lookups` |
+| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `beahiv` | `crime_counts_beahiv_202` | — |
+| `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv` | `beahiv_202_{name}_lookup`, `beahiv_202_retail_centre_lookup` (the `beahiv_202_{key}_lookup` stay in memory) | `beahiv_counts` |
+| `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `beahiv_202_geogs` | `beahiv_counts`, `beahiv_lookups` |
 
 ### Spatial units
 
-The transform aggregates onto three grids, all keyed by `spatial_id`:
+The transform aggregates onto three grids, all keyed by `spatial_id`. Each is a `Grid` family — the
+values of `data transform --grid`, repeatable, all three by default:
 
-| Unit | `key` | Cells | Cell area | `spatial_id` |
-| ---- | ----- | ----- | --------- | ------------ |
-| H3, per resolution in `H3_RESOLUTIONS` (currently `[9]`) | `h3_{res}` | the cells carrying crimes, from `crime_counts_h3_{res}` | `h3_cell_area` (geodesic, m²) | the cell's canonical hex string (`VARCHAR`) |
-| Home Office hotspot hexes | `hotspots` | every polygon in the `hotspots` extract | `ST_Area` of the polygon (m²) | the supplied hex id (`VARCHAR`) |
-| [BEAHIV](https://github.com/safer-streets/beahiv) 202m equal-area hexes | `beahiv_202` | the cells carrying crimes, from `crime_counts_beahiv_202` | `3√3/2·s²` — a constant, the grid being equal-area (planar m²) | the encoded cell id (`BIGINT`) |
+| Unit | `--grid` | `key` | Cells | Cell area | `spatial_id` |
+| ---- | -------- | ----- | ----- | --------- | ------------ |
+| H3, per resolution in `H3_RESOLUTIONS` (currently `[9]`) | `h3` | `h3_{res}` | the cells carrying crimes, from `crime_counts_h3_{res}` | `h3_cell_area` (geodesic, m²) | the cell's canonical hex string (`VARCHAR`) |
+| Home Office hotspot hexes | `ho` | `hotspots` | every polygon in the `hotspots` extract | `ST_Area` of the polygon (m²) | the supplied hex id (`VARCHAR`) |
+| [BEAHIV](https://github.com/safer-streets/beahiv) 202m equal-area hexes | `beahiv` | `beahiv_202` | the cells carrying crimes, from `crime_counts_beahiv_202` | `3√3/2·s²` — a constant, the grid being equal-area (planar m²) | the encoded cell id (`BIGINT`) |
 
 A [`SpatialUnit`](src/safer_streets_tooling/transform/base.py) holds what the per-cell SQL varies on
 (the `key` that names its relations, the subquery yielding each cell's `spatial_id` + BNG `cell_geom`,
@@ -384,6 +352,11 @@ have one `build_unit` that all three step families call. The counts differ more 
 an H3 cell is an id lookup, in a hotspot hex a point-in-polygon join, in a BEAHIV cell arithmetic on
 its BNG coordinates — so each counts module carries a `build_hotspots` alongside its H3 `build`
 (`hotspot_counts` wires them together), and `beahiv_counts` is its own step.
+
+Every step declares its family in the `grid` field of its `TransformStep`, and no step depends on one
+in another family (checked at import), so `--grid` can build any subset: the unselected steps are left
+out of the pipeline entirely and their parquet on disk are untouched. The H3 resolutions are not a CLI
+knob — they are a property of the H3 gridding, taken from `H3_RESOLUTIONS`.
 
 #### Why BEAHIV as well as H3
 
@@ -409,7 +382,7 @@ segfaults the process.
 
 ## Table catalogue (`index.parquet`)
 
-Every command that (re)builds parquet (`extract` / `transform` / `assemble` / `build`) rewrites
+Every command that (re)builds parquet (`extract` / `transform` / `build`) rewrites
 `data_dir()/index.parquet` (also available standalone as `data index`): one row per parquet
 under `extract/` and `transform/`, with its `phase`, `name`, a one-line `description`, its
 `n_rows` / `n_columns` / `columns` schema summary, a `has_geometry` flag, a `local_only` flag and
@@ -434,7 +407,7 @@ Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
 
 | File | Role |
 | ---- | ---- |
-| [data_pipeline.py](src/safer_streets_tooling/data_pipeline.py) | `data` CLI: `extract` / `transform` / `load` / `assemble` / `build` / `index` / `sync` commands |
+| [data_pipeline.py](src/safer_streets_tooling/data_pipeline.py) | `data` CLI: `extract` / `transform` / `build` / `index` / `sync` commands |
 | [index.py](src/safer_streets_tooling/index.py) | `build_index`: writes `index.parquet` cataloguing every extract + transform table (name, description, schema) |
 | [local_only.py](src/safer_streets_tooling/local_only.py) | `is_local_only`: which tables stay local — the hotspot family, excluded from `sync` and flagged in `index.parquet` |
 | [extract/pipeline.py](src/safer_streets_tooling/extract/pipeline.py) | Concurrent extract phase: `DatasetExtractNode`, `build_pipeline`, `run_extract` |
@@ -445,7 +418,7 @@ Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
 | [extract/base.py](src/safer_streets_tooling/extract/base.py) | `Dataset` spec + `ExtractContext` |
 | [extract/__init__.py](src/safer_streets_tooling/extract/__init__.py) | Ordered `DATASETS` registry + `BY_NAME` + dependency validation |
 | [extract/_common.py](src/safer_streets_tooling/extract/_common.py) | `download`, `extract_cached`, `rename_geom_column`, `write_geoparquet`, `read_geoparquet` |
-| [transform/base.py](src/safer_streets_tooling/transform/base.py) | `TransformStep` + `SpatialUnit` specs, `H3_RESOLUTIONS` / `h3_unit`, `create_clause` / `table_exists` helpers |
+| [transform/base.py](src/safer_streets_tooling/transform/base.py) | `TransformStep` + `SpatialUnit` + `Grid` specs, `H3_RESOLUTIONS` / `h3_unit`, `create_clause` / `table_exists` helpers |
 | [transform/hotspots.py](src/safer_streets_tooling/transform/hotspots.py) | The hotspot-hex unit: `HOTSPOT_UNIT`, `available`, `placed_points` (point-in-hex join) |
 | [transform/beahiv.py](src/safer_streets_tooling/transform/beahiv.py) | The BEAHIV unit: `BEAHIV_UNIT`, `available`, `register_udfs` (cell encode + centre decode) |
 | [beahiv_grid.py](src/safer_streets_tooling/beahiv_grid.py) | The BEAHIV grid's side length / orientation / key / cell area, shared by the extract and the transform |
@@ -455,15 +428,13 @@ Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
 
 ```bash
 uv sync
-uv run data build                       # extract any missing parquet, then transform + load
+uv run data build                       # extract any missing parquet, then transform
 uv run data extract                     # (re)build only missing parquet intermediates
 uv run data extract --only schools      # refresh one dataset (reads open_roads.parquet from cache)
 uv run data extract --force-download    # re-fetch every source and rebuild
-uv run data transform                   # (re)build the H3 aggregation parquet from the extract parquet
-uv run data load                        # (optional, not currently used) assemble the minimal single-file DB
-uv run data load --include road_network # …plus any extra table(s) by name
-uv run data assemble                    # transform + load in one step
-uv run data index                       # (re)write index.parquet by hand (extract/transform/assemble/build do this too)
+uv run data transform                   # (re)build every grid's aggregation parquet from the extract parquet
+uv run data transform --grid beahiv     # …only the BEAHIV grid (repeatable: --grid h3 --grid ho --grid beahiv)
+uv run data index                       # (re)write index.parquet by hand (extract/transform/build do this too)
 uv run data sync                        # upload the extract + transform parquet to Azure Blob (phase2)
 uv run data sync --update newer         # two-way: upload if local newer, download if remote newer
 ```
@@ -475,8 +446,7 @@ uv run data sync --update newer         # two-way: upload if local newer, downlo
 ```
 
 and query the parquet directly with an in-memory DuckDB (locally, or straight from the blob container
-without syncing at all) — the current consumer workflow. `uv run data load` remains available if you
-want everything bundled into a single offline database file.
+without syncing at all) — the consumer workflow.
 
 `data sync` reconciles every `*.parquet` under `data_dir()/extract` and `data_dir()/transform` — plus
 the root `index.parquet` catalogue — with the
@@ -522,8 +492,9 @@ lists any it finds under a `local-only blob(s) already in phase2` warning, to be
 ## Adding a transform step
 
 1. Write a module under `src/safer_streets_tooling/transform/` exposing a `STEP = TransformStep(...)`
-   with a `build(con, resolutions, replace)`, an `outputs(con, resolutions)` listing the relations it
-   produces, a one-line `description` (required — surfaced in `index.parquet`), and the names of any
-   steps it `depends_on`.
+   with a `build(con, replace)`, an `outputs(con)` listing the relations it produces, the `grid` family
+   it belongs to (`Grid.H3` / `Grid.HO` / `Grid.BEAHIV`), a one-line `description` (required — surfaced
+   in `index.parquet`), and the names of any steps it `depends_on` — which must be in the same family,
+   or a `--grid` subset would drop them (checked at import).
 2. Register it in `src/safer_streets_tooling/transform/__init__.py` (after any `depends_on`).
-3. `data transform` then `data sync` (add `data load` only if you also want the single-file DB bundle).
+3. `data transform` (or `data transform --grid <family>`) then `data sync`.

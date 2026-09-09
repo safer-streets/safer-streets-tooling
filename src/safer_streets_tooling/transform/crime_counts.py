@@ -1,22 +1,26 @@
-"""``crime_counts_h3_{res}`` / ``crime_counts_{key}`` / ``crime_counts_hotspots`` — crimes counted per spatial unit / crime type / month.
+"""``crime_counts_h3_{res}`` / ``crime_counts_hotspots`` — crimes counted per cell / crime type / month.
 
-The H3 tables index each crime's lat/lon straight to a cell; the polygon tables (the ONS geographies —
-PFA / LAD / MSOA / LSOA / OA — and the Home Office hotspot hexes) assign each crime point-in-polygon to
-a boundary, keyed by the same ``spatial_id`` / ``crime_type`` / ``month`` / ``count`` schema.
+The H3 table indexes each crime's lat/lon straight to a cell — arithmetic on the coordinates, no join.
+The Home Office hotspot hexes are a polygon layer, so those counts assign each crime point-in-polygon to
+a hex, keyed by the same ``spatial_id`` / ``crime_type`` / ``month`` / ``count`` schema.
+
+The ONS geography counts (``crime_counts_{key}``) used to live here too, which meant every step of the
+H3 chain waited on five point-in-polygon passes that have nothing to do with H3. They are now
+:mod:`.geography_counts`, on the ``ons`` grid.
 """
 
 import duckdb
 
 from safer_streets_tooling.transform import hotspots
-from safer_streets_tooling.transform.base import TransformStep, create_clause
-from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
+from safer_streets_tooling.transform.base import H3_RESOLUTIONS, Grid, TransformStep, create_clause
 
 # The crimes that contribute to the per-cell counts: geolocated, and not British Transport Police
 # (their crimes are reported against the rail network rather than where they occurred, so they would
-# distort the per-cell counts). Shared by the count queries and the conservation checks — here and in
-# the BEAHIV counts, which must count exactly the same crimes to be comparable — so they can't drift
-# apart.
-CRIME_FILTER = "latitude IS NOT NULL AND longitude IS NOT NULL AND falls_within != 'British Transport Police'"
+# distort the per-cell counts). Shared by the count queries and the conservation checks — here, in the
+# BEAHIV counts and in the geography counts, which must count exactly the same crimes to be comparable —
+# so they can't drift apart. It lives in `crime_locations`, the lowest module that needs it, and is
+# re-exported here because this is where callers have always found it.
+from safer_streets_tooling.transform.crime_locations import CRIME_FILTER
 
 
 def expected_crimes(con: duckdb.DuckDBPyConnection) -> int:
@@ -54,23 +58,19 @@ def _count_in_polygons(con: duckdb.DuckDBPyConnection, key: str, table: str, exp
     print(f"  crime_counts_{key}: {actual:,}/{expected:,} crimes fall within a boundary")
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    """Create ``crime_counts_h3_{res}`` and ``crime_counts_{key}`` counting crimes per spatial unit /
-    crime type / month.
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``crime_counts_h3_{res}`` counting crimes per H3 cell / crime type / month.
 
-    The spatial unit is an H3 cell (its canonical lowercase-hex string) for ``crime_counts_h3_{res}``,
-    and an ONS geography code (PFA / LAD / MSOA / LSOA / OA) for ``crime_counts_{key}`` — the latter by
-    joining each crime's BNG point into the boundary table with ``ST_Contains``. British Transport
-    Police records (``falls_within``) are excluded from both: their crimes are reported against the
-    rail network rather than the place they occurred, so they would distort the counts.
+    The cell is taken straight from the crime's lat/lon with ``h3_latlng_to_cell`` — no geometry, no
+    join. British Transport Police records (``falls_within``) are excluded: their crimes are reported
+    against the rail network rather than the place they occurred, so they would distort the counts.
 
-    Every retained crime lands in exactly one H3 cell, so those counts must sum back to the number of
+    Every retained crime lands in exactly one H3 cell, so these counts must sum back to the number of
     input rows passing ``CRIME_FILTER``; a mismatch means the aggregation silently dropped (or
-    duplicated) crimes and raises rather than emitting a skewed grid. The geography counts can only
-    assert an upper bound (see :func:`_count_in_polygons`).
+    duplicated) crimes and raises rather than emitting a skewed grid.
     """
     expected = expected_crimes(con)
-    for res in resolutions:
+    for res in H3_RESOLUTIONS:
         con.execute(f"""
             {create_clause("TABLE", f"crime_counts_h3_{res}", replace=replace)} AS
             SELECT
@@ -89,12 +89,9 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
                 f"filter — the per-cell counts are not conserved (aggregation dropped or duplicated crimes)"
             )
 
-    for key, table in GEOGRAPHY_MAPPINGS.items():
-        _count_in_polygons(con, key, table, expected, replace)
 
-
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
-    return [f"crime_counts_h3_{res}" for res in resolutions] + [f"crime_counts_{key}" for key in GEOGRAPHY_MAPPINGS]
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    return [f"crime_counts_h3_{res}" for res in H3_RESOLUTIONS]
 
 
 def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
@@ -117,6 +114,7 @@ STEP = TransformStep(
     name="crime_counts",
     build=build,
     outputs=outputs,
-    description="Crimes counted per spatial unit (H3 cell / ONS geography code) / crime_type / month (BTP excluded).",
-    extract_inputs=("crime_data", *GEOGRAPHY_MAPPINGS.values()),
+    grid=Grid.H3,
+    description="Crimes counted per H3 cell / crime_type / month (BTP excluded).",
+    extract_inputs=("crime_data",),
 )

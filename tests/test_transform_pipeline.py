@@ -7,7 +7,16 @@ import duckdb
 import pytest
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
-from safer_streets_tooling.transform import STEPS, TransformNode, TransformStep, build_all, build_pipeline, geogs
+from safer_streets_tooling.transform import (
+    STEPS,
+    Grid,
+    TransformNode,
+    TransformStep,
+    build_all,
+    build_pipeline,
+    geogs,
+)
+from safer_streets_tooling.transform.base import H3_RESOLUTIONS, h3_unit
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 
 
@@ -19,14 +28,16 @@ def _connect():
         pytest.skip(f"extension download unavailable: {e}")
 
 
-def _step(name, build, *, outputs=lambda con, res: [], depends_on=(), extract_inputs=()):
-    return TransformStep(name=name, build=build, outputs=outputs, depends_on=depends_on, extract_inputs=extract_inputs)
+def _step(name, build, *, outputs=lambda con: [], grid=Grid.H3, depends_on=(), extract_inputs=()):
+    return TransformStep(
+        name=name, build=build, outputs=outputs, grid=grid, depends_on=depends_on, extract_inputs=extract_inputs
+    )
 
 
 def test_pipeline_wires_data_dependencies():
     """crime_counts has no deps; the three lookups depend on it; geogs waits for all three."""
     con = duckdb.connect()
-    pipeline = build_pipeline(STEPS, con, resolutions=[8])
+    pipeline = build_pipeline(STEPS, con)
 
     assert pipeline.nodes["crime_counts"].dependency_ids == ()
     assert pipeline.nodes["streetlight_counts"].dependency_ids == ()  # independent of crime_counts
@@ -34,7 +45,14 @@ def test_pipeline_wires_data_dependencies():
     assert pipeline.nodes["geo_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["overlap_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
-    assert pipeline.nodes["geogs"].dependency_ids == ("geo_lookups", "overlap_lookups", "retail_centre_lookups")
+    # geogs also waits on crime_counts directly: geo_lookups between them publishes no parquet, so it
+    # carries no mtime the staleness check could use
+    assert pipeline.nodes["geogs"].dependency_ids == (
+        "crime_counts",
+        "geo_lookups",
+        "overlap_lookups",
+        "retail_centre_lookups",
+    )
 
     # the hotspot hexes are their own grid (cells come from the extract, not from crime_counts), so
     # only hotspot_geogs waits on anything
@@ -46,7 +64,44 @@ def test_pipeline_wires_data_dependencies():
     # its chain is the H3 one's shape on the other grid
     assert pipeline.nodes["beahiv_counts"].dependency_ids == ()  # independent of crime_counts
     assert pipeline.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
-    assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_lookups",)
+    assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_counts", "beahiv_lookups")
+
+
+def test_grids_narrow_the_pipeline_to_those_families():
+    """`--grid` drops every step outside the chosen families; the survivors keep their own edges."""
+    con = duckdb.connect()
+
+    beahiv_only = build_pipeline(STEPS, con, grids=[Grid.BEAHIV])
+    assert set(beahiv_only.nodes) == {"beahiv_counts", "beahiv_lookups", "beahiv_geogs"}
+    assert beahiv_only.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
+
+    two = build_pipeline(STEPS, con, grids=[Grid.H3, Grid.HO])
+    assert "crime_counts" in two.nodes and "hotspot_geogs" in two.nodes
+    assert not any(name.startswith("beahiv") for name in two.nodes)
+
+
+def test_registry_rejects_a_cross_grid_dependency():
+    """A dependency across families would break a --grid subset (the upstream step is simply absent), so
+    the registry refuses one at import time rather than failing mid-build."""
+    from safer_streets_tooling.transform import _validate
+
+    def noop(con, replace):
+        pass
+
+    steps = (
+        TransformStep(name="counts", build=noop, outputs=lambda con: [], grid=Grid.H3, description="H3 counts"),
+        TransformStep(
+            name="beahiv_geogs",
+            build=noop,
+            outputs=lambda con: [],
+            grid=Grid.BEAHIV,
+            description="BEAHIV geogs",
+            depends_on=("counts",),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="another grid"):
+        _validate(steps)
 
 
 def test_steps_run_respecting_dependency_order():
@@ -54,7 +109,7 @@ def test_steps_run_respecting_dependency_order():
     order: list[str] = []
 
     def record(name):
-        def build(con, resolutions, replace):
+        def build(con, replace):
             order.append(name)
 
         return build
@@ -67,7 +122,7 @@ def test_steps_run_respecting_dependency_order():
         _step("geogs", record("geogs"), depends_on=("geo_lookups", "overlap_lookups", "retail_centre_lookups")),
     ]
 
-    build_all(steps, duckdb.connect(), resolutions=[8])
+    build_all(steps, duckdb.connect())
 
     assert order.index("crime_counts") < order.index("geo_lookups")
     assert order.index("crime_counts") < order.index("overlap_lookups")
@@ -129,33 +184,31 @@ def _hotspot_table(con, cities=("leeds",), radius=1000):
 
 
 def test_crime_counts_conserves_filtered_input():
-    """The per-cell counts sum back to the geolocated, non-BTP input rows at every resolution."""
+    """The per-cell counts sum back to the geolocated, non-BTP input rows at every H3 resolution built."""
     from safer_streets_tooling.transform import crime_counts
 
     con = _connect()  # needs the h3 extension (h3_latlng_to_cell)
     _crime_data(con)
     _boundary_tables(con)
 
-    crime_counts.build(con, [8, 9, 10], True)
+    crime_counts.build(con, True)
 
-    for res in (8, 9, 10):
+    for res in H3_RESOLUTIONS:
         total = con.execute(f"SELECT SUM(count) FROM crime_counts_h3_{res}").fetchone()[0]
         assert total == 4  # 6 rows − 1 BTP − 1 un-geolocated
-    assert crime_counts.outputs(con, [8, 9, 10]) == [f"crime_counts_h3_{r}" for r in (8, 9, 10)] + [
-        f"crime_counts_{key}" for key in GEOGRAPHY_MAPPINGS
-    ]
+    assert crime_counts.outputs(con) == [f"crime_counts_h3_{r}" for r in H3_RESOLUTIONS]
 
 
-def test_crime_counts_counts_per_ons_geography():
-    """Each ONS geography table counts the filtered crimes point-in-polygon, keyed by boundary code /
-    crime type / month — same schema and exclusions as the H3 counts."""
-    from safer_streets_tooling.transform import crime_counts
+def test_geography_counts_counts_per_ons_geography():
+    """Each ONS geography table counts the filtered crimes, keyed by boundary code / crime type /
+    month — same schema and exclusions as the H3 counts."""
+    from safer_streets_tooling.transform import geography_counts
 
     con = _connect()
     _crime_data(con)
     _boundary_tables(con)
 
-    crime_counts.build(con, [9], True)
+    geography_counts.build(con, True)
 
     for key in GEOGRAPHY_MAPPINGS:
         per_area = dict(
@@ -169,26 +222,71 @@ def test_crime_counts_counts_per_ons_geography():
     assert row == (2,)
 
 
-def test_crime_counts_drops_crimes_outside_boundary_coverage():
+def test_geography_counts_match_a_direct_point_in_polygon():
+    """The counts are built from one join against the *finest* layer and rolled up the nesting, never
+    joined to the coarser layers. That has to give what joining each layer directly would — it is the
+    whole basis for not paying 593 us per point against the police-force polygons."""
+    from safer_streets_tooling.transform import geography_counts
+    from safer_streets_tooling.transform.crime_locations import CRIME_FILTER
+
+    con = _connect()
+    _crime_data(con)
+    _boundary_tables(con)
+
+    geography_counts.build(con, True)
+
+    for key, table in GEOGRAPHY_MAPPINGS.items():
+        direct = con.execute(f"""
+            SELECT b.spatial_id, c.crime_type, c._month, COUNT(*)
+            FROM (SELECT crime_type, _month, geom FROM crime_data WHERE {CRIME_FILTER}) c
+            JOIN {table} b ON ST_Contains(b.geom, c.geom)
+            GROUP BY ALL ORDER BY ALL
+        """).fetchall()
+        rolled = con.execute(f"""
+            SELECT spatial_id, crime_type, month, count FROM crime_counts_{key} ORDER BY ALL
+        """).fetchall()
+        assert rolled == direct, key
+
+
+def test_geography_counts_drop_crimes_outside_boundary_coverage():
     """A crime outside every boundary polygon (e.g. NI crimes vs the E&W-only layers) is dropped from
     the geography counts without raising — only over-counting is an error."""
-    from safer_streets_tooling.transform import crime_counts
+    from safer_streets_tooling.transform import geography_counts
 
     con = _connect()
     _crime_data(con)
     _boundary_tables(con, cities=("leeds", "manchester"))  # london crime left uncovered
 
-    crime_counts.build(con, [9], True)
+    geography_counts.build(con, True)
 
     for key in GEOGRAPHY_MAPPINGS:
         total = con.execute(f"SELECT SUM(count) FROM crime_counts_{key}").fetchone()[0]
         assert total == 3  # the london crime falls in no polygon
 
 
-def test_crime_counts_raises_when_boundaries_overlap():
-    """Overlapping boundary polygons would count a crime in more than one area — the upper-bound
-    conservation check raises rather than emitting inflated counts."""
-    from safer_streets_tooling.transform import crime_counts
+def test_geography_counts_raise_when_output_areas_overlap():
+    """Overlapping polygons in the layer actually joined to would place a crime in two output areas —
+    the upper-bound conservation check raises rather than emitting inflated counts."""
+    from safer_streets_tooling.transform import geography_counts
+
+    con = _connect()
+    _crime_data(con)
+    _boundary_tables(con)
+    lat, lon = _CITIES["leeds"]
+    con.execute(f"""
+        INSERT INTO output_areas_2021
+        SELECT 'leeds_overlap',
+            ST_Buffer(ST_Transform(ST_Point({lon}, {lat}), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000)
+    """)
+
+    with pytest.raises(ValueError, match="more than one output area"):
+        geography_counts.build(con, True)
+
+
+def test_geography_counts_raise_when_the_layers_do_not_nest():
+    """A coarser layer that doesn't partition the finer one would double-count on roll-up — e.g. a LAD
+    sitting in two police force areas. The nesting check catches it instead of inflating the totals."""
+    from safer_streets_tooling.transform import geography_counts
 
     con = _connect()
     _crime_data(con)
@@ -196,12 +294,12 @@ def test_crime_counts_raises_when_boundaries_overlap():
     lat, lon = _CITIES["leeds"]
     con.execute(f"""
         INSERT INTO police_force_areas
-        SELECT 'leeds_overlap',
+        SELECT 'leeds_second_force',
             ST_Buffer(ST_Transform(ST_Point({lon}, {lat}), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000)
     """)
 
-    with pytest.raises(ValueError, match="more than one area"):
-        crime_counts.build(con, [9], True)
+    with pytest.raises(ValueError, match="do not nest"):
+        geography_counts.build(con, True)
 
 
 class _DropBurglaryFromCounts:
@@ -226,19 +324,19 @@ def test_crime_counts_raises_when_counts_not_conserved():
     _boundary_tables(con)
 
     with pytest.raises(ValueError, match="not conserved"):
-        crime_counts.build(_DropBurglaryFromCounts(con), [9], True)  # ty:ignore[invalid-argument-type]
+        crime_counts.build(_DropBurglaryFromCounts(con), True)  # ty:ignore[invalid-argument-type]
 
 
 def test_step_failure_is_reraised():
     """A failing transform step is captured as Err by the node, then re-raised by build_all."""
 
-    def boom(con, resolutions, replace):
+    def boom(con, replace):
         raise RuntimeError("nope")
 
     steps = [_step("boom", boom)]
 
     with pytest.raises(RuntimeError, match="nope"):
-        build_all(steps, duckdb.connect(), resolutions=[8])
+        build_all(steps, duckdb.connect())
 
 
 def test_node_builds_and_writes_output_parquet(tmp_path):
@@ -246,11 +344,11 @@ def test_node_builds_and_writes_output_parquet(tmp_path):
     con = _connect()
     calls = []
 
-    def build(cur, resolutions, replace):
+    def build(cur, replace):
         calls.append("built")
         cur.execute('CREATE TABLE "foo" AS SELECT 1 AS spatial_id, 2 AS v')
 
-    node = TransformNode(_step("n", build, outputs=lambda con, res: ["foo"]), [], con, [8], None, tmp_path)
+    node = TransformNode(_step("n", build, outputs=lambda con: ["foo"]), [], con, None, tmp_path)
     asyncio.run(node())
 
     assert calls == ["built"]
@@ -267,10 +365,10 @@ def test_node_skips_build_and_reloads_cached_parquet(tmp_path):
     con = _connect()
     calls = []
 
-    def build(cur, resolutions, replace):
+    def build(cur, replace):
         calls.append("built")
 
-    node = TransformNode(_step("n", build, outputs=lambda con, res: ["foo"]), [], con, [8], None, tmp_path)
+    node = TransformNode(_step("n", build, outputs=lambda con: ["foo"]), [], con, None, tmp_path)
     asyncio.run(node())
 
     assert calls == []  # exists, no inputs → fresh → build skipped
@@ -286,13 +384,11 @@ def test_node_rebuild_ignores_cache(tmp_path):
     con = _connect()
     calls = []
 
-    def build(cur, resolutions, replace):
+    def build(cur, replace):
         calls.append("built")
         cur.execute('CREATE TABLE "foo" AS SELECT 1 AS spatial_id, 2 AS v')
 
-    node = TransformNode(
-        _step("n", build, outputs=lambda con, res: ["foo"]), [], con, [8], None, tmp_path, rebuild=True
-    )
+    node = TransformNode(_step("n", build, outputs=lambda con: ["foo"]), [], con, None, tmp_path, rebuild=True)
     asyncio.run(node())
 
     assert calls == ["built"]
@@ -314,12 +410,12 @@ def test_node_rebuilds_when_input_is_newer(tmp_path):
     con = _connect()
     calls = []
 
-    def build(cur, resolutions, replace):
+    def build(cur, replace):
         calls.append("built")
         cur.execute('CREATE TABLE "foo" AS SELECT 1 AS spatial_id, 2 AS v')
 
-    step = _step("n", build, outputs=lambda con, res: ["foo"], extract_inputs=("bar",))
-    node = TransformNode(step, [], con, [8], edir, tdir)
+    step = _step("n", build, outputs=lambda con: ["foo"], extract_inputs=("bar",))
+    node = TransformNode(step, [], con, edir, tdir)
     asyncio.run(node())
 
     assert calls == ["built"]  # input newer than output → stale → rebuilt
@@ -341,11 +437,11 @@ def test_node_keeps_cache_when_output_is_newer(tmp_path):
     con = _connect()
     calls = []
 
-    def build(cur, resolutions, replace):
+    def build(cur, replace):
         calls.append("built")
 
-    step = _step("n", build, outputs=lambda con, res: ["foo"], extract_inputs=("bar",))
-    node = TransformNode(step, [], con, [8], edir, tdir)
+    step = _step("n", build, outputs=lambda con: ["foo"], extract_inputs=("bar",))
+    node = TransformNode(step, [], con, edir, tdir)
     asyncio.run(node())
 
     assert calls == []  # output newer than input → fresh → reused
@@ -388,7 +484,8 @@ def test_geogs_includes_cell_area_and_folds_overlaps():
         f"SELECT '{cell}' AS spatial_id, 'rc1' AS retail_centre_id, 9.0 AS distance"
     )
 
-    geogs.build(con, [8], True)
+    # the unit directly, so the fixture can use a res-8 cell whatever H3_RESOLUTIONS holds
+    geogs.build_unit(con, h3_unit(8), True)
 
     cell_area, gs, ur, sub, rl = con.execute(
         f"SELECT cell_area, greenspace_overlap_area, urban_overlap_area, suburban_overlap_area, road_overlap_length "
@@ -398,6 +495,28 @@ def test_geogs_includes_cell_area_and_folds_overlaps():
     assert (float(gs), float(ur), float(sub), float(rl)) == (10.0, 7.0, 3.0, 150.0)
 
 
+def test_geogs_reproduces_every_geography_lookup():
+    """`h3_{res}_geogs` carries each cell's code for every geography, over the same cells the per-key
+    lookups hold — which is why those lookups are build intermediates and not published parquet. The
+    equivalence is asserted rather than assumed, since dropping them relies on it."""
+    from safer_streets_tooling.transform import crime_counts, geo_lookups
+
+    con = _connect()
+    _crime_data(con)
+    _boundary_tables(con)
+
+    crime_counts.build(con, True)
+    geo_lookups.build(con, True)
+    geogs.build(con, True)
+
+    for key in GEOGRAPHY_MAPPINGS:
+        lookup = dict(con.execute(f"SELECT spatial_id, {key} FROM h3_9_{key}_lookup").fetchall())
+        from_geogs = dict(con.execute(f"SELECT spatial_id, {key} FROM h3_9_geogs").fetchall())
+        assert lookup and lookup == from_geogs
+
+    assert geo_lookups.outputs(con) == []  # so none of them is written out
+
+
 def test_streetlight_counts_aggregates_per_res9_cell():
     """streetlight_counts groups the streetlights extract into a per-res-9-cell count keyed by spatial_id."""
     from safer_streets_tooling.transform import streetlight_counts
@@ -405,11 +524,11 @@ def test_streetlight_counts_aggregates_per_res9_cell():
     con = duckdb.connect()  # plain group-by, no spatial/h3 extensions needed
     con.execute("CREATE TABLE streetlights AS SELECT * FROM (VALUES ('aaa'), ('aaa'), ('aaa'), ('bbb')) t(h3_9_id)")
 
-    streetlight_counts.build(con, [9], True)
+    streetlight_counts.build(con, True)
 
     rows = dict(con.execute("SELECT spatial_id, streetlight_count FROM streetlight_counts_h3_9").fetchall())
     assert rows == {"aaa": 3, "bbb": 1}
-    assert streetlight_counts.outputs(con, [9]) == ["streetlight_counts_h3_9"]
+    assert streetlight_counts.outputs(con) == ["streetlight_counts_h3_9"]
 
 
 def _population_inputs(con):
@@ -443,7 +562,7 @@ def test_population_counts_assigns_by_use_then_sums_per_cell():
     con = duckdb.connect()  # plain SQL, no spatial/h3 extensions needed
     _population_inputs(con)
 
-    population_counts.build(con, [9], True)
+    population_counts.build(con, True)
 
     rows = {
         r[0]: (r[1], r[2])
@@ -466,7 +585,7 @@ def test_population_counts_assigns_by_use_then_sums_per_cell():
     assert res_total == pytest.approx(310.0)  # all 300 (OA1) + 10 (OA2) residents land
     assert work_total == pytest.approx(500.0)  # OA1's 500 land; OA2's 50 have nowhere to go
 
-    assert population_counts.outputs(con, [9]) == ["population_counts_h3_9"]
+    assert population_counts.outputs(con) == ["population_counts_h3_9"]
 
 
 def test_population_counts_noop_without_input_tables():
@@ -474,13 +593,13 @@ def test_population_counts_noop_without_input_tables():
     from safer_streets_tooling.transform import population_counts
 
     con = duckdb.connect()
-    population_counts.build(con, [9], True)  # no tables → must not raise
-    assert population_counts.outputs(con, [9]) == []
+    population_counts.build(con, True)  # no tables → must not raise
+    assert population_counts.outputs(con) == []
 
     con.execute("CREATE TABLE buildings(verisk_premise_id INTEGER)")
     con.execute("CREATE TABLE workplace_population(spatial_id VARCHAR)")
-    population_counts.build(con, [9], True)  # residential_population absent → still a no-op
-    assert population_counts.outputs(con, [9]) == []
+    population_counts.build(con, True)  # residential_population absent → still a no-op
+    assert population_counts.outputs(con) == []
 
 
 def test_population_counts_noop_when_buildings_predate_size_columns():
@@ -495,9 +614,9 @@ def test_population_counts_noop_when_buildings_predate_size_columns():
         "SELECT 'OA1' AS spatial_id, 10 AS household_population, 0 AS communal_population"
     )
 
-    population_counts.build(con, [9], True)  # must not raise
+    population_counts.build(con, True)  # must not raise
 
-    assert population_counts.outputs(con, [9]) == []
+    assert population_counts.outputs(con) == []
 
 
 def test_streetlight_counts_noop_without_streetlights_table():
@@ -505,8 +624,8 @@ def test_streetlight_counts_noop_without_streetlights_table():
     from safer_streets_tooling.transform import streetlight_counts
 
     con = duckdb.connect()
-    streetlight_counts.build(con, [9], True)  # no streetlights table → must not raise
-    assert streetlight_counts.outputs(con, [9]) == []
+    streetlight_counts.build(con, True)  # no streetlights table → must not raise
+    assert streetlight_counts.outputs(con) == []
 
 
 def test_road_intersection_counts_per_cell_restricted_to_crime_grid():
@@ -526,11 +645,11 @@ def test_road_intersection_counts_per_cell_restricted_to_crime_grid():
     # only cell_a is in the crime grid → the third point's cell is excluded
     con.execute(f"CREATE TABLE crime_counts_h3_9 AS SELECT '{cell_a}' AS spatial_id")
 
-    road_intersection_counts.build(con, [9], True)
+    road_intersection_counts.build(con, True)
 
     rows = dict(con.execute("SELECT spatial_id, road_intersection_count FROM road_intersection_counts_h3_9").fetchall())
     assert rows == {cell_a: 2}
-    assert road_intersection_counts.outputs(con, [9]) == ["road_intersection_counts_h3_9"]
+    assert road_intersection_counts.outputs(con) == ["road_intersection_counts_h3_9"]
 
 
 def test_road_intersection_counts_noop_without_road_intersections_table():
@@ -538,8 +657,8 @@ def test_road_intersection_counts_noop_without_road_intersections_table():
     from safer_streets_tooling.transform import road_intersection_counts
 
     con = duckdb.connect()
-    road_intersection_counts.build(con, [9], True)  # no road_intersections table → must not raise
-    assert road_intersection_counts.outputs(con, [9]) == []
+    road_intersection_counts.build(con, True)  # no road_intersections table → must not raise
+    assert road_intersection_counts.outputs(con) == []
 
 
 def test_crime_counts_hotspots_counts_per_hex():
@@ -669,8 +788,8 @@ def test_hotspot_lookups_and_geogs_describe_each_hex():
     _boundary_tables(con)
     _hotspot_table(con, cities=("leeds", "manchester"))
 
-    hotspot_lookups.build(con, [9], True)
-    hotspot_geogs.build(con, [9], True)
+    hotspot_lookups.build(con, True)
+    hotspot_geogs.build(con, True)
 
     assert dict(con.execute("SELECT spatial_id, lad24cd FROM hotspots_lad24cd_lookup").fetchall()) == {
         "leeds": "leeds",
@@ -680,8 +799,9 @@ def test_hotspot_lookups_and_geogs_describe_each_hex():
     assert rows.keys() == {"leeds", "manchester"}
     for area in rows.values():
         assert float(area) == pytest.approx(3.14e6, rel=0.01)  # the 1km-radius fixture polygon, in m²
-    assert set(hotspot_lookups.outputs(con, [9])) >= {f"hotspots_{key}_lookup" for key in GEOGRAPHY_MAPPINGS}
-    assert hotspot_geogs.outputs(con, [9]) == ["hotspots_geogs"]
+    # the geography lookups are built but not published — hotspots_geogs carries their codes
+    assert not set(hotspot_lookups.outputs(con)) & {f"hotspots_{key}_lookup" for key in GEOGRAPHY_MAPPINGS}
+    assert hotspot_geogs.outputs(con) == ["hotspots_geogs"]
 
 
 def test_hotspot_steps_are_noops_without_the_hotspots_table():
@@ -692,8 +812,8 @@ def test_hotspot_steps_are_noops_without_the_hotspots_table():
     _crime_data(con)  # a source layer is present; only the hexes are missing
 
     for step in (hotspot_counts, hotspot_lookups, hotspot_geogs):
-        step.build(con, [9], True)  # must not raise
-        assert step.outputs(con, [9]) == []
+        step.build(con, True)  # must not raise
+        assert step.outputs(con) == []
 
 
 def test_geogs_keeps_cells_outside_the_ew_only_layers():
@@ -708,7 +828,7 @@ def test_geogs_keeps_cells_outside_the_ew_only_layers():
         if key != "lad24cd":  # the E&W-only layers have no row for this cell
             con.execute(f"CREATE TABLE h3_9_{key}_lookup AS SELECT '' AS spatial_id, '' AS {key} WHERE false")
 
-    geogs.build(con, [9], True)
+    geogs.build(con, True)
 
     assert con.execute("SELECT spatial_id, lad24cd, pfa24cd, oa21cd FROM h3_9_geogs").fetchall() == [
         (cell, "S12000036", None, None)

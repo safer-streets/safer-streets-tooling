@@ -3,13 +3,13 @@
 import duckdb
 
 from safer_streets_tooling.transform import hotspots
-from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
+from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, table_exists
 
 BUILDINGS_TABLE = "buildings"
 RESOLUTION = 9
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``building_counts_h3_9`` counting buildings per resolution-9 H3 cell / ``map_simple_use``.
 
     Keyed by ``spatial_id`` (the lowercase-hex res-9 cell, matching ``crime_counts_h3_9`` /
@@ -18,7 +18,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     its footprint *centroid*: the ``buildings`` extract already tags every footprint with its res-9 cell
     (``h3_9_id``), so this just reads that column. Output is restricted to cells that appear in
     ``crime_counts_h3_9`` so the count grid lines up with the crime grid. No-op if the buildings table is
-    absent. ``resolutions`` is ignored — this is only produced at resolution 9.
+    absent. Only resolution 9 is ever produced — the extract carries a single ``h3_9_id``.
     """
     if not table_exists(con, BUILDINGS_TABLE):
         return
@@ -31,7 +31,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     """)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not table_exists(con, BUILDINGS_TABLE):
         return []
     return [f"building_counts_h3_{RESOLUTION}"]
@@ -64,6 +64,7 @@ STEP = TransformStep(
     name="building_counts",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="Buildings counted per resolution-9 H3 cell and map_simple_use, keyed by spatial_id.",
     depends_on=("crime_counts",),
     extract_inputs=(BUILDINGS_TABLE,),
