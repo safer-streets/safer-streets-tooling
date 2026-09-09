@@ -103,6 +103,13 @@ Overture S3 is unreachable, mirroring the existing tests.
 
 ## Developer Rules
 
+- **DO NOT READ `.env` FILES.** Never open, `cat`, `grep`, or otherwise read `.env`, `.env.*`, or
+  `.envrc` — in this repo, a parent directory, or anywhere else. They hold live credentials (API
+  keys, tokens, connection strings), and anything read lands in a conversation transcript that is
+  stored and may be processed downstream. This holds even when asked to "check the config" or debug
+  a credential problem: report what is missing by name and let the human inspect the value. The same
+  goes for any other secret store — `~/.aws/credentials`, `~/.ssh/`, `*.pem`, `secrets.*`. If a
+  secret does end up exposed, say so plainly and recommend rotating it.
 - **Core stays as-is.** This repo must not require changes to `safer-streets-core`. Import what you
   need from `safer_streets_core.*` and from core's `scripts.ons_boundaries`. If you find yourself
   needing to edit core, stop and raise it — that crosses a repo boundary.

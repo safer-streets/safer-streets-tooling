@@ -5,7 +5,9 @@ One row per (hex cell, police force area) covering England & Wales, derived from
 area lying inside that force, so a cell straddling a boundary appears once per force it touches and
 its proportions sum to 1 (less on a coast, where part of the cell is sea).
 
-beahiv works natively in British National Grid, so no reprojection happens here.
+beahiv works natively in British National Grid, so no reprojection happens here. ``spatial_id`` is the
+cell id as a plain ``BIGINT``: beahiv reserves the top three bits of an id, so every one of them fits
+a signed 64-bit column, and ``crime_counts_beahiv_202`` is keyed the same way.
 """
 
 import beahiv as bh
@@ -15,10 +17,8 @@ import shapely
 from safer_streets_core.database import duckdb_connector, read_geoparquet, write_geoparquet
 from shapely.geometry.base import BaseGeometry
 
+from safer_streets_tooling.beahiv_grid import ORIENTATION, SIDE_LENGTH
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
-
-SIDE_LENGTH = 202
-ORIENTATION = bh.Orientation.FLAT
 
 # small enough that clipping one cell against a tile is cheap, large enough that the subdivision
 # itself does not dominate; see quad_tiles
@@ -80,7 +80,7 @@ def cell_proportions(polygon: BaseGeometry, cell_polys: np.ndarray) -> np.ndarra
 
 def polyfill_force(polygon: BaseGeometry) -> tuple[np.ndarray, np.ndarray, list[BaseGeometry]]:
     """Cell ids covering polygon, the proportion of each inside it, and their hex outlines."""
-    cell_ids = np.asarray(bh.polyfill(polygon, SIDE_LENGTH, ORIENTATION), dtype=np.uint64)
+    cell_ids = np.asarray(bh.polyfill(polygon, SIDE_LENGTH, ORIENTATION), dtype=np.int64)
     if cell_ids.size == 0:
         return cell_ids, np.zeros(0), []
     cell_polys = np.asarray(bh.cell_polygons(cell_ids), dtype=object)
@@ -101,7 +101,7 @@ def extract(ctx: ExtractContext) -> None:
 
         con.execute("""
             CREATE TABLE beahiv_202 (
-                spatial_id UBIGINT, proportion DOUBLE, pfa24cd VARCHAR, pfa24nm VARCHAR, geom GEOMETRY
+                spatial_id BIGINT, proportion DOUBLE, pfa24cd VARCHAR, pfa24nm VARCHAR, geom GEOMETRY
             );
         """)
         for pfa24cd, pfa24nm, wkt in forces:
@@ -113,7 +113,7 @@ def extract(ctx: ExtractContext) -> None:
                 "force_cells",
                 pa.table(
                     {
-                        "spatial_id": pa.array(cell_ids, type=pa.uint64()),
+                        "spatial_id": pa.array(cell_ids, type=pa.int64()),
                         "proportion": pa.array(proportion, type=pa.float64()),
                         "wkt": pa.array(
                             shapely.to_wkt(np.asarray(cell_polys), rounding_precision=-1), type=pa.string()

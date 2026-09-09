@@ -13,13 +13,15 @@ from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 
 # The crimes that contribute to the per-cell counts: geolocated, and not British Transport Police
 # (their crimes are reported against the rail network rather than where they occurred, so they would
-# distort the per-cell counts). Shared by the count queries and the conservation checks so they can't
-# drift apart.
-_CRIME_FILTER = "latitude IS NOT NULL AND longitude IS NOT NULL AND falls_within != 'British Transport Police'"
+# distort the per-cell counts). Shared by the count queries and the conservation checks — here and in
+# the BEAHIV counts, which must count exactly the same crimes to be comparable — so they can't drift
+# apart.
+CRIME_FILTER = "latitude IS NOT NULL AND longitude IS NOT NULL AND falls_within != 'British Transport Police'"
 
 
-def _expected(con: duckdb.DuckDBPyConnection) -> int:
-    return con.execute(f"SELECT COUNT(*) FROM crime_data WHERE {_CRIME_FILTER}").fetchone()[0]  # ty:ignore[not-subscriptable]
+def expected_crimes(con: duckdb.DuckDBPyConnection) -> int:
+    """How many crimes a count over the whole extract must conserve: the rows passing CRIME_FILTER."""
+    return con.execute(f"SELECT COUNT(*) FROM crime_data WHERE {CRIME_FILTER}").fetchone()[0]  # ty:ignore[not-subscriptable]
 
 
 def _count_in_polygons(con: duckdb.DuckDBPyConnection, key: str, table: str, expected: int, replace: bool) -> None:
@@ -39,7 +41,7 @@ def _count_in_polygons(con: duckdb.DuckDBPyConnection, key: str, table: str, exp
             c.crime_type,
             c._month AS month,
             COUNT(*) AS count
-        FROM (SELECT crime_type, _month, geom FROM crime_data WHERE {_CRIME_FILTER}) c
+        FROM (SELECT crime_type, _month, geom FROM crime_data WHERE {CRIME_FILTER}) c
         JOIN {table} b ON ST_Contains(b.geom, c.geom)
         GROUP BY b.spatial_id, c.crime_type, month;
     """)
@@ -63,11 +65,11 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     rail network rather than the place they occurred, so they would distort the counts.
 
     Every retained crime lands in exactly one H3 cell, so those counts must sum back to the number of
-    input rows passing ``_CRIME_FILTER``; a mismatch means the aggregation silently dropped (or
+    input rows passing ``CRIME_FILTER``; a mismatch means the aggregation silently dropped (or
     duplicated) crimes and raises rather than emitting a skewed grid. The geography counts can only
     assert an upper bound (see :func:`_count_in_polygons`).
     """
-    expected = _expected(con)
+    expected = expected_crimes(con)
     for res in resolutions:
         con.execute(f"""
             {create_clause("TABLE", f"crime_counts_h3_{res}", replace=replace)} AS
@@ -77,7 +79,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
                 _month AS month,
                 COUNT(*) AS count
             FROM crime_data
-            WHERE {_CRIME_FILTER}
+            WHERE {CRIME_FILTER}
             GROUP BY spatial_id, crime_type, month;
         """)
         actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM crime_counts_h3_{res}").fetchone()[0]  # ty:ignore[not-subscriptable]
@@ -104,7 +106,7 @@ def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """
     if not hotspots.available(con):
         return
-    _count_in_polygons(con, hotspots.HOTSPOT_UNIT.key, hotspots.HOTSPOTS_TABLE, _expected(con), replace)
+    _count_in_polygons(con, hotspots.HOTSPOT_UNIT.key, hotspots.HOTSPOTS_TABLE, expected_crimes(con), replace)
 
 
 def hotspot_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:

@@ -59,6 +59,11 @@ family is keyed by the hex id in the same `spatial_id` column, so it joins exact
 cells come from the polygons rather than from the crime counts, so those steps depend on no other step
 (and are a clean no-op when the optional `hotspots` extract is absent).
 
+A third family is built on the **BEAHIV 202m hex grid** by the `beahiv_counts` / `beahiv_lookups` /
+`beahiv_geogs` steps, giving `crime_counts_beahiv_202`, `beahiv_202_*_lookup` and `beahiv_202_geogs`.
+Like the H3 family its cells come from its own crime counts, so the chain has the H3 one's shape on the
+other grid; see [Spatial units](#spatial-units) for why the grid is there at all.
+
 ```mermaid
 flowchart LR
    crime_data
@@ -101,6 +106,9 @@ flowchart LR
    hotspot_counts["*_counts_hotspots"]
    hotspot_lookups["hotspots_*_lookup"]
    hotspots_geogs
+   crime_counts_beahiv_202
+   beahiv_lookups["beahiv_202_*_lookup"]
+   beahiv_202_geogs
 
    direction LR
    database[("safer-streets DB<br/>crime_counts + geogs + features")]
@@ -162,6 +170,20 @@ flowchart LR
     retail_centres --> hotspot_lookups
     hotspot_lookups --> hotspots_geogs
 
+    %% transform edges: the same relations on the BEAHIV grid (its cells come from its own counts)
+    crime_data --> crime_counts_beahiv_202
+    crime_counts_beahiv_202 --> beahiv_lookups
+    police_force_areas --> beahiv_lookups
+    local_authority_districts --> beahiv_lookups
+    msoa_2021 --> beahiv_lookups
+    lsoa_2021 --> beahiv_lookups
+    output_areas_2021 --> beahiv_lookups
+    open_greenspace --> beahiv_lookups
+    land_cover --> beahiv_lookups
+    open_roads --> beahiv_lookups
+    retail_centres --> beahiv_lookups
+    beahiv_lookups --> beahiv_202_geogs
+
     %% load edges (optional): minimal DB = crime counts + geogs + ONS boundary tables + feature layers; --include adds more
     crime_counts_h3_9 -.-> database
     crime_counts_geog -.-> database
@@ -170,6 +192,8 @@ flowchart LR
     h3_9_geogs -.-> database
     hotspot_counts -.-> database
     hotspots_geogs -.-> database
+    crime_counts_beahiv_202 -.-> database
+    beahiv_202_geogs -.-> database
     hotspots -.-> database
     police_force_areas -.-> database
     local_authority_districts -.-> database
@@ -191,7 +215,7 @@ flowchart LR
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef load fill:#1a7f37,stroke:#56d364,stroke-width:1px,color:#ffffff;
     class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv_202,hotspots extract;
-    class crime_counts_h3_9,crime_counts_geog,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs transform;
+    class crime_counts_h3_9,crime_counts_geog,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,crime_counts_beahiv_202,beahiv_lookups,beahiv_202_geogs transform;
     class database load;
 ```
 
@@ -339,22 +363,49 @@ respects `depends_on`:
 | `hotspot_counts` | [hotspot_counts.py](src/safer_streets_tooling/transform/hotspot_counts.py) | `crime_counts_hotspots`, `{streetlight,building,population,road_intersection}_counts_hotspots` | — |
 | `hotspot_lookups` | [hotspot_lookups.py](src/safer_streets_tooling/transform/hotspot_lookups.py) | `hotspots_{key}_lookup`, `hotspots_{name}_lookup`, `hotspots_retail_centre_lookup` | — |
 | `hotspot_geogs` | [hotspot_geogs.py](src/safer_streets_tooling/transform/hotspot_geogs.py) | `hotspots_geogs` | `hotspot_lookups` |
+| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `crime_counts_beahiv_202` | — |
+| `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv_202_{key}_lookup`, `beahiv_202_{name}_lookup`, `beahiv_202_retail_centre_lookup` | `beahiv_counts` |
+| `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv_202_geogs` | `beahiv_lookups` |
 
 ### Spatial units
 
-The transform aggregates onto two grids, both keyed by `spatial_id`:
+The transform aggregates onto three grids, all keyed by `spatial_id`:
 
-| Unit | `key` | Cells | Cell area |
-| ---- | ----- | ----- | --------- |
-| H3, per resolution in `H3_RESOLUTIONS` (currently `[9]`) | `h3_{res}` | the cells carrying crimes, from `crime_counts_h3_{res}` | `h3_cell_area` (geodesic, m²) |
-| Home Office hotspot hexes | `hotspots` | every polygon in the `hotspots` extract | `ST_Area` of the polygon (m²) |
+| Unit | `key` | Cells | Cell area | `spatial_id` |
+| ---- | ----- | ----- | --------- | ------------ |
+| H3, per resolution in `H3_RESOLUTIONS` (currently `[9]`) | `h3_{res}` | the cells carrying crimes, from `crime_counts_h3_{res}` | `h3_cell_area` (geodesic, m²) | the cell's canonical hex string (`VARCHAR`) |
+| Home Office hotspot hexes | `hotspots` | every polygon in the `hotspots` extract | `ST_Area` of the polygon (m²) | the supplied hex id (`VARCHAR`) |
+| [BEAHIV](https://github.com/safer-streets/beahiv) 202m equal-area hexes | `beahiv_202` | the cells carrying crimes, from `crime_counts_beahiv_202` | `3√3/2·s²` — a constant, the grid being equal-area (planar m²) | the encoded cell id (`BIGINT`) |
 
 A [`SpatialUnit`](src/safer_streets_tooling/transform/base.py) holds what the per-cell SQL varies on
 (the `key` that names its relations, the subquery yielding each cell's `spatial_id` + BNG `cell_geom`,
 and its area expression), so `geo_lookups` / `overlap_lookups` / `retail_centre_lookups` / `geogs` each
-have one `build_unit` that both step families call. The counts differ more — placing a *point* in an H3
-cell is an id lookup, in a hex a point-in-polygon join — so each counts module carries a
-`build_hotspots` alongside its H3 `build`, and `hotspot_counts` wires them together.
+have one `build_unit` that all three step families call. The counts differ more — placing a *point* in
+an H3 cell is an id lookup, in a hotspot hex a point-in-polygon join, in a BEAHIV cell arithmetic on
+its BNG coordinates — so each counts module carries a `build_hotspots` alongside its H3 `build`
+(`hotspot_counts` wires them together), and `beahiv_counts` is its own step.
+
+#### Why BEAHIV as well as H3
+
+A 202 m side gives a cell of ~0.106 km², within a percent of an H3 resolution-9 cell, so
+`beahiv_202_geogs` and `h3_9_geogs` are the same attributes over comparable cells on identical data —
+which is the point: it makes the two griddings comparable rather than replacing one with the other.
+BEAHIV is natively EPSG:27700 and exactly equal-area there, where H3 cells vary in area and are
+reprojected from WGS-84. `beahiv_202_geogs` carries the same columns in the same order as
+`h3_9_geogs`; only `spatial_id`'s type differs, since the two indexings identify a cell differently.
+
+The BEAHIV grid parameters live once in
+[beahiv_grid.py](src/safer_streets_tooling/beahiv_grid.py) — the extract that tiles England & Wales and
+the transform that counts onto it must agree on the side length and orientation, or they produce two
+disjoint grids that still join without error.
+
+`spatial_id` is a plain `BIGINT`: beahiv reserves the top three bits of a cell id, so every one of them
+fits a signed 64-bit column and `int(spatial_id)` is what beahiv's `decode` takes. DuckDB has no
+function that decodes one, so the cell geometry comes from a vectorised (`type="arrow"`) UDF over
+beahiv's `centroid` plus constant vertex offsets — every cell of a given side length and orientation is
+the same hexagon translated. Counting uses the matching encoder, `bng_to_cell`, rather than
+`latlon_to_cell`: the crime points are already BNG, and pyproj called from DuckDB's worker threads
+segfaults the process.
 
 ## Table catalogue (`index.parquet`)
 
@@ -396,6 +447,8 @@ Source lives in [src/safer_streets_tooling/](src/safer_streets_tooling/):
 | [extract/_common.py](src/safer_streets_tooling/extract/_common.py) | `download`, `extract_cached`, `rename_geom_column`, `write_geoparquet`, `read_geoparquet` |
 | [transform/base.py](src/safer_streets_tooling/transform/base.py) | `TransformStep` + `SpatialUnit` specs, `H3_RESOLUTIONS` / `h3_unit`, `create_clause` / `table_exists` helpers |
 | [transform/hotspots.py](src/safer_streets_tooling/transform/hotspots.py) | The hotspot-hex unit: `HOTSPOT_UNIT`, `available`, `placed_points` (point-in-hex join) |
+| [transform/beahiv.py](src/safer_streets_tooling/transform/beahiv.py) | The BEAHIV unit: `BEAHIV_UNIT`, `available`, `register_udfs` (cell encode + centre decode) |
+| [beahiv_grid.py](src/safer_streets_tooling/beahiv_grid.py) | The BEAHIV grid's side length / orientation / key / cell area, shared by the extract and the transform |
 | [transform/__init__.py](src/safer_streets_tooling/transform/__init__.py) | Ordered `STEPS` registry + `BY_NAME` + dependency validation |
 
 ## Usage

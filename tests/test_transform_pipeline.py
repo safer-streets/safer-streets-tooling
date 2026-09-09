@@ -42,6 +42,12 @@ def test_pipeline_wires_data_dependencies():
     assert pipeline.nodes["hotspot_lookups"].dependency_ids == ()
     assert pipeline.nodes["hotspot_geogs"].dependency_ids == ("hotspot_lookups",)
 
+    # the BEAHIV grid takes its cells from its own counts, as the H3 grid does from crime_counts, so
+    # its chain is the H3 one's shape on the other grid
+    assert pipeline.nodes["beahiv_counts"].dependency_ids == ()  # independent of crime_counts
+    assert pipeline.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
+    assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_lookups",)
+
 
 def test_steps_run_respecting_dependency_order():
     """build_all runs crime_counts before every lookup, and every lookup before geogs."""

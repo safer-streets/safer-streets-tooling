@@ -6,12 +6,17 @@ relation names it produces (so they can be cached as parquet). Steps are ordered
 ``depends_on`` precedes its dependent (validated at import time), and the pipeline wires them into an
 ``AsyncPipeline`` — mirroring how ``safer_streets_tooling.extract`` turns ``Dataset`` entries into nodes.
 
-The steps come in two families over the two spatial units: the H3 grid at each requested resolution,
-and the Home Office hotspot hexes (the ``hotspot_*`` steps, a no-op when that optional extract is
-absent). Both produce the same relations keyed by ``spatial_id``, differing only in the unit's name.
+The steps come in three families over the three spatial units: the H3 grid at each requested
+resolution, the Home Office hotspot hexes (the ``hotspot_*`` steps, a no-op when that optional extract
+is absent), and the BEAHIV 202m hex grid (the ``beahiv_*`` steps). All produce the same relations keyed
+by ``spatial_id``, differing in the unit's name — and, for BEAHIV, in that column's type: an integer
+cell id rather than the hex string the other two units use.
 """
 
 from safer_streets_tooling.transform import (
+    beahiv_counts,
+    beahiv_geogs,
+    beahiv_lookups,
     building_counts,
     crime_counts,
     geo_lookups,
@@ -40,6 +45,9 @@ STEPS: tuple[TransformStep, ...] = (
     hotspot_counts.STEP,  # independent: the same counts on the hotspot hexes (their own grid)
     hotspot_lookups.STEP,  # independent: the three lookups on the hotspot hexes
     hotspot_geogs.STEP,  # depends on hotspot_lookups
+    beahiv_counts.STEP,  # independent: the same crime counts on the BEAHIV hex grid
+    beahiv_lookups.STEP,  # depends on beahiv_counts: the three lookups on the BEAHIV cells
+    beahiv_geogs.STEP,  # depends on beahiv_lookups
 )
 
 

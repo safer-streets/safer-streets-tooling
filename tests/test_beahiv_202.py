@@ -115,7 +115,7 @@ def test_proportions_match_a_direct_clip():
 def test_cell_proportions_all_inside():
     """A polygon far larger than the cells leaves every proportion at exactly 1.0."""
     geom = _square(400000, 400000, 50000)
-    cell_ids = np.asarray(bh.polyfill(_square(430000, 430000, 2000), SIDE_LENGTH, ORIENTATION), dtype=np.uint64)
+    cell_ids = np.asarray(bh.polyfill(_square(430000, 430000, 2000), SIDE_LENGTH, ORIENTATION), dtype=np.int64)
     cell_polys = np.asarray(bh.cell_polygons(cell_ids), dtype=object)
     assert (cell_proportions(geom, cell_polys) == 1.0).all()
 
@@ -143,8 +143,11 @@ def test_extract_writes_one_row_per_cell_and_force(tmp_path):
     con = duckdb_connector(writeable=True)
     try:
         con.execute(f"CREATE TABLE g AS SELECT * FROM read_parquet('{out.as_posix()}')")
-        cols = [r[1] for r in con.execute("PRAGMA table_info('g')").fetchall()]
-        assert cols == ["spatial_id", "proportion", "pfa24cd", "pfa24nm", "geom"]
+        info = con.execute("PRAGMA table_info('g')").fetchall()
+        assert [r[1] for r in info] == ["spatial_id", "proportion", "pfa24cd", "pfa24nm", "geom"]
+        # a signed integer id, matching crime_counts_beahiv_202: beahiv's reserved top bits put every
+        # cell id below 2**61, so the grid and the counts join without a cast on either side
+        assert info[0][2] == "BIGINT"
 
         rows, cells, forces = _row(con, "SELECT count(*), count(DISTINCT spatial_id), count(DISTINCT pfa24cd) FROM g")
         assert forces == 2

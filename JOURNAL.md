@@ -7,6 +7,122 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## The BEAHIV grid as a third spatial unit (`crime_counts_beahiv_202`, `beahiv_202_geogs`)
+
+**Why** — the `beahiv_202` extract landed as a grid nothing was counted onto, so the BEAHIV gridding
+joined to nothing: no crime counts, no ONS codes, no overlap layers, no nearest retail centre. The
+comparison the grid exists for — the same crimes and the same per-cell attributes on an equal-area
+hexagonal gridding versus H3 — needs both sides built.
+
+**What** — three steps, `beahiv_counts` → `beahiv_lookups` → `beahiv_geogs`, mirroring the hotspot
+trio: `crime_counts_beahiv_202`, `beahiv_202_{key}_lookup`, `beahiv_202_{name}_lookup`,
+`beahiv_202_retail_centre_lookup` and `beahiv_202_geogs` — column for column identical to
+`h3_9_geogs` apart from `spatial_id`'s type, asserted by a test comparing the two schemas.
+[transform/beahiv.py](src/safer_streets_tooling/transform/beahiv.py) holds the unit itself
+(`BEAHIV_UNIT`, `available`, `register_udfs`), the BEAHIV counterpart of
+[transform/hotspots.py](src/safer_streets_tooling/transform/hotspots.py). `crime_counts._CRIME_FILTER`
+and `_expected` become the public `CRIME_FILTER` / `expected_crimes`, so both count paths share one
+definition of "a countable crime" rather than duplicating it.
+
+Verified on the full extract (17,812,176 rows, `threads = 4` as the transform phase actually runs):
+
+| | BEAHIV 202 m | H3 res 9 |
+| --- | --- | --- |
+| crimes counted | 17,485,799 | 17,485,799 |
+| cells | 221,429 | 234,922 |
+| build time | 4.8s | 2.2s |
+
+Identical totals, conservation check passes. The Python UDF costs ~2.1x the native C h3 extension —
+not the order of magnitude a per-row UDF would. Every id came back between 1.15e18 and 1.16e18 —
+just above 2**60, well inside the signed range the `BIGINT` column assumes.
+
+The full chain then runs to `beahiv_202_geogs`: 221,428 rows over 221,428 distinct cells (one row per
+cell, as the schema requires), every one with an ONS code, and a single distinct `cell_area` of
+106,011.90 m² — the analytic hexagon area. 877s, which is `geogs`' usual cost on this many cells
+rather than anything specific to the grid. One cell of the 221,429 doesn't reach `geogs`: it
+intersects no LAD polygon, so `geo_lookups`' inner join drops it — the same behaviour the H3 grid has.
+
+Note this run needed `ST_MakeValid` over the ONS boundaries. The 2026-09-04 boundary extracts contain
+45 invalid polygons (36 OA, 7 LSOA, 1 MSOA, 1 LAD) and `ST_Intersection` against them raises
+`TopologyException: side location conflict`. That is **pre-existing and not specific to this grid** —
+`main`'s H3 `geogs` fails identically on the same data — so it is left to its own fix; see Follow-ups.
+
+**Design decisions**
+
+- *A `SpatialUnit`, not a new grid abstraction.* An earlier draft of this work introduced a parallel
+  `Grid` dataclass and reworked `geo_lookups` / `overlap_lookups` / `retail_centre_lookups` / `geogs`
+  to iterate grids. `SpatialUnit` and its `build_unit` hooks then landed on `main` for the hotspot
+  hexes and are the same idea arrived at independently, so BEAHIV is now simply a third unit and none
+  of those four modules is touched. One abstraction for "a gridding of Great Britain", not two.
+- *Cells from the crime counts, not from the `beahiv_202` extract.* The extract tiles the whole of
+  England & Wales (~1.5m cells); the lookups would then do a boundary intersection for every cell in
+  the country, the overwhelming majority of which carry no crime. Taking the cells from
+  `crime_counts_beahiv_202` makes the grid exactly the crime grid, as it already is for H3, and keeps
+  the comparison like for like.
+- *`spatial_id` as a plain `BIGINT`.* beahiv reserves the top three bits of a cell id, which puts
+  every id below 2**61 — so a signed column holds one and `decode` takes it back with no cast. The
+  earlier draft encoded ids as 16-char hex strings to keep one `spatial_id` type across every grid;
+  that cost a `bytes.fromhex` decode on the way back and joined to nothing, since the `beahiv_202`
+  extract keys on the integer. The extract moved `UBIGINT` → `BIGINT` to match. The consequence is
+  that `beahiv_202_geogs.spatial_id` is an integer where `h3_9_geogs.spatial_id` is a hex string —
+  a property of the two indexings, not of these tables, and a consumer joining counts to geogs stays
+  within one grid.
+- *Counting from BNG, not lat/lon.* `latlon_to_cell` reprojects with pyproj, and calling pyproj from
+  DuckDB's worker threads **segfaults the process** (reproducible on the full extract; survives only
+  at `threads = 1`, and neither a lock nor a thread-local `Transformer` avoids it). The transform runs
+  at `threads = 4`, so that path is unusable. `crime_data.geom` is already BNG, so `bng_to_cell` is
+  also the cheaper call — no reprojecting coordinates we already hold.
+- *The cell centre from a UDF, the hexagon from SQL.* DuckDB has no BEAHIV cell function, so the
+  geometry has to come from Python. A UDF returning the boundary as WKT — the direct analogue of the
+  h3 extension's `h3_cell_to_boundary_wkt` — would mean formatting a WKT string per cell. Instead the
+  UDF returns only the centre as a `STRUCT(x, y)` and the six vertices are constant offsets from it,
+  so the Python side is one vectorised `centroid` call over the whole DuckDB vector with no per-row
+  work at all.
+- *Vertex offsets derived from beahiv, not restated.* Every cell of a given side length and
+  orientation is the same hexagon translated, so the offsets come from `cell_polygon` of a reference
+  cell minus its own centre rather than from a copy of beahiv's vertex-angle table. A test asserts the
+  SQL polygon is vertex-for-vertex `cell_polygon`'s, which catches a wrong CRS, a swapped x/y or a
+  drifted offset in one place. (`cell_polygon` now returns a Shapely `Polygon`, so the ring comes off
+  `.exterior.coords` — and already carries the closing vertex `ST_MakePolygon` needs.)
+- *`cell_area` as the analytic `3√3/2·s²`.* A constant, because the grid is equal-area — and
+  deliberately the *planar* BNG area, the same measure as the `{prefix}_overlap_area` columns it is
+  the denominator for. (The H3 units' `h3_cell_area` is geodesic m², which differs from its own planar
+  BNG area by the ~0.08% grid scale factor; that inconsistency is pre-existing.) Cast to `DOUBLE`
+  explicitly: DuckDB reads a bare decimal literal as `DECIMAL`, which would give the two `*_geogs`
+  tables different `cell_area` types and defeat the point of matching schemas.
+- *The grid's parameters live in [beahiv_grid.py](src/safer_streets_tooling/beahiv_grid.py).* The
+  extract that tiles the grid and the transform that counts onto it must agree on side length and
+  orientation, or they build two disjoint grids that still join on `spatial_id` without error — every
+  row simply missing. One definition, imported by both phases, rather than a copy in each. It also
+  breaks the import cycle that putting them in `beahiv_counts` would create (`beahiv_counts` →
+  `crime_counts` → … ).
+- *UDF registration is idempotent and lock-guarded.* The catalog outlives a single `build` and is
+  shared by every cursor, so a rebuild or a concurrent step would otherwise fail on the name already
+  existing. `remove_function` and re-create looks like the obvious fix but doesn't work: once the UDF
+  has *executed* over real data it only deregisters the Python side, and `create_function` then raises
+  `CatalogException`. `base.register_udf` tests the catalog and skips instead. Every step touching the
+  grid calls `register_udfs`, including the ones that only read the lookups — those are *views*
+  carrying the centre-UDF call, so it must be registered whenever one is evaluated.
+- *Not local-only.* Unlike the hotspot family, nothing here is supplied in confidence — the grid is
+  derived from public boundaries and the counts from public crime data — so the BEAHIV relations sync
+  to the shared container like the H3 ones.
+
+**Follow-ups**
+
+- Only *crime* counts are on this grid. The other measures (`streetlight_counts`, `building_counts`,
+  `population_counts`, `road_intersection_counts`) have H3 and hotspot paths but no BEAHIV one; each
+  would be a `build_beahiv` alongside the existing pair, and they read a precomputed `h3_9_id` column
+  the extracts write, so a BEAHIV equivalent needs either a second id column or a join through the
+  cell polygons.
+- `spatial_id` type now varies by grid (`VARCHAR` for H3 and hotspots, `BIGINT` for BEAHIV). Worth a
+  look at whether the H3 tables should carry the id as an integer too, which would make the three
+  `*_geogs` schemas identical.
+- **`geogs` is currently broken on the live boundary data, for every grid.** The 2026-09-04 ONS
+  extracts contain 45 invalid polygons and `ST_Intersection` against them raises a GEOS
+  `TopologyException`; `main`'s H3 path fails the same way, and the last successful `h3_9_geogs` build
+  (2026-09-03) predates those boundaries. `ST_MakeValid` in the boundary extractors is the likely fix.
+  Deliberately not fixed here — it is neither caused by nor confined to this change.
+
 ## Drop H3 r8/r10; aggregate onto the Home Office hotspot hexes
 
 **Why** — resolutions 8 and 10 tripled the transform's cost and parquet footprint for grids nobody
