@@ -16,7 +16,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     """Build ``beahiv_202_geogs``. ``resolutions`` is ignored — the hexes are their own grid."""
     if not beahiv.available(con):
         return
-    beahiv.register_udfs(con)  # the lookups are views, so their centre UDF calls run here
+    beahiv.register_udfs(con)  # the lookups are views, so their cell-polygon UDF calls run here
     geogs.build_unit(con, beahiv.BEAHIV_UNIT, replace)
 
 

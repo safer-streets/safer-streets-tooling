@@ -18,7 +18,7 @@ def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool)
     """Build every BEAHIV lookup. ``resolutions`` is ignored — the hexes are their own grid."""
     if not beahiv.available(con):
         return
-    beahiv.register_udfs(con)  # BEAHIV_UNIT.cells calls the centre UDF
+    beahiv.register_udfs(con)  # BEAHIV_UNIT.cells calls the cell-polygon UDF
     for module in _MODULES:
         module.build_unit(con, beahiv.BEAHIV_UNIT, replace)
 

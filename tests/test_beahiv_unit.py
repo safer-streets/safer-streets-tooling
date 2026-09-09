@@ -2,10 +2,9 @@
 
 The contract: ``BEAHIV_UNIT`` turns a ``spatial_id`` into the *right* polygon in BNG, and the lookup /
 geogs steps produce for it exactly the columns they produce for H3 — which is what makes the two
-griddings comparable. The load-bearing claim is that the hexagon the SQL builds, from a UDF centre
-plus constant vertex offsets, is the same polygon beahiv's own ``cell_polygon`` returns; that is
-asserted directly rather than by proxy. Synthetic fixtures only — offline-safe, mirroring
-test_transform_pipeline.
+griddings comparable. The load-bearing claim is that the polygon reaching DuckDB is the one beahiv's
+own ``cell_polygon`` returns, unchanged by the WKB round trip; that is asserted directly rather than
+by proxy. Synthetic fixtures only — offline-safe, mirroring test_transform_pipeline.
 """
 
 import math
@@ -64,15 +63,15 @@ def _crime_counts(con, beahiv_too=True):
 
 
 def test_cell_geom_matches_beahiv_cell_polygon():
-    """The hexagon the SQL builds is vertex-for-vertex the one beahiv's own cell_polygon returns.
+    """The cell reaching DuckDB is vertex-for-vertex the one beahiv's own cell_polygon returns.
 
-    This is the whole BEAHIV unit contract in one assertion: the vectorised centre UDF decoded the id
-    correctly *and* the constant vertex offsets are the right ones. A wrong CRS, a swapped x/y or a
-    stale offset table would all show up here as a displaced or misshapen cell.
+    This is the whole BEAHIV unit contract in one assertion: the vectorised UDF decoded each id and
+    the WKB round trip preserved the geometry exactly. A wrong CRS, a swapped x/y or a misaligned
+    return vector would all show up here as a displaced or misshapen cell.
     """
     con = _connect()
     _crime_counts(con)
-    beahiv.register_udfs(con)  # the unit's SQL calls the centre UDF
+    beahiv.register_udfs(con)  # the unit's SQL calls the polygon UDF
 
     cells = f"({beahiv.BEAHIV_UNIT.cells})"
     spatial_ids = [row[0] for row in con.execute(f"SELECT spatial_id FROM {cells} ORDER BY spatial_id").fetchall()]
@@ -196,8 +195,8 @@ def test_geogs_schema_matches_h3_apart_from_the_id_type():
 def test_cells_land_in_the_right_geography():
     """Each BEAHIV cell resolves to the ONS code of the city its crimes came from.
 
-    The cells are built in BNG with no reprojection; if that were wrong (e.g. treating the centres as
-    lat/lon) the cells would fall outside every boundary and the codes would come back NULL.
+    The cells come from beahiv in BNG with no reprojection; if that were wrong (e.g. treating the
+    coordinates as lat/lon) they would fall outside every boundary and the codes would be NULL.
     """
     con = _connect()
     _crime_counts(con)

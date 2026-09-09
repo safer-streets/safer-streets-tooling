@@ -11,14 +11,14 @@ Like the H3 units and unlike the hotspot hexes, the cells are those *carrying cr
 England & Wales (~1.5m cells) and would put the great majority of them through the lookups for
 nothing. That also keeps the grid exactly the crime grid, as it is for H3.
 
-Two things differ from H3 and are captured here, once, as ``type="arrow"`` UDFs over beahiv:
+Two things differ from H3 and are captured here, once, as ``type="arrow"`` UDFs over beahiv — DuckDB
+has no BEAHIV function for either:
 
 * a crime point becomes a cell id by *arithmetic* rather than by a spatial join or an h3 extension
   function, so :func:`register_udfs` supplies ``beahiv_cell_from_bng`` for the counts step;
-* a ``spatial_id`` becomes a polygon by decoding it, which DuckDB has no function for, so the same
-  call supplies ``beahiv_cell_centre`` and :data:`BEAHIV_UNIT` builds the hexagon in SQL from that
-  centre plus constant vertex offsets — every cell of a given side length and orientation is the same
-  hexagon translated, so the offsets are computed once from beahiv itself.
+* a ``spatial_id`` becomes a polygon by decoding it, so the same call supplies
+  ``beahiv_cell_polygon``, which hands a whole vector of ids to beahiv's ``cell_polygons`` and returns
+  WKB for ``ST_GeomFromWKB``. The geometry is beahiv's own, not reconstructed here.
 
 ``spatial_id`` is the cell id as a plain ``BIGINT``. beahiv reserves its top three bits, which puts
 every id below 2**61, so the natural integer column is signed and no unsigned type or hex-string
@@ -28,8 +28,9 @@ encoding is needed to hold one.
 import duckdb
 import numpy as np
 import pyarrow as pa
-from beahiv import bng_to_cell, cell_polygon, centroid, encode
-from duckdb.sqltypes import BIGINT, DOUBLE, DuckDBPyType
+import shapely
+from beahiv import bng_to_cell, cell_polygons
+from duckdb.sqltypes import BIGINT, BLOB, DOUBLE
 
 from safer_streets_tooling.beahiv_grid import CELL_AREA, KEY, ORIENTATION, SIDE_LENGTH
 from safer_streets_tooling.transform.base import SpatialUnit, register_udf, table_exists
@@ -37,8 +38,7 @@ from safer_streets_tooling.transform.base import SpatialUnit, register_udf, tabl
 COUNTS_TABLE = f"crime_counts_{KEY}"
 
 ENCODE_UDF = "beahiv_cell_from_bng"
-_CENTRE_UDF = "beahiv_cell_centre"
-_CENTRE_TYPE = DuckDBPyType({"x": DOUBLE, "y": DOUBLE})
+_POLYGON_UDF = "beahiv_cell_polygon"
 
 
 def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
@@ -63,51 +63,37 @@ def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
     return bng_to_cell(x, y, SIDE_LENGTH, ORIENTATION).cast(pa.int64())
 
 
-def _cell_centre(spatial_id: pa.ChunkedArray) -> pa.StructArray:
-    """Decode a vector of BEAHIV ``spatial_id`` values to their EPSG:27700 cell centres.
+def _cell_polygon_wkb(spatial_id: pa.ChunkedArray) -> pa.Array:
+    """Decode a vector of BEAHIV ``spatial_id`` values to their cell outlines, as WKB in EPSG:27700.
 
-    Pure numpy, with no per-row Python at all: beahiv's ``centroid`` takes the whole array of ids and
-    the signed integers DuckDB hands over need no conversion, since it coerces numpy integers itself.
+    beahiv's ``cell_polygons`` takes the whole array of ids at once (the signed integers DuckDB hands
+    over need no conversion — it coerces numpy integers itself) and ``shapely.to_wkb`` serialises the
+    whole array at once too, so a DuckDB vector crosses into Python and back with no per-row work.
+
+    WKB rather than WKT: it is the shorter, exact binary form, so nothing is lost to decimal rounding
+    on the way through. The polygons are beahiv's own — this module does not build a hexagon.
     """
-    x, y = centroid(np.asarray(spatial_id))
-    return pa.StructArray.from_arrays([pa.array(x), pa.array(y)], names=["x", "y"])
+    return pa.array(shapely.to_wkb(np.asarray(cell_polygons(np.asarray(spatial_id)), dtype=object)))
 
 
 def register_udfs(con: duckdb.DuckDBPyConnection) -> None:
     """Register both BEAHIV UDFs on ``con`` (idempotent — see :func:`.base.register_udf`).
 
     Every step touching this grid calls it, including the ones that only read the lookups: those are
-    *views* carrying the ``beahiv_cell_centre`` call, so the UDF has to be in the catalog whenever one
+    *views* carrying the ``beahiv_cell_polygon`` call, so the UDF has to be in the catalog whenever one
     is evaluated, not merely when it is created.
     """
     register_udf(con, ENCODE_UDF, _cell_from_bng, [DOUBLE, DOUBLE], BIGINT)
-    register_udf(con, _CENTRE_UDF, _cell_centre, [BIGINT], _CENTRE_TYPE)
+    register_udf(con, _POLYGON_UDF, _cell_polygon_wkb, [BIGINT], BLOB)
 
 
-def _vertex_offsets() -> list[tuple[float, float]]:
-    """The (dx, dy) metres from a cell's centre to each vertex, closing the ring — from beahiv itself.
-
-    Every cell of a given side length and orientation is the same hexagon translated, so one
-    reference cell's polygon minus its own centre gives offsets valid for the entire grid. Deriving
-    them from ``cell_polygon`` rather than restating beahiv's vertex angles here keeps the SQL in
-    step with beahiv's geometry instead of duplicating it. Shapely's exterior ring already repeats
-    the first vertex, which is the closing point ``ST_MakePolygon`` needs.
-    """
-    reference = encode(0, 0, SIDE_LENGTH, ORIENTATION)
-    cx, cy = centroid(reference)
-    return [(x - cx, y - cy) for x, y in cell_polygon(reference).exterior.coords]
-
-
-_HEX_RING = ", ".join(f"ST_Point(ctr.x + {dx!r}, ctr.y + {dy!r})" for dx, dy in _vertex_offsets())
-
-# The BEAHIV grid. `cells` needs the centre UDF registered (see register_udfs); `area` is a constant
+# The BEAHIV grid. `cells` needs the polygon UDF registered (see register_udfs); `area` is a constant
 # because the grid is equal-area, so it needs no area_join.
 BEAHIV_UNIT = SpatialUnit(
     key=KEY,
-    # the UDF is called once per cell, in the inner query, rather than once per vertex it feeds
     cells=f"""
-        SELECT spatial_id, ST_MakePolygon(ST_MakeLine([{_HEX_RING}])) AS cell_geom
-        FROM (SELECT DISTINCT spatial_id, {_CENTRE_UDF}(spatial_id) AS ctr FROM {COUNTS_TABLE})
+        SELECT spatial_id, ST_GeomFromWKB({_POLYGON_UDF}(spatial_id)) AS cell_geom
+        FROM (SELECT DISTINCT spatial_id FROM {COUNTS_TABLE})
     """,
     # cast explicitly: DuckDB reads a bare decimal literal as DECIMAL, and cell_area must be the
     # DOUBLE the H3 units' h3_cell_area returns so every *_geogs table has one schema

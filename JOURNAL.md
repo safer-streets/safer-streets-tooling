@@ -82,18 +82,22 @@ Note this run needed `ST_MakeValid` over the ONS boundaries. The 2026-09-04 boun
   at `threads = 1`, and neither a lock nor a thread-local `Transformer` avoids it). The transform runs
   at `threads = 4`, so that path is unusable. `crime_data.geom` is already BNG, so `bng_to_cell` is
   also the cheaper call — no reprojecting coordinates we already hold.
-- *The cell centre from a UDF, the hexagon from SQL.* DuckDB has no BEAHIV cell function, so the
-  geometry has to come from Python. A UDF returning the boundary as WKT — the direct analogue of the
-  h3 extension's `h3_cell_to_boundary_wkt` — would mean formatting a WKT string per cell. Instead the
-  UDF returns only the centre as a `STRUCT(x, y)` and the six vertices are constant offsets from it,
-  so the Python side is one vectorised `centroid` call over the whole DuckDB vector with no per-row
-  work at all.
-- *Vertex offsets derived from beahiv, not restated.* Every cell of a given side length and
-  orientation is the same hexagon translated, so the offsets come from `cell_polygon` of a reference
-  cell minus its own centre rather than from a copy of beahiv's vertex-angle table. A test asserts the
-  SQL polygon is vertex-for-vertex `cell_polygon`'s, which catches a wrong CRS, a swapped x/y or a
-  drifted offset in one place. (`cell_polygon` now returns a Shapely `Polygon`, so the ring comes off
-  `.exterior.coords` — and already carries the closing vertex `ST_MakePolygon` needs.)
+- *The cell geometry comes from beahiv, whole.* DuckDB has no BEAHIV cell function, so the geometry
+  has to come from Python. `beahiv_cell_polygon` hands a whole DuckDB vector of ids to beahiv's
+  `cell_polygons` and returns WKB for `ST_GeomFromWKB` — vectorised on both sides, no per-row Python,
+  and no hexagon constructed in this repo. WKB rather than WKT: shorter, and exact, so nothing is
+  lost to decimal rounding in transit. A test asserts the polygon reaching DuckDB is vertex-for-vertex
+  `cell_polygon`'s, which catches a wrong CRS, a swapped x/y or a misaligned return vector; on the
+  full 221,429-cell grid, zero polygons differ from `cell_polygons`.
+
+  An earlier version instead returned only the cell *centre* and rebuilt the hexagon in SQL from six
+  constant vertex offsets, which is ~50x cheaper per evaluation (0.36s vs 19.0s over the full grid,
+  and the lookups are views, so `cells` is evaluated ~10 times in a `geogs` build — roughly +190s on
+  an 877s build). It was rejected anyway: it generated SQL containing literals like
+  `ctr.y + 2.4737865342776535e-14`, and it put this repo in the business of constructing hexagons that
+  beahiv already knows how to construct. The cost is real but it buys back the most opaque code in the
+  change; if the ~20% ever matters, materialising the polygons once into a `beahiv_202_cells` table
+  gets it back without reintroducing the generated SQL (17.5s once, then 0.01s a read).
 - *`cell_area` as the analytic `3√3/2·s²`.* A constant, because the grid is equal-area — and
   deliberately the *planar* BNG area, the same measure as the `{prefix}_overlap_area` columns it is
   the denominator for. (The H3 units' `h3_cell_area` is geodesic m², which differs from its own planar

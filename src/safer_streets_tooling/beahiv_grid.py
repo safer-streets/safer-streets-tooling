@@ -24,7 +24,7 @@ KEY = f"beahiv_{SIDE_LENGTH}"
 # A constant, because the grid is equal-area in EPSG:27700 — and a *planar* BNG area, which is the
 # right denominator for the planar {prefix}_overlap_area columns, unlike h3_cell_area's geodesic m².
 # Measured off beahiv's own reference cell rather than restating `3*sqrt(3)/2 * s²` here, for the same
-# reason the transform's vertex offsets are (see transform.beahiv._vertex_offsets): beahiv owns the
-# cell's geometry, so anything derived from it should come from beahiv and not be reimplemented
-# against it. Exact to the last bit either way, and computed once at import.
+# reason the transform takes its cell polygons straight from beahiv (see transform.beahiv): beahiv
+# owns the cell's geometry, so anything derived from it should come from beahiv and not be
+# reimplemented against it. Exact to the last bit either way, and computed once at import.
 CELL_AREA = cell_polygon(encode(0, 0, SIDE_LENGTH, ORIENTATION)).area
