@@ -8,6 +8,8 @@ asserted directly rather than by proxy. Synthetic fixtures only — offline-safe
 test_transform_pipeline.
 """
 
+import math
+
 import duckdb
 import pytest
 from beahiv import cell_polygon
@@ -97,16 +99,25 @@ def test_cell_area_is_the_exact_hexagon_area():
 
     The grid is equal-area in EPSG:27700, so this is a constant rather than a per-cell measure; it is
     the *planar* BNG area, matching the planar {prefix}_overlap_area columns it is the denominator for.
+
+    The analytic formula is restated *here* on purpose. ``CELL_AREA`` is measured off beahiv's own
+    reference cell rather than computed, so checking it against the SQL polygon alone would compare
+    two things derived from the same source; the closed form is the independent third opinion that
+    catches a wrong side length or orientation in either of them.
     """
     con = _connect()
     _crime_counts(con)
     beahiv.register_udfs(con)
 
+    analytic = 1.5 * math.sqrt(3.0) * SIDE_LENGTH**2
+    declared_constant = CELL_AREA
+    assert declared_constant == pytest.approx(analytic, rel=1e-12)
+
     declared, measured = con.execute(
         f"SELECT {beahiv.BEAHIV_UNIT.area}, ST_Area(cell_geom) FROM ({beahiv.BEAHIV_UNIT.cells}) LIMIT 1"
     ).fetchone()
-    assert float(declared) == pytest.approx(CELL_AREA, rel=1e-12)
-    assert float(measured) == pytest.approx(CELL_AREA, rel=1e-9)
+    assert float(declared) == pytest.approx(analytic, rel=1e-12)
+    assert float(measured) == pytest.approx(analytic, rel=1e-9)
 
 
 def test_relation_names_follow_the_unit_key():
