@@ -309,3 +309,22 @@ def test_beahiv_counts_skip_a_layer_extracted_before_the_cell_id_existed():
 
     assert building_counts.beahiv_outputs(con) == []
     assert not beahiv.tagged(con, "buildings")
+
+
+def test_beahiv_outputs_lists_the_other_counts_before_build_has_run():
+    """``outputs`` must list the per-feature counts even on a connection where nothing has been built
+    yet — this is the order ``TransformNode`` actually calls them in (``outputs`` decides what to
+    write, then ``build`` runs), so a check that only reads true *after* the crime counts exist would
+    have every one of these tables built in memory and never written to parquet. Regression for exactly
+    that: ``beahiv.tagged`` used to gate on ``beahiv.available``, which tests for
+    ``beahiv202_crime_counts`` — absent at this point in a real run.
+    """
+    from safer_streets_tooling.transform import building_counts
+
+    con = _connect()
+    _crime_counts(con, beahiv_too=False)  # the source layers exist; beahiv202_crime_counts does not yet
+    con.execute(f"CREATE TABLE buildings AS SELECT 1 AS {beahiv.KEY}_id, 'Residential' AS map_simple_use")
+
+    assert not beahiv.available(con)  # the precondition the bug depended on
+    assert building_counts.beahiv_outputs(con) == [f"{KEY}_building_counts"]
+    assert f"{KEY}_building_counts" in beahiv_counts.outputs(con)

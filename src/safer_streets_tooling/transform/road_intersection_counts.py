@@ -59,15 +59,20 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``beahiv202_road_intersection_counts``: the nodes are already BNG, so the cell is
-    arithmetic on the point rather than a reprojection. No-op if the grid or the layer is absent."""
-    if not (beahiv.available(con) and table_exists(con, ROAD_INTERSECTIONS_TABLE)):
+    arithmetic on the point rather than a reprojection. No-op if the layer is absent.
+
+    Gated on the layer alone, never on the grid: ``outputs`` is resolved before ``build``, so a check
+    for a relation this step creates would read False just as the pipeline decides what to write (see
+    :func:`.beahiv.tagged`).
+    """
+    if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
         return
     beahiv.register_udfs(con)
     _build_on(con, beahiv.BEAHIV_UNIT.key, cell_id_sql("geom"), replace)
 
 
 def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
-    if not (beahiv.available(con) and table_exists(con, ROAD_INTERSECTIONS_TABLE)):
+    if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
         return []
     return [relation(beahiv.BEAHIV_UNIT.key, DATASET)]
 

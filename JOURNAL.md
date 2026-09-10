@@ -7,6 +7,46 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Fix: the four new BEAHIV counts were built but never written to parquet
+
+**Why** — after re-extracting with `beahiv202_id` on every point layer, `data transform --grid beahiv`
+produced `beahiv202_crime_counts.parquet` and the lookups/geogs, but no
+`beahiv202_building_counts.parquet`, `beahiv202_streetlight_counts.parquet`,
+`beahiv202_population_counts.parquet` or `beahiv202_road_intersection_counts.parquet` — silently. No
+error, no warning; the tables existed in the in-memory catalog (`beahiv_counts.build` did call each
+`build_beahiv`) but were never among the relations `TransformNode` wrote out.
+
+**Root cause** — `TransformNode._run` resolves `step.outputs(cur)` *before* calling `step.build(cur,
+replace)`, to decide which relation names to cache/write. `beahiv.tagged()` — the gate `build_beahiv`
+and `beahiv_outputs` share on the other three counts modules — was defined as
+`available(con) and table_exists(...) and column_exists(...)`, and `available()` tests whether
+`beahiv202_crime_counts` exists in the catalog. At the point `outputs()` is called, `beahiv_counts.build`
+has not run yet in this pass, so the crime counts don't exist, `available()` is False, `tagged()` is
+False, and every one of the four `beahiv_outputs()` returned `[]`. The node then built all five
+relations (crime counts plus the four) inside `beahiv_counts.build`, but only ever intended to persist
+the one name it had already decided on. `road_intersection_counts.beahiv_outputs` had the identical
+bug via a direct `beahiv.available(con)` check.
+
+**Fix** — `beahiv.tagged()` no longer checks `available()`; it tests only that the source table exists
+and carries the id column, which is everything a `GROUP BY {grid}_id` actually needs and is knowable
+before any BEAHIV step has run. `road_intersection_counts` drops its `beahiv.available()` check
+outright, for the same reason — nothing about it reads the crime counts any more since the previous
+entry removed that restriction.
+
+**Design decisions**
+
+- **A `TransformStep`'s `outputs()` must be true independent of that step's own `build()` having run.**
+  This is the general lesson, not specific to BEAHIV: any gate inside `outputs()` that can only become
+  true as a *side effect of `build()`* will read False at exactly the moment the pipeline asks it,
+  because `outputs()` always runs first. `available()` was fine for every existing caller (the lookup
+  and geogs steps, which run in later, separate steps after `beahiv_counts` has already built and been
+  cached) — it only broke for a check inside the *same* step that creates the thing being checked.
+
+**Verified**: a regression test constructs exactly the failing precondition — a connection with the
+source layer present and tagged, but `beahiv202_crime_counts` absent — and asserts `beahiv_outputs()`
+lists the table anyway. Checked against the pre-fix code that it does fail there
+(`[] == ['beahiv202_building_counts']`), confirming the test actually exercises the bug.
+
 ## The BEAHIV grid gets the other four counts
 
 **Why** — the grid had crime counts, lookups and geogs, but none of the building / population /

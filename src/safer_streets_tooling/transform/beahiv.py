@@ -95,11 +95,17 @@ def available(con: duckdb.DuckDBPyConnection) -> bool:
 
 
 def tagged(con: duckdb.DuckDBPyConnection, table: str) -> bool:
-    """True when ``table`` can be counted onto this grid: the grid exists and the layer carries its id.
+    """True when ``table`` carries this grid's cell id, so it can be counted onto the grid.
 
     The extract tags every point layer with its cell (:data:`~safer_streets_tooling.grids.BEAHIV_ID`),
     so counting onto this grid is a group-and-count rather than a spatial join — but a parquet extracted
     before that column existed has to be skipped until it is re-extracted, which is what the column
-    check is for. The counts themselves are this grid's cells, hence :func:`available` as well.
+    check is for.
+
+    Deliberately *not* gated on :func:`available`. A step's ``outputs`` is resolved before its ``build``
+    runs, so a check for a relation the same step creates reads False at exactly the moment the pipeline
+    is deciding which parquet to write — the counts would be built in memory and then silently not
+    persisted. Nothing here needs the crime counts anyway: a cell comes from the feature's own
+    coordinates.
     """
-    return available(con) and table_exists(con, table) and column_exists(con, table, BEAHIV_ID)
+    return table_exists(con, table) and column_exists(con, table, BEAHIV_ID)
