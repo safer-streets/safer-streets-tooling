@@ -45,11 +45,46 @@ they have no id column. Fewer code paths than before, not more.
 
 **Follow-ups**
 
-- `h3r9_streetlight_counts` is *not* restricted to crime cells (it predates this reasoning) while its
-  BEAHIV twin is, so the two are not directly comparable for that one layer. Aligning them changes an
-  existing published table, so it is left as a decision rather than folded in here.
 - The counts only appear once the extracts are re-run: `buildings` and `streetlights` need
   `beahiv202_id` before their BEAHIV counts build at all.
+
+**Superseded, same day** — the crime-cell restriction above was reversed once it was clear the two
+grids disagreed. See the entry below.
+
+## One rule for both grids: a cell computed from the point is always counted
+
+**Why** — the entry above restricted the BEAHIV counts to crime-carrying cells, but H3 only did that
+for two of its four: `h3r9_streetlight_counts` and `h3r9_population_counts` covered every cell, while
+`h3r9_building_counts` and `h3r9_road_intersection_counts` were restricted. The grids exist to be
+compared, so counting different features on each defeats the point — and the split within H3 was
+itself unexplained.
+
+| counts | H3 before | BEAHIV before | both now |
+| --- | --- | --- | --- |
+| streetlight | all cells | crime cells | **all cells** |
+| population | all cells | crime cells | **all cells** |
+| building | crime cells | crime cells | **all cells** |
+| road_intersection | crime cells | crime cells | **all cells** |
+
+**What** — the restriction is gone from all four on both grids: every cell holding a feature is
+counted. The rule is now statable in one line — *if the cell comes from a point-to-cell calculation,
+count every cell* — which is what the shared `_build_on` in each counts module does. The hotspot hexes
+keep their point-in-polygon placement, being the one grid with no cell id, and they were never
+restricted anyway ("the hexes *are* the grid").
+
+**Design decisions**
+
+- **The restriction was solving nothing.** It read as "so the count grid lines up with the crime grid",
+  but the cell comes from the feature's own coordinates — there is no join for the crime grid to bound,
+  and no cell can be produced that the grid could not represent. It only ever removed rows.
+- **`*_geogs` still covers the crime cells alone**, on both grids, because a unit's cells are taken
+  from its crime counts. So a cell counted without crimes has no attributes to join to — the same on
+  H3 and BEAHIV, which is the consistency that matters. Worth knowing when joining counts to geogs:
+  those rows are outer-join misses by design, not gaps.
+- **This widens two published H3 tables.** `h3r9_building_counts` and
+  `h3r9_road_intersection_counts` gain rows for cells holding a feature but no crime; consumers
+  aggregating over them will see larger totals. That is the point of the change rather than a side
+  effect, but it is a change to existing outputs.
 
 ## A cell id per grid on every point layer, and one place that names grids
 

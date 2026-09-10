@@ -628,9 +628,14 @@ def test_streetlight_counts_noop_without_streetlights_table():
     assert streetlight_counts.outputs(con) == []
 
 
-def test_road_intersection_counts_per_cell_restricted_to_crime_grid():
-    """Intersection points are placed by their H3 cell at each resolution and counted, keeping only
-    cells present in crime_counts (so the count grid lines up with the crime / road-length grid)."""
+def test_road_intersection_counts_cover_every_cell_holding_an_intersection():
+    """Each intersection is placed by the cell its own coordinates fall in, and every such cell is
+    counted — including cells carrying no crime.
+
+    The cell comes from a point-to-cell calculation rather than a spatial join, so there is nothing the
+    crime grid needs to bound, and both grids count the same features. ``h3r9_geogs`` still describes
+    only the crime cells, so a cell counted here without crimes simply has no attributes to join to.
+    """
     from safer_streets_tooling.transform import road_intersection_counts
 
     con = _connect()  # needs the spatial + h3 extensions (ST_Transform, h3_latlng_to_cell)
@@ -641,14 +646,14 @@ def test_road_intersection_counts_per_cell_restricted_to_crime_grid():
         FROM (VALUES (ST_Point(-1.5, 53.8)), (ST_Point(-1.5, 53.8)), (ST_Point(-2.5, 53.4))) t(pt)
     """)
     cell_a = con.execute("SELECT lower(hex(h3_latlng_to_cell(53.8, -1.5, 9)))").fetchone()[0]
+    cell_b = con.execute("SELECT lower(hex(h3_latlng_to_cell(53.4, -2.5, 9)))").fetchone()[0]
 
-    # only cell_a is in the crime grid → the third point's cell is excluded
-    con.execute(f"CREATE TABLE h3r9_crime_counts AS SELECT '{cell_a}' AS spatial_id")
+    con.execute(f"CREATE TABLE h3r9_crime_counts AS SELECT '{cell_a}' AS spatial_id")  # cell_b has no crimes
 
     road_intersection_counts.build(con, True)
 
     rows = dict(con.execute("SELECT spatial_id, road_intersection_count FROM h3r9_road_intersection_counts").fetchall())
-    assert rows == {cell_a: 2}
+    assert rows == {cell_a: 2, cell_b: 1}
     assert road_intersection_counts.outputs(con) == ["h3r9_road_intersection_counts"]
 
 

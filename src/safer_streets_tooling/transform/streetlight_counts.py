@@ -5,35 +5,25 @@ import duckdb
 from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
 from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
-from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
 STREETLIGHTS_TABLE = "streetlights"
 DATASET = "streetlight_counts"
 RESOLUTION = 9
 
 
-def _build_on(
-    con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace: bool, *, crime_cells_only: bool
-) -> None:
+def _build_on(con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace: bool) -> None:
     """Create ``{unit_key}_streetlight_counts`` from the cell id the extract tags on each light.
 
     Both the H3 and BEAHIV grids tag their cell onto the light, so this is a group-and-count on that
     column for either; only the hotspot hexes need a spatial join (see :func:`build_hotspots`).
 
-    ``crime_cells_only`` restricts the output to cells carrying crimes. The BEAHIV grid *is* its crime
-    cells — its geogs cover no others — so a count outside them would join to nothing; the H3 table
-    predates that reasoning and still covers every cell with a light.
+    Every cell holding a light is counted, on either grid — see :func:`.building_counts._build_on`.
     """
-    restrict = (
-        f"{cell} IN (SELECT spatial_id FROM {relation(unit_key, CRIME_COUNTS)})"
-        if crime_cells_only
-        else f"{cell} IS NOT NULL"
-    )
     con.execute(f"""
         {create_clause("TABLE", relation(unit_key, DATASET), replace=replace)} AS
         SELECT {cell} AS spatial_id, COUNT(*) AS streetlight_count
         FROM {STREETLIGHTS_TABLE}
-        WHERE {restrict}
+        WHERE {cell} IS NOT NULL
         GROUP BY {cell};
     """)
 
@@ -42,14 +32,14 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``h3r9_streetlight_counts``. No-op if the streetlights table is absent."""
     if not table_exists(con, STREETLIGHTS_TABLE):
         return
-    _build_on(con, h3_key(RESOLUTION), H3_ID, replace, crime_cells_only=False)
+    _build_on(con, h3_key(RESOLUTION), H3_ID, replace)
 
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``beahiv202_streetlight_counts``. No-op until the extract carries ``beahiv202_id``."""
     if not beahiv.tagged(con, STREETLIGHTS_TABLE):
         return
-    _build_on(con, beahiv.BEAHIV_UNIT.key, BEAHIV_ID, replace, crime_cells_only=True)
+    _build_on(con, beahiv.BEAHIV_UNIT.key, BEAHIV_ID, replace)
 
 
 def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:

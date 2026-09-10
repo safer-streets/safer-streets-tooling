@@ -270,9 +270,12 @@ def _buildings_on_cells(con, crime_cell, empty_cell):
     """)
 
 
-def test_beahiv_counts_cover_the_other_layers_restricted_to_crime_cells():
-    """The grid carries the same per-cell counts H3 does, off the id the extract tags on each feature —
-    and only for cells carrying crimes, which are the only cells beahiv202_geogs describes."""
+def test_beahiv_counts_cover_the_other_layers_on_every_cell():
+    """The grid carries the same per-cell counts H3 does, off the id the extract tags on each feature,
+    and counts every cell holding one — the same rule as H3, so the two stay comparable.
+
+    The cell is a point-to-cell calculation on both grids, so neither needs the crime grid to bound it.
+    ``beahiv202_geogs`` still describes only the crime cells, as ``h3r9_geogs`` does."""
     from safer_streets_tooling.transform import building_counts
 
     con = _connect()
@@ -288,7 +291,7 @@ def test_beahiv_counts_cover_the_other_layers_restricted_to_crime_cells():
     counts = dict(
         con.execute(f"SELECT spatial_id, SUM(building_count) FROM {KEY}_building_counts GROUP BY 1").fetchall()
     )
-    assert counts == {crime_cell: 2}  # the building in the crime-free cell is left out
+    assert counts == {crime_cell: 2, crime_cell + 1: 1}  # the crime-free cell is counted too
     assert f"{KEY}_building_counts" in beahiv_counts.outputs(con)
     assert building_counts.beahiv_outputs(con) == [f"{KEY}_building_counts"]
 

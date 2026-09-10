@@ -9,9 +9,8 @@ crime's BNG coordinates, so this is the H3 mechanism with beahiv's encoder in pl
 The crime counts are built here because the encoder and their conservation checks are specific to this
 grid; the other four (street lights, buildings, population, road intersections) are the same measures
 the H3 grid carries, so each lives with its H3 counterpart (``building_counts.build_beahiv`` and
-friends) and this module only wires them in — as ``hotspot_counts`` does for the hexes. Those four are
-restricted to cells carrying crimes, which *are* this grid's cells: ``beahiv202_geogs`` covers no
-others, so a count outside them would join to nothing.
+friends) and this module only wires them in — as ``hotspot_counts`` does for the hexes. Each counts
+every cell holding a feature, as its H3 counterpart does, so the two grids cover the same features.
 """
 
 import duckdb

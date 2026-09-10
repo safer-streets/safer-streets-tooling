@@ -13,7 +13,6 @@ from safer_streets_tooling.transform.base import (
     relation,
     table_exists,
 )
-from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
 ROAD_INTERSECTIONS_TABLE = "road_intersections"
 DATASET = "road_intersection_counts"
@@ -27,15 +26,15 @@ def _build_on(
     Unlike the other layers this one carries no cell id — the intersections are derived from the road
     network rather than extracted as a point layer — so the cell is computed here: an h3 lookup for the
     H3 grids (which needs the point back in WGS-84, hence ``source``), arithmetic on the BNG point for
-    BEAHIV. Output is restricted to cells that appear in the unit's crime counts, so the count grid
-    lines up with the crime / road-length grid.
+    BEAHIV. Every cell holding an intersection is counted, on either grid — see
+    :func:`.building_counts._build_on`.
     """
     con.execute(f"""
         {create_clause("TABLE", relation(unit_key, DATASET), replace=replace)} AS
         WITH cells AS (SELECT {cell} AS spatial_id FROM {source or ROAD_INTERSECTIONS_TABLE})
         SELECT spatial_id, COUNT(*) AS road_intersection_count
         FROM cells
-        WHERE spatial_id IN (SELECT spatial_id FROM {relation(unit_key, CRIME_COUNTS)})
+        WHERE spatial_id IS NOT NULL
         GROUP BY spatial_id;
     """)
 

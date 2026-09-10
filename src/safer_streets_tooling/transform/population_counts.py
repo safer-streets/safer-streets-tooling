@@ -13,7 +13,6 @@ import duckdb
 from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
 from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
-from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
 BUILDINGS_TABLE = "buildings"
 DATASET = "population_counts"
@@ -153,10 +152,8 @@ def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     Identical weighting (:func:`_allocation_sql`); only the cell a building belongs to differs — read
     from the extract's ``beahiv202_id`` instead of its ``h3r9_id``.
 
-    The restriction to crime-carrying cells is applied to the *result*, not to the buildings going in:
-    each building's share is normalised within its OA, so filtering the input first would redistribute
-    an OA's whole population across only the buildings in crime cells and inflate them. Allocating over
-    every building and then keeping the crime cells leaves each cell's figure untouched.
+    Every cell the allocation reaches is kept, matching the H3 table and the other per-cell counts —
+    see :func:`.building_counts._build_on`.
     """
     if not (_ready(con) and beahiv.tagged(con, BUILDINGS_TABLE)):
         return
@@ -166,8 +163,7 @@ def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     )
     con.execute(f"""
         {create_clause("TABLE", relation(unit, DATASET), replace=replace)} AS
-        SELECT * FROM ({_allocation_sql(buildings)})
-        WHERE spatial_id IN (SELECT spatial_id FROM {relation(unit, CRIME_COUNTS)});
+        {_allocation_sql(buildings)};
     """)
     _report_allocated(con, relation(unit, DATASET))
 

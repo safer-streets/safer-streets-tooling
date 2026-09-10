@@ -5,7 +5,6 @@ import duckdb
 from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
 from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
-from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
 BUILDINGS_TABLE = "buildings"
 DATASET = "building_counts"
@@ -21,15 +20,18 @@ def _build_on(con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace:
     footprint *centroid* — the point both id columns are derived from.
 
     Keyed by ``spatial_id`` plus the ``map_simple_use`` class (Residential / Non Residential / Mixed
-    Use), so a consumer joins the per-class counts straight onto the unit's counts / geogs. Output is
-    restricted to cells that appear in the unit's crime counts, so the count grid lines up with the
-    crime grid — which is also what makes the two grids comparable cell for cell.
+    Use), so a consumer joins the per-class counts straight onto the unit's counts / geogs.
+
+    Every cell holding a building is counted, not only those carrying crimes: the cell comes from the
+    feature's own coordinates, so there is nothing to bound and the two grids stay comparable by
+    covering the same features either way. The ``*_geogs`` tables are the crime cells alone, so a cell
+    counted here without crimes has no attributes to join to — on both grids alike.
     """
     con.execute(f"""
         {create_clause("TABLE", relation(unit_key, DATASET), replace=replace)} AS
         SELECT {cell} AS spatial_id, map_simple_use, COUNT(*) AS building_count
         FROM {BUILDINGS_TABLE}
-        WHERE {cell} IN (SELECT spatial_id FROM {relation(unit_key, CRIME_COUNTS)})
+        WHERE {cell} IS NOT NULL
         GROUP BY {cell}, map_simple_use;
     """)
 

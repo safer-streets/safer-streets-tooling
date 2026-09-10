@@ -68,8 +68,10 @@ A third family is built on the **BEAHIV 202m hex grid** by the `beahiv_counts` /
 `beahiv_geogs` steps, giving `beahiv202_*_counts`, `beahiv202_*_lookup` and `beahiv202_geogs`. Like the
 hotspot family it carries the full set of counts — crime, street light, building, population, road
 intersection — but off the `beahiv202_id` the extracts tag on each feature rather than a spatial join;
-only the crime counts need the encoder. All but the crime counts are restricted to cells carrying
-crimes, which are the only cells this grid *has*: its `geogs` describes no others.
+only the crime counts need the encoder. Each counts every cell holding a feature, exactly as the H3
+tables do: the cell is a point-to-cell calculation on both grids, so neither needs the crime grid to
+bound it and the two count the same features. The `*_geogs` tables describe the crime cells alone, on
+both grids, so a cell counted without crimes has no attributes to join to.
 Like the H3 family its cells come from its own crime counts, so the chain has the H3 one's shape on the
 other grid; see [Spatial units](#spatial-units) for why the grid is there at all.
 
@@ -226,9 +228,10 @@ floors where known).
 Likewise the `building_counts` transform step aggregates the `buildings` extract (Verisk UKBuildings
 footprints) into `h3r9_building_counts` — the count of buildings per resolution-9 cell **split by
 `map_simple_use`** (Residential / Non Residential / Mixed Use), keyed by `spatial_id`. Each building is
-placed by its footprint centroid, and the output is restricted to cells present in `h3r9_crime_counts`
-so it lines up with the crime grid (≈83% of all footprints fall in a crime cell). The per-cell counts
-are the useful form for a consumer; the raw `buildings` layer is tens of millions of polygons.
+placed by its footprint centroid — the point its `h3r9_id` / `beahiv202_id` are derived from — and
+every cell holding a building is counted, on both grids alike (≈83% of footprints fall in a cell that
+also carries a crime, and the rest are counted too, with no `*_geogs` row to join to). The per-cell
+counts are the useful form for a consumer; the raw `buildings` layer is tens of millions of polygons.
 
 Two attribute-only extracts hold the Census 2021 populations per 2021 output area, both keyed by
 `spatial_id` (the OA21 code). `workplace_population` is the **WP001** count (nomis bulk download): the
