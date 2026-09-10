@@ -12,6 +12,12 @@ Two phases (extract → transform), driven by a dataset registry
 (`safer_streets_tooling.extract.DATASETS`) and a transform-step registry
 (`safer_streets_tooling.transform.STEPS`):
 
+Every point layer the extract produces (buildings by centroid, schools, poi, naptan, food_outlets,
+streetlights, cctv) carries a cell id **per grid** — `h3r9_id` and `beahiv202_id` — minted in one place
+([`_common.cell_id_columns`](src/safer_streets_tooling/extract/_common.py)), so the transform can group
+by a column instead of joining on geometry, and a consumer can join a feature straight to either grid's
+`*_geogs`.
+
 1. **extract** — each dataset is downloaded and preprocessed in its own in-memory DuckDB and dumped to
    a `<name>.parquet` GeoParquet file under `data_dir()/extract` (raw source files are cached under
    `data_dir()/raw`). Extractors run **concurrently** as
@@ -20,11 +26,11 @@ Two phases (extract → transform), driven by a dataset registry
    dataset can be refreshed without rebuilding everything.
 2. **transform** — the extracted parquet are loaded into a throwaway in-memory DuckDB, geometry is
    indexed, and the aggregation steps (`safer_streets_tooling.transform.STEPS`) run. The BTP-filtered
-   `crime_counts_h3_*` are aggregated from `crime_data` (and `crime_counts_{key}` point-in-polygon per
+   `h3r*_crime_counts` are aggregated from `crime_data` (and `{key}_crime_counts` point-in-polygon per
    ONS geography), then every derived relation (those counts, the
-   per-cell lookups and `h3_{res}_geogs`) is written out as its own parquet under `data_dir()/transform`
+   per-cell lookups and `h3r{res}_geogs`) is written out as its own parquet under `data_dir()/transform`
    — a durable cache, so the aggregations can be rebuilt without re-extracting. The same relations are
-   also built on the Home Office hotspot hexes (`crime_counts_hotspots`, `hotspots_geogs`, …) and on
+   also built on the Home Office hotspot hexes (`hotspots_crime_counts`, `hotspots_geogs`, …) and on
    the BEAHIV grid; see [Spatial units](#spatial-units). `--grid` narrows a run to one or more of the
    three grid families (`h3` / `ho` / `beahiv`); by default all three are built.
 
@@ -37,14 +43,14 @@ In **extract**, every dataset is an `AsyncNode` keyed by its name; `depends_on` 
 with no incoming edge start immediately and run concurrently (each blocking extractor in a worker
 thread); a dependent only starts once its dependencies have produced their parquet. In **transform**
 (`safer_streets_tooling.transform`), each step is likewise an `AsyncNode` keyed by
-its name with `depends_on` edges: the BTP-filtered `crime_counts_h3_N` are aggregated from `crime_data`
-(and `crime_counts_{key}` point-in-polygon against each ONS boundary table);
+its name with `depends_on` edges: the BTP-filtered `h3rN_crime_counts` are aggregated from `crime_data`
+(and `{key}_crime_counts` point-in-polygon against each ONS boundary table);
 every H3 cell is keyed off them, then given one ONS code per geography,
 the overlapping greenspace / land-cover / road features, and its nearest retail centre — all folded
-into `h3_N_geogs`. (For brevity the transform nodes collapse the per-resolution `N`, currently just
-`{9}`; the geography / overlap / retail lookups all draw their cell set from `crime_counts_h3_N`.)
+into `h3rN_geogs`. (For brevity the transform nodes collapse the per-resolution `N`, currently just
+`{9}`; the geography / overlap / retail lookups all draw their cell set from `h3rN_crime_counts`.)
 
-The per-geography lookups (`h3_N_{key}_lookup` and their hotspot / BEAHIV twins) are **build
+The per-geography lookups (`h3rN_{key}_lookup` and their hotspot / BEAHIV twins) are **build
 intermediates**, materialised in the transform's in-memory DuckDB and never written out: `*_geogs`
 carries every code as a column over exactly the same cells, so publishing both would be the same data
 twice and two places to look for a cell's LSOA. The overlap lookups *are* published, because `*_geogs`
@@ -53,13 +59,13 @@ descriptive columns (greenspace function, road type, school name) live only in t
 
 The same relations are built a second time on the **Home Office hotspot hexes** — the `hotspots`
 extract's 350m hex-grid polygons — by the `hotspot_counts` / `hotspot_lookups` / `hotspot_geogs` steps,
-giving `crime_counts_hotspots`, `*_counts_hotspots`, `hotspots_*_lookup` and `hotspots_geogs`. That
+giving `hotspots_crime_counts`, `hotspots_*_counts`, `hotspots_*_lookup` and `hotspots_geogs`. That
 family is keyed by the hex id in the same `spatial_id` column, so it joins exactly like the H3 one; its
 cells come from the polygons rather than from the crime counts, so those steps depend on no other step
 (and are a clean no-op when the optional `hotspots` extract is absent).
 
 A third family is built on the **BEAHIV 202m hex grid** by the `beahiv_counts` / `beahiv_lookups` /
-`beahiv_geogs` steps, giving `crime_counts_beahiv_202`, `beahiv_202_*_lookup` and `beahiv_202_geogs`.
+`beahiv_geogs` steps, giving `beahiv202_crime_counts`, `beahiv202_*_lookup` and `beahiv202_geogs`.
 Like the H3 family its cells come from its own crime counts, so the chain has the H3 one's shape on the
 other grid; see [Spatial units](#spatial-units) for why the grid is there at all.
 
@@ -87,27 +93,27 @@ flowchart LR
    oac_classification
    workplace_population
    residential_population
-   beahiv_202
+   beahiv202
    hotspots
 
-   crime_counts_h3_9
-   crime_counts_geog["crime_counts_{key}"]
-   streetlight_counts_h3_9
-   building_counts_h3_9
-   population_counts_h3_9
-   h3_geogs_lookup["h3_N_{key}_lookup<br/>(in-memory, not published)"]
+   h3r9_crime_counts
+   geog_crime_counts["{key}_crime_counts"]
+   h3r9_streetlight_counts
+   h3r9_building_counts
+   h3r9_population_counts
+   h3_geogs_lookup["h3rN_{key}_lookup<br/>(in-memory, not published)"]
    h3_greenspace_lookup
    h3_urban_lookup
    h3_suburban_lookup
    h3_road_network_lookup
    h3_retail_centres_lookup
-   h3_9_geogs
-   hotspot_counts["*_counts_hotspots"]
+   h3r9_geogs
+   hotspot_counts["hotspots_*_counts"]
    hotspot_lookups["hotspots_*_lookup"]
    hotspots_geogs
-   crime_counts_beahiv_202
-   beahiv_lookups["beahiv_202_*_lookup"]
-   beahiv_202_geogs
+   beahiv202_crime_counts
+   beahiv_lookups["beahiv202_*_lookup"]
+   beahiv202_geogs
 
    direction LR
 
@@ -117,21 +123,21 @@ flowchart LR
     output_areas_2021 --> buildings
 
     %% transform edges
-    crime_data --> crime_counts_h3_9
-    crime_data --> crime_counts_geog
-    police_force_areas --> crime_counts_geog
-    local_authority_districts --> crime_counts_geog
-    msoa_2021 --> crime_counts_geog
-    lsoa_2021 --> crime_counts_geog
-    output_areas_2021 --> crime_counts_geog
-    streetlights --> streetlight_counts_h3_9
-    buildings --> building_counts_h3_9
-    crime_counts_h3_9 --> building_counts_h3_9
-    buildings --> population_counts_h3_9
-    workplace_population --> population_counts_h3_9
-    residential_population --> population_counts_h3_9
-    police_force_areas --> beahiv_202
-    crime_counts_h3_9 --> h3_geogs_lookup
+    crime_data --> h3r9_crime_counts
+    crime_data --> geog_crime_counts
+    police_force_areas --> geog_crime_counts
+    local_authority_districts --> geog_crime_counts
+    msoa_2021 --> geog_crime_counts
+    lsoa_2021 --> geog_crime_counts
+    output_areas_2021 --> geog_crime_counts
+    streetlights --> h3r9_streetlight_counts
+    buildings --> h3r9_building_counts
+    h3r9_crime_counts --> h3r9_building_counts
+    buildings --> h3r9_population_counts
+    workplace_population --> h3r9_population_counts
+    residential_population --> h3r9_population_counts
+    police_force_areas --> beahiv202
+    h3r9_crime_counts --> h3_geogs_lookup
     police_force_areas --> h3_geogs_lookup
     local_authority_districts --> h3_geogs_lookup
     msoa_2021 --> h3_geogs_lookup
@@ -142,12 +148,12 @@ flowchart LR
     land_cover --> h3_suburban_lookup
     open_roads --> h3_road_network_lookup
     retail_centres --> h3_retail_centres_lookup
-    h3_geogs_lookup --> h3_9_geogs
-    h3_greenspace_lookup --> h3_9_geogs
-    h3_urban_lookup --> h3_9_geogs
-    h3_suburban_lookup --> h3_9_geogs
-    h3_road_network_lookup --> h3_9_geogs
-    h3_retail_centres_lookup --> h3_9_geogs
+    h3_geogs_lookup --> h3r9_geogs
+    h3_greenspace_lookup --> h3r9_geogs
+    h3_urban_lookup --> h3r9_geogs
+    h3_suburban_lookup --> h3r9_geogs
+    h3_road_network_lookup --> h3r9_geogs
+    h3_retail_centres_lookup --> h3r9_geogs
 
     %% transform edges: the same relations on the hotspot hexes (their own grid, so no crime_counts edge)
     hotspots --> hotspot_counts
@@ -169,8 +175,8 @@ flowchart LR
     hotspot_lookups --> hotspots_geogs
 
     %% transform edges: the same relations on the BEAHIV grid (its cells come from its own counts)
-    crime_data --> crime_counts_beahiv_202
-    crime_counts_beahiv_202 --> beahiv_lookups
+    crime_data --> beahiv202_crime_counts
+    beahiv202_crime_counts --> beahiv_lookups
     police_force_areas --> beahiv_lookups
     local_authority_districts --> beahiv_lookups
     msoa_2021 --> beahiv_lookups
@@ -180,35 +186,36 @@ flowchart LR
     land_cover --> beahiv_lookups
     open_roads --> beahiv_lookups
     retail_centres --> beahiv_lookups
-    beahiv_lookups --> beahiv_202_geogs
+    beahiv_lookups --> beahiv202_geogs
 
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
-    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv_202,hotspots extract;
-    class crime_counts_h3_9,crime_counts_geog,streetlight_counts_h3_9,building_counts_h3_9,population_counts_h3_9,h3_9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,crime_counts_beahiv_202,beahiv_lookups,beahiv_202_geogs transform;
+    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv202,hotspots extract;
+    class h3r9_crime_counts,geog_crime_counts,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,beahiv202_crime_counts,beahiv_lookups,beahiv202_geogs transform;
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the per-cell
 aggregation parquet, one per relation. Those parquet are the build's output — a consumer joins the
 counts to the `*_geogs` on `spatial_id` and the ONS boundary tables by code. The `streetlight_counts`
-transform step aggregates the `streetlights` extract into a per-cell `streetlight_counts_h3_9` (count of
+transform step aggregates the `streetlights` extract into a per-cell `h3r9_streetlight_counts` (count of
 street lights per resolution-9 cell, keyed by `spatial_id`).
 
 The `buildings` extract itself spatially joins each footprint to the 2021 output areas, tagging it with
 `oa21cd` (the OA21 code) of the OA containing its **centroid** (a LEFT join, so a footprint whose
 centroid falls outside every OA — e.g. Scotland or offshore structures — is kept with a null
-`oa21cd` rather than dropped). The same centroid is also indexed to a resolution-9 H3 cell `h3_9_id`
-(lowercase hex), so the raw layer can be joined straight onto the crime grid / `h3_9_geogs`. Alongside
+`oa21cd` rather than dropped). The same centroid is also indexed to a cell on **each grid** —
+`h3r9_id` (lowercase hex) and `beahiv202_id` (the encoded cell id) — so the raw layer joins
+straight onto either crime grid, `h3r9_geogs` or `beahiv202_geogs`. Alongside
 the premise/use classification each footprint carries its size: `premise_floor_count` (number of floors;
 kept verbatim as text since a premise whose floor count varies across its footprint carries a comma-list,
 e.g. `"1,2"`), `premise_area` (footprint area, m²) and `gross_area` (total floor area, m² — footprint ×
 floors where known).
 
 Likewise the `building_counts` transform step aggregates the `buildings` extract (Verisk UKBuildings
-footprints) into `building_counts_h3_9` — the count of buildings per resolution-9 cell **split by
+footprints) into `h3r9_building_counts` — the count of buildings per resolution-9 cell **split by
 `map_simple_use`** (Residential / Non Residential / Mixed Use), keyed by `spatial_id`. Each building is
-placed by its footprint centroid, and the output is restricted to cells present in `crime_counts_h3_9`
+placed by its footprint centroid, and the output is restricted to cells present in `h3r9_crime_counts`
 so it lines up with the crime grid (≈83% of all footprints fall in a crime cell). The per-cell counts
 are the useful form for a consumer; the raw `buildings` layer is tens of millions of polygons.
 
@@ -224,21 +231,21 @@ or more, or had a permanent UK address and was outside the UK and intended to be
 less than 12 months.
 
 The `population_counts` transform step disaggregates both onto the crime grid as
-`population_counts_h3_9` (one row per res-9 cell: `spatial_id`, `residential_population`,
+`h3r9_population_counts` (one row per res-9 cell: `spatial_id`, `residential_population`,
 `workplace_population`). Each OA's populations are first assigned to that OA's buildings pro rata to
 total floor area (`gross_area`, falling back to the footprint `premise_area` where the floor count is
 unknown) times a use weight — the workplace population to **Non Residential** (×1.0) and **Mixed Use**
 (×0.5) buildings, the residential population (households + communal establishments) to **Residential**
 (×1.0) and **Mixed Use** (×0.5), i.e. a mixed-use building sits 50-50 in both pools — then the
-per-building assignments are grouped by the building's `h3_9_id` and summed. Both populations are
+per-building assignments are grouped by the building's `h3r9_id` and summed. Both populations are
 conserved onto the grid except where they cannot be assigned (an OA with no building of the right
 type, or a building whose centroid falls in no OA); the step reports the allocated share of each
 source total. It is bundled in the default minimal DB (skipped if any of its three input extracts was
 absent).
 
-> **TODO:** now that the `buildings` extract carries `h3_9_id` per footprint, `building_counts_h3_9` may
+> **TODO:** now that the `buildings` extract carries `h3r9_id` per footprint, `h3r9_building_counts` may
 > be surplus to requirements — a consumer can aggregate the counts directly from `buildings` by
-> `h3_9_id` / `map_simple_use`. Consider dropping the transform (and its bundled table) once nothing
+> `h3r9_id` / `map_simple_use`. Consider dropping the transform (and its bundled table) once nothing
 > depends on the pre-aggregated form.
 
 OSM coverage of the `streetlights` and `cctv` layers is uneven — see
@@ -274,7 +281,7 @@ absence). Registry order respects `depends_on`:
 | `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
 | `residential_population` | [residential_population.py](src/safer_streets_tooling/extract/residential_population.py) | no | — |
-| `beahiv_202` | [beahiv_202.py](src/safer_streets_tooling/extract/beahiv_202.py) | no | `police_force_areas` (the grid is derived from the force boundaries) |
+| `beahiv202` | [beahiv202.py](src/safer_streets_tooling/extract/beahiv202.py) | no | `police_force_areas` (the grid is derived from the force boundaries) |
 | `hotspots` | [hotspots.py](src/safer_streets_tooling/extract/hotspots.py) | no | — |
 
 ## Data-quality caveats
@@ -290,7 +297,7 @@ Both layers are sourced from OpenStreetMap and inherit its uneven, volunteer-dri
 OSM tagging of street furniture is **comprehensive in some areas and sparse or entirely absent in
 others** — coverage tends to arrive via occasional bulk imports (a council's asset inventory, a local
 mapping party) rather than organic, nationwide surveying. So `streetlights`, `cctv` and the derived
-`streetlight_counts_h3_9` are best read as a **presence / indicative** signal, **not** a complete or
+`h3r9_streetlight_counts` are best read as a **presence / indicative** signal, **not** a complete or
 authoritative inventory.
 
 Concretely, the England & Wales `streetlights` extract holds ~129k lamps spread across only ~13.7k
@@ -304,7 +311,7 @@ limitation, not a pipeline bug**.
 Ordnance Survey — the OS NGD street-lighting collection (`trn-fts-streetlight-1`, Transport theme /
 street furniture), which requires a keyed OS Data Hub / NGD API subscription. We should switch
 `streetlights` over to the OS dataset **once (a) it can be located and accessed under our OS licence
-and (b) that licence permits us to publish the aggregate `streetlight_counts_h3_9` we derive from it**
+and (b) that licence permits us to publish the aggregate `h3r9_streetlight_counts` we derive from it**
 (per-cell counts, not the raw point locations). Until then the OSM/Overture layer stands as an
 indicative placeholder. The same OS caveat applies to `cctv`, for which there is no comparable
 authoritative national feed — it remains indicative only.
@@ -318,21 +325,21 @@ respects `depends_on`:
 
 | Step | Module | `--grid` | Outputs | Depends on |
 | ---- | ------ | -------- | ------- | ---------- |
-| `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `h3` | `crime_counts_h3_{res}`, `crime_counts_{key}` (per ONS geography) | — |
-| `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `h3` | `streetlight_counts_h3_9` | — |
-| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `h3` | `building_counts_h3_9` (by `map_simple_use`) | `crime_counts` |
-| `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `h3` | `population_counts_h3_9` | — |
-| `road_intersection_counts` | [road_intersection_counts.py](src/safer_streets_tooling/transform/road_intersection_counts.py) | `h3` | `road_intersection_counts_h3_{res}` | `crime_counts` |
-| `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3` | *(none — `h3_{res}_{key}_lookup` stays in memory, folded into `h3_{res}_geogs`)* | `crime_counts` |
-| `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3` | `h3_{res}_{name}_lookup` | `crime_counts` |
-| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3` | `h3_{res}_retail_centre_lookup` | `crime_counts` |
-| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3` | `h3_{res}_geogs` | `crime_counts`, `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
-| `hotspot_counts` | [hotspot_counts.py](src/safer_streets_tooling/transform/hotspot_counts.py) | `ho` | `crime_counts_hotspots`, `{streetlight,building,population,road_intersection}_counts_hotspots` | — |
+| `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `h3` | `h3r{res}_crime_counts`, `{key}_crime_counts` (per ONS geography) | — |
+| `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `h3` | `h3r9_streetlight_counts` | — |
+| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `h3` | `h3r9_building_counts` (by `map_simple_use`) | `crime_counts` |
+| `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `h3` | `h3r9_population_counts` | — |
+| `road_intersection_counts` | [road_intersection_counts.py](src/safer_streets_tooling/transform/road_intersection_counts.py) | `h3` | `h3r{res}_road_intersection_counts` | `crime_counts` |
+| `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3` | *(none — `h3r{res}_{key}_lookup` stays in memory, folded into `h3r{res}_geogs`)* | `crime_counts` |
+| `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3` | `h3r{res}_{name}_lookup` | `crime_counts` |
+| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3` | `h3r{res}_retail_centre_lookup` | `crime_counts` |
+| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3` | `h3r{res}_geogs` | `crime_counts`, `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
+| `hotspot_counts` | [hotspot_counts.py](src/safer_streets_tooling/transform/hotspot_counts.py) | `ho` | `hotspots_crime_counts`, `hotspots_{streetlight,building,population,road_intersection}_counts` | — |
 | `hotspot_lookups` | [hotspot_lookups.py](src/safer_streets_tooling/transform/hotspot_lookups.py) | `ho` | `hotspots_{name}_lookup`, `hotspots_retail_centre_lookup` (the `hotspots_{key}_lookup` stay in memory) | — |
 | `hotspot_geogs` | [hotspot_geogs.py](src/safer_streets_tooling/transform/hotspot_geogs.py) | `ho` | `hotspots_geogs` | `hotspot_lookups` |
-| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `beahiv` | `crime_counts_beahiv_202` | — |
-| `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv` | `beahiv_202_{name}_lookup`, `beahiv_202_retail_centre_lookup` (the `beahiv_202_{key}_lookup` stay in memory) | `beahiv_counts` |
-| `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `beahiv_202_geogs` | `beahiv_counts`, `beahiv_lookups` |
+| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `beahiv` | `beahiv202_crime_counts` | — |
+| `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv` | `beahiv202_{name}_lookup`, `beahiv202_retail_centre_lookup` (the `beahiv202_{key}_lookup` stay in memory) | `beahiv_counts` |
+| `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `beahiv202_geogs` | `beahiv_counts`, `beahiv_lookups` |
 
 ### Spatial units
 
@@ -341,9 +348,9 @@ values of `data transform --grid`, repeatable, all three by default:
 
 | Unit | `--grid` | `key` | Cells | Cell area | `spatial_id` |
 | ---- | -------- | ----- | ----- | --------- | ------------ |
-| H3, per resolution in `H3_RESOLUTIONS` (currently `[9]`) | `h3` | `h3_{res}` | the cells carrying crimes, from `crime_counts_h3_{res}` | `h3_cell_area` (geodesic, m²) | the cell's canonical hex string (`VARCHAR`) |
+| H3, per resolution in `H3_RESOLUTIONS` (currently `[9]`) | `h3` | `h3r{res}` | the cells carrying crimes, from `h3r{res}_crime_counts` | `h3_cell_area` (geodesic, m²) | the cell's canonical hex string (`VARCHAR`) |
 | Home Office hotspot hexes | `ho` | `hotspots` | every polygon in the `hotspots` extract | `ST_Area` of the polygon (m²) | the supplied hex id (`VARCHAR`) |
-| [BEAHIV](https://github.com/safer-streets/beahiv) 202m equal-area hexes | `beahiv` | `beahiv_202` | the cells carrying crimes, from `crime_counts_beahiv_202` | `3√3/2·s²` — a constant, the grid being equal-area (planar m²) | the encoded cell id (`BIGINT`) |
+| [BEAHIV](https://github.com/safer-streets/beahiv) 202m equal-area hexes | `beahiv` | `beahiv202` | the cells carrying crimes, from `beahiv202_crime_counts` | `3√3/2·s²` — a constant, the grid being equal-area (planar m²) | the encoded cell id (`BIGINT`) |
 
 A [`SpatialUnit`](src/safer_streets_tooling/transform/base.py) holds what the per-cell SQL varies on
 (the `key` that names its relations, the subquery yielding each cell's `spatial_id` + BNG `cell_geom`,
@@ -361,11 +368,11 @@ knob — they are a property of the H3 gridding, taken from `H3_RESOLUTIONS`.
 #### Why BEAHIV as well as H3
 
 A 202 m side gives a cell of ~0.106 km², within a percent of an H3 resolution-9 cell, so
-`beahiv_202_geogs` and `h3_9_geogs` are the same attributes over comparable cells on identical data —
+`beahiv202_geogs` and `h3r9_geogs` are the same attributes over comparable cells on identical data —
 which is the point: it makes the two griddings comparable rather than replacing one with the other.
 BEAHIV is natively EPSG:27700 and exactly equal-area there, where H3 cells vary in area and are
-reprojected from WGS-84. `beahiv_202_geogs` carries the same columns in the same order as
-`h3_9_geogs`; only `spatial_id`'s type differs, since the two indexings identify a cell differently.
+reprojected from WGS-84. `beahiv202_geogs` carries the same columns in the same order as
+`h3r9_geogs`; only `spatial_id`'s type differs, since the two indexings identify a cell differently.
 
 The BEAHIV grid parameters live once in
 [beahiv_grid.py](src/safer_streets_tooling/beahiv_grid.py) — the extract that tiles England & Wales and
@@ -468,7 +475,7 @@ The Home Office hotspot hexes are supplied in confidence, so neither they nor an
 them may reach the shared container. [local_only.py](src/safer_streets_tooling/local_only.py) holds that
 rule as a set of spatial-unit keys (currently just `hotspots`) and matches any table named after one —
 the bare key (`hotspots`), the `hotspots_*` prefix (`hotspots_geogs`, `hotspots_lad24cd_lookup`, …) and
-the `*_hotspots` suffix (`crime_counts_hotspots`, `building_counts_hotspots`, …). Because the whole
+the `*_hotspots` suffix (`hotspots_crime_counts`, `hotspots_building_counts`, …). Because the whole
 family is named off the unit key, a hotspot step added later is excluded without editing anything.
 
 The exclusion applies under **every** `--update` policy and in **both** directions: a matching local

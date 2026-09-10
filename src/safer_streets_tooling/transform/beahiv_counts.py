@@ -1,6 +1,6 @@
-"""``crime_counts_beahiv_202`` — crimes counted per BEAHIV hexagonal cell / crime type / month.
+"""``beahiv202_crime_counts`` — crimes counted per BEAHIV hexagonal cell / crime type / month.
 
-The same schema and exclusions as ``crime_counts_h3_{res}`` (see :mod:`.crime_counts`), on the
+The same schema and exclusions as ``h3r{res}_crime_counts`` (see :mod:`.crime_counts`), on the
 equal-area hexagonal grid described in :mod:`.beahiv` instead of H3. The BEAHIV counterpart of
 ``hotspot_counts`` — except that placing a crime needs no spatial join: a cell id is arithmetic on the
 crime's BNG coordinates, so this is the H3 mechanism with beahiv's encoder in place of
@@ -17,10 +17,10 @@ from safer_streets_tooling.transform.crime_counts import CRIME_FILTER, expected_
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``crime_counts_beahiv_202`` counting crimes per BEAHIV cell / crime type / month.
+    """Create ``beahiv202_crime_counts`` counting crimes per BEAHIV cell / crime type / month.
 
     The grid is parameterised by a side length in metres, not by an H3 resolution. ``spatial_id`` is the
-    cell id as a ``BIGINT`` (see :mod:`.beahiv`), the same column ``beahiv_202`` and ``beahiv_202_geogs``
+    cell id as a ``BIGINT`` (see :mod:`.beahiv`), the same column ``beahiv202`` and ``beahiv202_geogs``
     are keyed by.
 
     Exclusions are ``crime_counts``' :data:`~.crime_counts.CRIME_FILTER` verbatim (un-geolocated and

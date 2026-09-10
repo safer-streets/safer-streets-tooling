@@ -8,7 +8,7 @@ the cell maps to, the cell's overlap with each feature layer (``{prefix}_ids`` +
 
 It deliberately does **not** carry attributes that are a property of a geography the cell already
 references — e.g. IMD scores, which are an LSOA-level attribute. Those stay in their own table and a
-consumer joins to them via the relevant code (``h3_*_geogs.lsoa21cd`` → the IMD table), so a value held
+consumer joins to them via the relevant code (``h3r*_geogs.lsoa21cd`` → the IMD table), so a value held
 once per LSOA isn't duplicated across every cell in that LSOA.
 """
 
@@ -20,12 +20,17 @@ from safer_streets_tooling.transform.base import (
     SpatialUnit,
     TransformStep,
     create_clause,
+    h3_key,
     h3_unit,
+    relation,
     table_exists,
 )
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 from safer_streets_tooling.transform.overlap_lookups import OVERLAP_FEATURES
 from safer_streets_tooling.transform.retail_centre_lookups import RETAIL_CENTRES_TABLE
+
+# the dataset half of this step's relation names: `{grid}_geogs` on every unit it is built for
+DATASET = "geogs"
 
 # the geography used as the base table for the *_geogs tables (broadest coverage: incl. NI/Scotland).
 # Validated at import: a key that isn't in the mapping used to fall back to the first geography
@@ -88,7 +93,7 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
     extra_join_sql = "\n".join(extra_joins)
 
     con.execute(f"""
-        {create_clause("TABLE", f"{unit.key}_geogs", replace=replace)} AS
+        {create_clause("TABLE", relation(unit.key, DATASET), replace=replace)} AS
         {with_clause}
         SELECT base.spatial_id, {unit.area} AS cell_area, {select_cols}{extra_col_sql}
         FROM {unit.key}_{base}_lookup base
@@ -104,7 +109,7 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
-    return [f"h3_{res}_geogs" for res in H3_RESOLUTIONS]
+    return [relation(h3_key(res), DATASET) for res in H3_RESOLUTIONS]
 
 
 STEP = TransformStep(

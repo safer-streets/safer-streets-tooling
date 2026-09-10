@@ -1,9 +1,9 @@
-"""``*_counts_hotspots`` — the per-cell counts, aggregated onto the Home Office hotspot hexes.
+"""``hotspots_*_counts`` — the per-cell counts, aggregated onto the Home Office hotspot hexes.
 
 The H3 counts and these are the same measures on a different grid, so each one lives with its H3
 counterpart (``crime_counts.build_hotspots`` and friends) and this module only wires them into a single
 step. Everything is keyed by ``spatial_id`` — the hex id — so a consumer joins them to
-``hotspots_geogs`` exactly as it joins the res-9 counts to ``h3_9_geogs``.
+``hotspots_geogs`` exactly as it joins the res-9 counts to ``h3r9_geogs``.
 
 Every relation is skipped when its source extract (or the hotspots extract itself) is absent, so this
 step is a clean no-op on a build without the hotspot hexes.

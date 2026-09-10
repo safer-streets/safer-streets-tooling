@@ -1,6 +1,6 @@
 """``hotspots_geogs`` — one row per Home Office hotspot hex: ONS codes + overlap id lists + nearest retail centre.
 
-The hotspot counterpart of ``h3_{res}_geogs``: same columns, same scope (see
+The hotspot counterpart of ``h3r{res}_geogs``: same columns, same scope (see
 :mod:`safer_streets_tooling.transform.geogs`), built by the same query over the hotspot lookups. Its
 ``cell_area`` is the hex polygon's own area in m² rather than an H3 cell's geodesic area.
 """

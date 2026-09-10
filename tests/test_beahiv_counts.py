@@ -104,7 +104,7 @@ def test_spatial_id_is_a_signed_integer_on_the_declared_grid():
 
 
 def test_counts_keyed_by_crime_type_and_month():
-    """Same schema as crime_counts_h3_*: one row per (cell, crime type, month)."""
+    """Same schema as h3r*_crime_counts: one row per (cell, crime type, month)."""
     con = _connect()
     _crime_data(con)
 

@@ -7,6 +7,138 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## A cell id per grid on every point layer, and one place that names grids
+
+**Why** — the extracts tagged each feature with `h3_9_id` and nothing else, so anything wanting the
+BEAHIV grid had to re-derive the cell, and the column disagreed with the `{grid}_{dataset}` convention
+the relations had just adopted. Both grids should be joinable straight off a raw layer.
+
+**What** — every point layer (buildings by centroid, schools, poi, naptan, food_outlets, streetlights,
+cctv) now carries **`h3r9_id` and `beahiv202_id`**, minted by one helper —
+`extract._common.cell_id_columns(con, lat, lon, bng_geom)` — so the seven layers cannot drift in how
+they name or derive them. The BEAHIV encoder moved from `transform/beahiv.py` to `beahiv_grid.py`,
+which both phases already share, and `register_udf` moved to a neutral `duckdb_udf` module so the
+extract phase does not have to import from the transform to use it.
+
+`grids.py` is new and sits above both phases: it owns `h3_key()`, `relation()` and `id_column()`, so a
+relation (`h3r9_crime_counts`) and a column (`h3r9_id`) are derived from the same key rather than
+spelled out. `transform/base` re-exports them, so the steps still read as before.
+
+A grid key is now a single token with no internal `_` — **`beahiv202`, not `beahiv_202`**, matching
+`h3r9` — so exactly one underscore separates the grid from what follows it and a key stays greppable as
+one word. That renames the extract module (`extract/beahiv202.py`), its dataset and parquet, and every
+`beahiv202_*` relation.
+
+**Design decisions**
+
+- **One helper rather than seven copies of the SQL.** The layers already differ in how they reach a point
+  (a footprint centroid, a WGS-84 geometry, an Easting/Northing pair), so the helper takes the lat/lon
+  and BNG expressions and emits both columns; each extractor supplies only what is genuinely local to
+  it. It registers the BEAHIV UDF as a side effect, mirroring `crime_locations.placed_in`, so a caller
+  needs one import and cannot forget the registration.
+- **The BNG point must be the same point as the lat/lon.** The H3 id comes from WGS-84 (what the h3
+  extension takes) and the BEAHIV id by arithmetic on BNG (pyproj segfaults DuckDB's worker threads),
+  so the two ids are derived from different expressions and would silently disagree if a caller passed
+  a footprint to one and its centroid to the other. Documented on the helper, and the buildings
+  extractor passes the centroid to both.
+- **Verified against beahiv's own geometry, not the encoder.** A test asserts the tagged cell
+  *contains* the feature (`cell_polygon(beahiv202_id).contains(point)`) — checking the encoder against
+  itself would pass even if the whole grid were misaligned. The Overture-backed extract tests
+  (poi/streetlights/cctv) exercise the columns end to end against live data.
+
+**Follow-ups**
+
+- The extracts must be re-run for the new column to exist on disk; every existing extract parquet still
+  has `h3_9_id` and no BEAHIV id.
+- `retail_centres` carries an unrelated `h3_count` column that predates all of this.
+
+## One spatial join for the ONS counts (~180 min → 5s), and a `{grid}_{dataset}` naming convention
+
+**Why** — `data transform --grid h3` ran for over two hours without producing a single parquet. Live
+inspection of the process (6h35m CPU on 4 threads, 15.5 GB resident against a 15 GB cap, 4 GB spilled,
+no extract parquet still open) put it inside `crime_counts`, which everything in the H3 chain waits on.
+The step was rebuilding because `crime_counts_pfa24cd.parquet` was missing — collateral from the
+`pfa23cd` → `pfa24cd` rename — and five of its six relations were point-in-polygon passes over 17.5M
+crimes that have nothing to do with H3.
+
+Measured, per point, over 20k points:
+
+| layer | polygons | µs/point | 17.5M crimes |
+| --- | --- | --- | --- |
+| `police_force_areas` | 44 | **592.9** | **≈173 min** |
+| `local_authority_districts` | 361 | 10.9 | 3.2 min |
+| `msoa_2021` | 7,264 | 2.9 | 0.8 min |
+| `lsoa_2021` | 35,672 | 2.8 | 0.8 min |
+| `output_areas_2021` | 188,880 | 2.0 | 0.6 min |
+
+Fewer, bigger polygons is the pathological case: 44 forces tile the country in "full extent" geometry
+(~1 MB of vertices each), so the RTree prunes almost nothing and GEOS runs exact containment against a
+million-vertex polygon every time. One layer was ~173 of the ~179 minutes.
+
+**What** — `geography_counts`, a new step on a new `ons` grid family, taking the five
+`{key}_crime_counts` out of `crime_counts` (which is now H3 only, and join-free: `h3_latlng_to_cell` is
+arithmetic on the coordinates). It does **one** spatial join, at the finest layer:
+
+- `crime_locations` — police.uk snaps crimes to a fixed point set, so 17.5M crimes sit on **743,990**
+  distinct coordinates (23.5 each). Placing a location once and joining the answer back is the same
+  result for ~4% of the work; the equi-join is on the source columns copied verbatim, so it is exact
+  (asserted: 17,485,799 rows join, exactly the filtered input).
+- `ons_hierarchy` — OA → LSOA → MSOA → LAD → PFA, built once from representative points
+  (`ST_PointOnSurface`, which a centroid cannot replace on a concave polygon). 188,880 OAs resolve
+  through every level, 0 unresolved, in 0.9s.
+- a fallback: ~41k locations sit outside the OA layer while still inside a LAD, and funnelling
+  everything through the OA would silently drop them. They turned out to be **Northern Ireland** —
+  PSNI is on police.uk, and NI has neither an output area nor a police force area in the E&W layers.
+  They are placed directly at the LAD level (41k points, not 744k) and their force follows from that.
+
+The same trick fixes `geo_lookups`, where every grid was intersecting its cells against those same 44
+polygons: a cell's force is now read off its LAD (`DERIVED_FROM`).
+
+**Verified on the full extract** (17,485,799 countable crimes), not just the fixtures:
+
+- all five geography counts build in **5.2s** (18.6s with the NI fallback), against ~180 minutes;
+- `crime_counts_lad24cd` totals **17,483,713** — identical to a direct point-in-polygon;
+- per location, derived vs direct: LSOA 3 differ of 702,757, MSOA 0, **PFA 112 of 702,760** (0.016%),
+  all boundary-generalisation slivers between the statistical layers and the full-extent PFA layer;
+- roll-ups conserve exactly at every level.
+
+**Also: relation names now follow `{grid}_{dataset}`.** The counts trailed the unit
+(`building_counts_hotspots`) while the lookups and geogs led with it (`hotspots_geogs`), so a directory
+listing interleaved the families. Everything is now minted through `transform.base.relation()`:
+`hotspots_building_counts`, `h3r9_crime_counts`, `beahiv_202_geogs`. The H3 key is `h3r9`, not `h3_9`,
+so exactly one `_` separates grid from dataset.
+
+**Design decisions**
+
+- **Join the finest layer, derive the rest.** The instinct is to join the layer you want, but the
+  cheapest layer is the one with the *most* polygons, and everything coarser is a lookup from it. The
+  hierarchy is a property of the geographies, so this is not an approximation — the 112 PFA
+  disagreements are the two layers' coastlines being generalised differently, and the derived answer is
+  arguably the better one (a crime's force then agrees with its OA rather than contradicting it).
+- **Dedupe rather than sample.** 23.5 crimes per point is a property of how police.uk anonymises, not
+  of this dataset, so it will hold for every future extract.
+- **`ons` as a fourth `Grid`.** The geography counts are not a grid, but they are a self-contained
+  family with the same relation shape, and making them one means `--grid h3` no longer drags five
+  point-in-polygon passes along with it. `ons_hierarchy` / `crime_locations` are `ensure()` helpers, not
+  steps, so no cross-family `depends_on` is needed and the `--grid` filter stays safe.
+- **`lsoa_code` was the obvious shortcut, and it is a trap.** police.uk ships an LSOA code per crime, so
+  `crime_counts_lsoa21cd` looked like a `GROUP BY`. But 415,137 countable crimes (2.37%) carry no code
+  at all, and the archive being 2023-07..2026-06 is the only reason every code is a valid 2021 one —
+  extend it back past 2022 and retired 2011 codes appear, which no boundary layer contains. The spatial
+  join is vintage-proof; the column is not.
+
+**Follow-ups**
+
+- Every transform parquet is renamed, so **all existing ones are orphaned** — locally and in the
+  `phase2` container, which `sync` never deletes — and consumers joining `crime_counts_h3_9` or
+  `building_counts_hotspots` must be updated. They need deleting by hand.
+- The extract layers still carry an `h3_9_id` **column** (buildings, schools, streetlights, poi). It is
+  the same inconsistency one level down, but renaming it means re-running those extracts.
+- `crime_counts.build_hotspots` still places all 17.5M crimes rather than the 744k locations; the
+  hotspot hexes are small polygons so it is not pathological, but it is the same free 23.5x.
+- `_import_datasets` still imports and geometry-indexes all 25 extract datasets whatever `--grid` says;
+  8 are read by no transform step at all.
+
 ## The per-geography lookups stop being published tables
 
 **Why** — `{unit}_{key}_lookup` (five per grid: `h3_9_lad24cd_lookup`, `hotspots_oa21cd_lookup`, …) is

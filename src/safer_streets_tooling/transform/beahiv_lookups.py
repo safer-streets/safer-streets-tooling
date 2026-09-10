@@ -1,4 +1,4 @@
-"""``beahiv_202_*_lookup`` — the per-cell lookups, built on the BEAHIV 202m hex grid.
+"""``beahiv202_*_lookup`` — the per-cell lookups, built on the BEAHIV 202m hex grid.
 
 The three lookup families (ONS geography code, overlapping feature layers, nearest retail centre) are
 the H3 ones with a different set of cells, so this step just calls each module's ``build_unit`` with
@@ -27,7 +27,7 @@ def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not beahiv.available(con):
         return []
     # the geography lookups are deliberately absent: they are in-memory intermediates folded into
-    # beahiv_202_geogs, which carries every code over the same cells (see :mod:`.geo_lookups`)
+    # beahiv202_geogs, which carries every code over the same cells (see :mod:`.geo_lookups`)
     return [
         *overlap_lookups.unit_outputs(con, beahiv.BEAHIV_UNIT),
         *retail_centre_lookups.unit_outputs(con, beahiv.BEAHIV_UNIT),

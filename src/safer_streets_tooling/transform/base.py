@@ -17,15 +17,29 @@ table (street-level crimes) and one boundary table per ONS geography (each with 
 and a BNG ``geom`` column). Ported from the ``duckdb-spatial`` prototype notebook (safer-streets-eda).
 """
 
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 import duckdb
-from duckdb.sqltypes import DuckDBPyType
 
-H3_RESOLUTIONS = [9]
+from safer_streets_tooling.duckdb_udf import register_udf
+from safer_streets_tooling.grids import H3_RESOLUTIONS, h3_key, relation
+
+# re-exported: the naming primitives live in `grids`, above both phases, but the transform's steps
+# have always reached for them here alongside SpatialUnit and TransformStep
+__all__ = [
+    "H3_RESOLUTIONS",
+    "Grid",
+    "SpatialUnit",
+    "TransformStep",
+    "create_clause",
+    "h3_key",
+    "h3_unit",
+    "register_udf",
+    "relation",
+    "table_exists",
+]
 
 
 class Grid(StrEnum):
@@ -48,8 +62,8 @@ class Grid(StrEnum):
 class SpatialUnit:
     """One grid the per-cell transforms aggregate onto (an H3 resolution, or the hotspot hexes).
 
-    ``key`` is the infix every relation name carries — ``h3_9`` gives ``crime_counts_h3_9`` /
-    ``h3_9_geogs``, ``hotspots`` gives ``crime_counts_hotspots`` / ``hotspots_geogs``.
+    ``key`` is the prefix every relation name carries — ``h3r9`` gives ``h3r9_crime_counts`` /
+    ``h3r9_geogs``, ``hotspots`` gives ``hotspots_crime_counts`` / ``hotspots_geogs``.
 
     ``cells`` is a subquery yielding one row per unit: its ``spatial_id`` and ``cell_geom``, the unit's
     boundary in BNG (the CRS every geometry the lookups intersect it with is in). ``area`` is the unit's
@@ -66,12 +80,12 @@ class SpatialUnit:
 def h3_unit(res: int) -> SpatialUnit:
     """The H3 grid at resolution ``res``, whose cells are those carrying crimes.
 
-    The cells are taken from ``crime_counts_h3_{res}`` (so the grid is exactly the crime grid),
+    The cells are taken from ``h3r{res}_crime_counts`` (so the grid is exactly the crime grid),
     de-duplicated as ids before their boundary is materialised — much cheaper than a DISTINCT over the
     polygons. ``h3_cell_area`` gives the cell's true (geodesic) area straight from the id.
     """
     return SpatialUnit(
-        key=f"h3_{res}",
+        key=h3_key(res),
         cells=f"""
             SELECT
                 spatial_id,
@@ -79,7 +93,7 @@ def h3_unit(res: int) -> SpatialUnit:
                     ST_GeomFromText(h3_cell_to_boundary_wkt(spatial_id)),
                     'EPSG:4326', 'EPSG:27700', always_xy := true
                 ) AS cell_geom
-            FROM (SELECT DISTINCT spatial_id FROM crime_counts_h3_{res})
+            FROM (SELECT DISTINCT spatial_id FROM h3r{res}_crime_counts)
         """,
         area="h3_cell_area(base.spatial_id, 'm^2')",
     )
@@ -119,34 +133,6 @@ def create_clause(kind: str, name: str, *, replace: bool) -> str:
     replace=False -> ``CREATE {kind} IF NOT EXISTS {name}`` (kept if it already exists)
     """
     return f"CREATE OR REPLACE {kind} {name}" if replace else f"CREATE {kind} IF NOT EXISTS {name}"
-
-
-# UDFs live in the catalog, which every cursor shares, so concurrent steps race to register the same
-# name. Serialise the check-then-create so only one of them wins.
-_UDF_LOCK = threading.Lock()
-
-
-def register_udf(
-    con: duckdb.DuckDBPyConnection,
-    name: str,
-    fn: Callable[..., object],
-    params: list[DuckDBPyType],
-    return_type: DuckDBPyType,
-) -> None:
-    """Register a vectorised (``type="arrow"``) Python UDF on ``con``, unless the catalog already has it.
-
-    The catalog outlives a single ``build`` and is shared by every cursor, so a rebuild — or a second
-    step registering the same helper on another cursor — would otherwise fail on the name already
-    existing. The catalog is the thing to test: ``remove_function`` and re-create looks like the obvious
-    way to make this idempotent, but once the UDF has *executed* over real data it only deregisters the
-    Python side — ``duckdb_functions()`` still lists the name and ``create_function`` then raises
-    ``CatalogException``. Skipping the re-registration is safe because these UDFs are pure functions of
-    module-level constants, so an existing registration is by definition the same function.
-    """
-    with _UDF_LOCK:
-        sql = "SELECT COUNT(*) FROM duckdb_functions() WHERE function_name = ?"
-        if not con.execute(sql, [name]).fetchone()[0]:  # ty:ignore[not-subscriptable]
-            con.create_function(name, fn, params, return_type, type="arrow")
 
 
 def table_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:

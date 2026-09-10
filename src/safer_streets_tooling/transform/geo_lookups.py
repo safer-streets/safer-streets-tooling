@@ -85,7 +85,7 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.H3,
-    description="Per-cell lookup mapping each H3 cell to one ONS geography code (max-overlap); folded into h3_{res}_geogs.",
+    description="Per-cell lookup mapping each H3 cell to one ONS geography code (max-overlap); folded into h3r{res}_geogs.",
     depends_on=("crime_counts",),
     extract_inputs=tuple(GEOGRAPHY_MAPPINGS.values()),
 )

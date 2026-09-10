@@ -1,8 +1,8 @@
 """The Home Office hotspot hexes as a spatial unit: the ``hotspots`` table and what reads it.
 
 The hotspot grid is the transform's second spatial unit alongside the H3 cells. Every relation built on
-it is named with the ``hotspots`` key (``crime_counts_hotspots``, ``hotspots_geogs``,
-``building_counts_hotspots``, …) and keyed by ``spatial_id`` — the hex id — so a consumer joins the
+it is named with the ``hotspots`` key (``hotspots_crime_counts``, ``hotspots_geogs``,
+``hotspots_building_counts``, …) and keyed by ``spatial_id`` — the hex id — so a consumer joins the
 hotspot counts and attributes exactly as it joins the H3 ones.
 
 Two things differ from H3 and are captured here, once:
@@ -41,7 +41,7 @@ def placed_points(source: str, *cols: str, point: str = "s.geom", where: str = "
     """A query placing each row of ``source`` (aliased ``s``) in its hotspot hex: ``spatial_id`` + ``cols``.
 
     ``point`` is the BNG point that locates the row — ``s.geom`` for a point layer, or an expression such
-    as ``ST_Centroid(s.geom)`` for a footprint (which is how the extracts derive their ``h3_9_id``, so
+    as ``ST_Centroid(s.geom)`` for a footprint (which is how the extracts derive their ``h3r9_id``, so
     the hotspot counts place a feature the same way the H3 ones do).
 
     ``ST_Contains`` rather than ``ST_Intersects``: the hexes tile without overlap, so a point exactly on

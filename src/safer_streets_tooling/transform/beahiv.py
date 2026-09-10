@@ -1,13 +1,13 @@
 """The BEAHIV 202m hex grid as a spatial unit: the two UDFs it needs, and :data:`BEAHIV_UNIT`.
 
 The transform's third spatial unit, alongside the H3 cells and the Home Office hotspot hexes. Every
-relation built on it is named with the ``beahiv_202`` key (``crime_counts_beahiv_202``,
-``beahiv_202_geogs``, …) and keyed by ``spatial_id``, so a consumer joins the BEAHIV counts and
+relation built on it is named with the ``beahiv202`` key (``beahiv202_crime_counts``,
+``beahiv202_geogs``, …) and keyed by ``spatial_id``, so a consumer joins the BEAHIV counts and
 attributes exactly as it joins the H3 ones — which is the point of the grid: the same crimes on an
 equal-area hexagonal gridding, comparable cell for cell with H3 resolution 9.
 
 Like the H3 units and unlike the hotspot hexes, the cells are those *carrying crimes* — taken from
-``crime_counts_beahiv_202`` rather than from the ``beahiv_202`` extract, which tiles the whole of
+``beahiv202_crime_counts`` rather than from the ``beahiv202`` extract, which tiles the whole of
 England & Wales (~1.5m cells) and would put the great majority of them through the lookups for
 nothing. That also keeps the grid exactly the crime grid, as it is for H3.
 
@@ -29,38 +29,20 @@ import duckdb
 import numpy as np
 import pyarrow as pa
 import shapely
-from beahiv import bng_to_cell, cell_polygons
-from duckdb.sqltypes import BIGINT, BLOB, DOUBLE
+from beahiv import cell_polygons
+from duckdb.sqltypes import BIGINT, BLOB
 
-from safer_streets_tooling.beahiv_grid import CELL_AREA, KEY, ORIENTATION, SIDE_LENGTH
-from safer_streets_tooling.transform.base import SpatialUnit, register_udf, table_exists
+from safer_streets_tooling.beahiv_grid import CELL_AREA, ENCODE_UDF, KEY, register_encoder
+from safer_streets_tooling.transform.base import SpatialUnit, register_udf, relation, table_exists
+from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
-COUNTS_TABLE = f"crime_counts_{KEY}"
+# re-exported: the encoder moved to `beahiv_grid` (the extract phase tags features with a cell too),
+# but the counts step reaches for it here, alongside this grid's other UDF
+__all__ = ["BEAHIV_UNIT", "COUNTS_TABLE", "ENCODE_UDF", "available", "register_udfs"]
 
-ENCODE_UDF = "beahiv_cell_from_bng"
+COUNTS_TABLE = relation(KEY, CRIME_COUNTS)
+
 _POLYGON_UDF = "beahiv_cell_polygon"
-
-
-def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
-    """Encode a vector of BNG (x, y) metres as BEAHIV cell ids.
-
-    A pyarrow array in gives a pyarrow array back, so the DuckDB vectors pass straight through to
-    beahiv and back; the cast to ``int64`` is the only work here, matching the BIGINT the UDF
-    declares (beahiv returns the ids as ``uint64``, and every one of them fits — see the module
-    docstring).
-
-    It takes projected coordinates rather than lat/lon, for two reasons in order of importance:
-
-    1. ``latlon_to_cell`` reprojects with pyproj, and calling pyproj from DuckDB's worker threads
-       **segfaults the process** (reproducible on the full crime extract; survives only at
-       ``threads = 1``, and neither a lock nor a thread-local ``Transformer`` avoids it). The
-       transform phase runs with ``threads = 4``, so that path is unusable here.
-    2. ``crime_data.geom`` is already BNG — projected once in the extractor — so going via lat/lon
-       would reproject coordinates we already hold, at roughly double the cost.
-
-    Verified equivalent: identical cell ids to ``latlon_to_cell`` on 2M rows of the extract.
-    """
-    return bng_to_cell(x, y, SIDE_LENGTH, ORIENTATION).cast(pa.int64())
 
 
 def _cell_polygon_wkb(spatial_id: pa.ChunkedArray) -> pa.Array:
@@ -83,7 +65,7 @@ def register_udfs(con: duckdb.DuckDBPyConnection) -> None:
     *views* carrying the ``beahiv_cell_polygon`` call, so the UDF has to be in the catalog whenever one
     is evaluated, not merely when it is created.
     """
-    register_udf(con, ENCODE_UDF, _cell_from_bng, [DOUBLE, DOUBLE], BIGINT)
+    register_encoder(con)  # the BNG -> cell encoder, shared with the extract phase
     register_udf(con, _POLYGON_UDF, _cell_polygon_wkb, [BIGINT], BLOB)
 
 

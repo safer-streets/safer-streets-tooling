@@ -1,10 +1,10 @@
-"""``crime_counts_h3_{res}`` / ``crime_counts_hotspots`` — crimes counted per cell / crime type / month.
+"""``h3r{res}_crime_counts`` / ``hotspots_crime_counts`` — crimes counted per cell / crime type / month.
 
 The H3 table indexes each crime's lat/lon straight to a cell — arithmetic on the coordinates, no join.
 The Home Office hotspot hexes are a polygon layer, so those counts assign each crime point-in-polygon to
 a hex, keyed by the same ``spatial_id`` / ``crime_type`` / ``month`` / ``count`` schema.
 
-The ONS geography counts (``crime_counts_{key}``) used to live here too, which meant every step of the
+The ONS geography counts (``{key}_crime_counts``) used to live here too, which meant every step of the
 H3 chain waited on five point-in-polygon passes that have nothing to do with H3. They are now
 :mod:`.geography_counts`, on the ``ons`` grid.
 """
@@ -12,7 +12,7 @@ H3 chain waited on five point-in-polygon passes that have nothing to do with H3.
 import duckdb
 
 from safer_streets_tooling.transform import hotspots
-from safer_streets_tooling.transform.base import H3_RESOLUTIONS, Grid, TransformStep, create_clause
+from safer_streets_tooling.transform.base import H3_RESOLUTIONS, Grid, TransformStep, create_clause, h3_key, relation
 
 # The crimes that contribute to the per-cell counts: geolocated, and not British Transport Police
 # (their crimes are reported against the rail network rather than where they occurred, so they would
@@ -22,6 +22,9 @@ from safer_streets_tooling.transform.base import H3_RESOLUTIONS, Grid, Transform
 # re-exported here because this is where callers have always found it.
 from safer_streets_tooling.transform.crime_locations import CRIME_FILTER
 
+# the dataset half of this step's relation names: `{grid}_crime_counts` on every unit it is built for
+DATASET = "crime_counts"
+
 
 def expected_crimes(con: duckdb.DuckDBPyConnection) -> int:
     """How many crimes a count over the whole extract must conserve: the rows passing CRIME_FILTER."""
@@ -29,7 +32,7 @@ def expected_crimes(con: duckdb.DuckDBPyConnection) -> int:
 
 
 def _count_in_polygons(con: duckdb.DuckDBPyConnection, key: str, table: str, expected: int, replace: bool) -> None:
-    """Build ``crime_counts_{key}`` by assigning each filtered crime to the ``table`` polygon containing it.
+    """Build ``{key}_crime_counts`` by assigning each filtered crime to the ``table`` polygon containing it.
 
     ST_Contains rather than ST_Intersects: the polygon layers tile without overlap, but a point exactly
     on a shared edge would otherwise be counted in both areas — dropping it is the safe failure mode.
@@ -39,7 +42,7 @@ def _count_in_polygons(con: duckdb.DuckDBPyConnection, key: str, table: str, exp
     so exceeding the input row count raises.
     """
     con.execute(f"""
-        {create_clause("TABLE", f"crime_counts_{key}", replace=replace)} AS
+        {create_clause("TABLE", f"{key}_crime_counts", replace=replace)} AS
         SELECT
             b.spatial_id,
             c.crime_type,
@@ -49,17 +52,17 @@ def _count_in_polygons(con: duckdb.DuckDBPyConnection, key: str, table: str, exp
         JOIN {table} b ON ST_Contains(b.geom, c.geom)
         GROUP BY b.spatial_id, c.crime_type, month;
     """)
-    actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM crime_counts_{key}").fetchone()[0]  # ty:ignore[not-subscriptable]
+    actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM {key}_crime_counts").fetchone()[0]  # ty:ignore[not-subscriptable]
     if actual > expected:
         raise ValueError(
-            f"crime_counts_{key}: counted {actual:,} crimes but only {expected:,} input rows passed the "
+            f"{key}_crime_counts: counted {actual:,} crimes but only {expected:,} input rows passed the "
             f"filter — some crimes were counted in more than one area (overlapping boundary polygons)"
         )
-    print(f"  crime_counts_{key}: {actual:,}/{expected:,} crimes fall within a boundary")
+    print(f"  {key}_crime_counts: {actual:,}/{expected:,} crimes fall within a boundary")
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``crime_counts_h3_{res}`` counting crimes per H3 cell / crime type / month.
+    """Create ``h3r{res}_crime_counts`` counting crimes per H3 cell / crime type / month.
 
     The cell is taken straight from the crime's lat/lon with ``h3_latlng_to_cell`` — no geometry, no
     join. British Transport Police records (``falls_within``) are excluded: their crimes are reported
@@ -71,8 +74,9 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """
     expected = expected_crimes(con)
     for res in H3_RESOLUTIONS:
+        name = relation(h3_key(res), DATASET)
         con.execute(f"""
-            {create_clause("TABLE", f"crime_counts_h3_{res}", replace=replace)} AS
+            {create_clause("TABLE", name, replace=replace)} AS
             SELECT
                 lower(hex(h3_latlng_to_cell(latitude, longitude, {res}))) AS spatial_id,
                 crime_type,
@@ -82,20 +86,20 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
             WHERE {CRIME_FILTER}
             GROUP BY spatial_id, crime_type, month;
         """)
-        actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM crime_counts_h3_{res}").fetchone()[0]  # ty:ignore[not-subscriptable]
+        actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM {name}").fetchone()[0]  # ty:ignore[not-subscriptable]
         if actual != expected:
             raise ValueError(
-                f"crime_counts_h3_{res}: counted {actual:,} crimes but {expected:,} input rows passed the "
+                f"{name}: counted {actual:,} crimes but {expected:,} input rows passed the "
                 f"filter — the per-cell counts are not conserved (aggregation dropped or duplicated crimes)"
             )
 
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
-    return [f"crime_counts_h3_{res}" for res in H3_RESOLUTIONS]
+    return [relation(h3_key(res), DATASET) for res in H3_RESOLUTIONS]
 
 
 def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``crime_counts_hotspots``: the same counts per Home Office hotspot hex.
+    """Create ``hotspots_crime_counts``: the same counts per Home Office hotspot hex.
 
     The hexes are just another non-overlapping polygon layer, so this is the geography count with the
     hotspots table as the boundary — except that most crimes fall outside the grid, since it covers only
@@ -107,7 +111,7 @@ def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 
 
 def hotspot_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
-    return [f"crime_counts_{hotspots.HOTSPOT_UNIT.key}"] if hotspots.available(con) else []
+    return [relation(hotspots.HOTSPOT_UNIT.key, DATASET)] if hotspots.available(con) else []
 
 
 STEP = TransformStep(

@@ -10,7 +10,7 @@ The pipeline has two phases (extract → transform):
      a durable, per-dataset cache: a single dataset can be refreshed without touching the others.
   2. **transform**  the extracted parquet are loaded into a throwaway in-memory DuckDB, geometry is
      indexed, and the aggregation steps (``safer_streets_tooling.transform.STEPS``) are built; every
-     derived relation (the BTP-filtered ``crime_counts_*``, the per-cell lookups and the ``*_geogs``)
+     derived relation (the BTP-filtered ``*_crime_counts``, the per-cell lookups and the ``*_geogs``)
      is written out as its own parquet under ``data_dir()/transform``. ``--grid`` narrows the run to
      one or more of the three grid families (``h3`` / ``ho`` / ``beahiv``); by default all three are
      built. The parquet are a durable cache of the aggregations, so they can be rebuilt without
@@ -135,7 +135,7 @@ def run_transform(
 
     The extracted base tables are imported into a throwaway in-memory DuckDB and geometry is indexed
     (validity repair + RTree, so the spatial joins are correct and fast). The transforms for each grid
-    family in ``grids`` then run: the BTP-filtered ``crime_counts_*`` are aggregated from ``crime_data``,
+    family in ``grids`` then run: the BTP-filtered ``*_crime_counts`` are aggregated from ``crime_data``,
     then the per-cell lookups and the ``*_geogs`` are built off them. Each transform node owns its output
     parquet under ``tdir``: a node reuses its cached output only while it is newer than
     its inputs (the extract parquet it reads + its upstream steps' outputs), else rebuilds; ``rebuild``
@@ -211,7 +211,7 @@ _GRID_OPTION = typer.Option(
     list(ALL_GRIDS),
     "--grid",
     help="Grid family to build, repeatable: h3 (H3 cells), ho (Home Office hotspot hexes), beahiv "
-    "(BEAHIV 202m hexes). Default: all three.",
+    "(BEAHIV 202m hexes), ons (OA/LSOA/MSOA/LAD/PFA). Default: all four.",
 )
 
 

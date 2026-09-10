@@ -5,7 +5,7 @@ from zipfile import ZipFile
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.extract._common import extract_cached, raw_dir
+from safer_streets_tooling.extract._common import cell_id_columns, extract_cached, raw_dir
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # Attribute columns kept from the source (geometry handled separately); verisk_premise_id is the
@@ -26,8 +26,8 @@ KEEP_COLS = (
     "map_simple_use",
 )
 
-# Resolution of the H3 cell (``h3_9_id``) tagged onto each building; matches the ``building_counts``
-# transform and the crime grid (``crime_counts_h3_9`` / ``h3_9_geogs``).
+# Resolution of the H3 cell (``h3r9_id``) tagged onto each building; matches the ``building_counts``
+# transform and the crime grid (``h3r9_crime_counts`` / ``h3r9_geogs``).
 H3_RESOLUTION = 9
 
 
@@ -54,9 +54,9 @@ def extract(ctx: ExtractContext) -> None:
     footprint whose centroid falls outside every OA (genuinely outside the England & Wales extent, e.g.
     Scotland or offshore structures) is kept with a null ``oa21cd``, and the count is reported.
 
-    The same centroid (reprojected to WGS-84) is indexed to a resolution-9 H3 cell as ``h3_9_id``
+    The same centroid (reprojected to WGS-84) is indexed to a resolution-9 H3 cell as ``h3r9_id``
     (lowercase hex), matching the ``building_counts`` transform and the crime grid so a consumer can join
-    straight onto ``crime_counts_h3_9`` / ``h3_9_geogs``.
+    straight onto ``h3r9_crime_counts`` / ``h3r9_geogs``.
 
     Observed on the full extract (8 GeoPackages): 26,790,009 buildings, of which 158,976 (~0.6%) have a
     centroid in no output area — consistent with footprints lying outside the OA-clipped England & Wales
@@ -113,7 +113,7 @@ def extract(ctx: ExtractContext) -> None:
             SELECT
                 b.* EXCLUDE (geom, centroid, centroid_ll),
                 oa.spatial_id AS oa21cd,
-                lower(hex(h3_latlng_to_cell(ST_Y(b.centroid_ll), ST_X(b.centroid_ll), {H3_RESOLUTION}))) AS h3_9_id,
+                {cell_id_columns(con, "ST_Y(b.centroid_ll)", "ST_X(b.centroid_ll)", "b.centroid")},
                 b.geom
             FROM located b
             LEFT JOIN read_parquet('{oa_pq}') oa
@@ -132,6 +132,6 @@ DATASET = Dataset(
     name="buildings",
     table="buildings",
     extract=extract,
-    description="Verisk UKBuildings footprints with premise use, floor count, footprint/gross floor area (m²), oa21cd and a res-9 h3_9_id.",
+    description="Verisk UKBuildings footprints with premise use, floor count, footprint/gross floor area (m²), oa21cd and a res-9 h3r9_id.",
     depends_on=("output_areas_2021",),
 )

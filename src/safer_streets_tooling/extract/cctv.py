@@ -1,8 +1,8 @@
 """CCTV / surveillance cameras from OpenStreetMap (Overpass) → ``cctv.parquet``.
 
 OSM ``man_made=surveillance`` nodes pulled from the Overpass API (no API key) for the England & Wales
-bbox; mirrors the ``streetlights`` extract (``cctv_id`` / ``geom`` / ``h3_9_id``). The WGS-84
-Longitude/Latitude become a point ``geom`` (reprojected to BNG) plus a resolution-9 ``h3_9_id``
+bbox; mirrors the ``streetlights`` extract (``cctv_id`` / ``geom`` / ``h3r9_id``). The WGS-84
+Longitude/Latitude become a point ``geom`` (reprojected to BNG) plus a resolution-9 ``h3r9_id``
 (lowercase hex) for joining to the H3 grid. Like streetlights, OSM CCTV coverage is uneven, so this is
 a presence/indicative signal rather than a complete inventory.
 """
@@ -11,6 +11,7 @@ import requests
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
+from safer_streets_tooling.extract._common import cell_id_columns
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # OSM CCTV (man_made=surveillance) via the Overpass API (no API key). The bounding box (England & Wales,
@@ -41,8 +42,8 @@ def extract(ctx: ExtractContext) -> None:
     Write the ``cctv`` parquet from OSM ``man_made=surveillance`` nodes (Overpass API).
 
     Nodes are pulled from Overpass for the England & Wales bbox; their WGS-84 Longitude/Latitude become a
-    point ``geom`` (reprojected to BNG, EPSG:27700) and a resolution-9 H3 cell id (``h3_9_id``, lowercase
-    hex). Schema matches the ``streetlights`` extract: ``cctv_id`` / ``geom`` / ``h3_9_id``.
+    point ``geom`` (reprojected to BNG, EPSG:27700) and a resolution-9 H3 cell id (``h3r9_id``, lowercase
+    hex). Schema matches the ``streetlights`` extract: ``cctv_id`` / ``geom`` / ``h3r9_id``.
     """
     query = _overpass_query(CCTV_BBOX, CCTV_TAG)
     print(f"  Querying Overpass for CCTV ({CCTV_TAG})…")
@@ -59,11 +60,11 @@ def extract(ctx: ExtractContext) -> None:
         con.execute("CREATE TABLE _cctv (cctv_id VARCHAR, lon DOUBLE, lat DOUBLE)")
         con.executemany("INSERT INTO _cctv VALUES (?, ?, ?)", rows)
         con.execute(
-            """
+            f"""
             CREATE TABLE cctv AS SELECT
                 cctv_id,
                 ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom,
-                lower(hex(h3_latlng_to_cell(lat, lon, 9))) AS h3_9_id
+                {cell_id_columns(con, "lat", "lon", "geom")}
             FROM _cctv
             """
         )

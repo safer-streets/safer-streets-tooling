@@ -259,7 +259,8 @@ def test_poi_extracts_filtered_places(tmp_path, monkeypatch):
     assert cols == {
         "poi_id",
         "geom",
-        "h3_9_id",
+        "h3r9_id",
+        "beahiv202_id",
         "name",
         "postcode",
         "basic_category",
@@ -287,11 +288,11 @@ def test_streetlights_extracts_street_lamps(tmp_path, monkeypatch):
 
     con = _read_parquet(tmp_path / "streetlights.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert cols == {"streetlight_id", "geom", "h3_9_id"}
+    assert cols == {"streetlight_id", "geom", "h3r9_id", "beahiv202_id"}
     # street lamps exist in central London; geometry reprojected to BNG metres, every row has a h3 id
     assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] > 0
     assert con.execute("SELECT MIN(ST_X(geom)) FROM t").fetchone()[0] > 1000  # BNG metres, not lon/lat
-    assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM t WHERE h3r9_id IS NULL").fetchone()[0] == 0
     con.close()
 
 
@@ -333,14 +334,14 @@ def test_cctv_extracts_surveillance_nodes(tmp_path, monkeypatch):
     assert user_agent and "python-requests" not in user_agent
     con = _read_parquet(tmp_path / "cctv.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert cols == {"cctv_id", "geom", "h3_9_id"}  # schema mirrors streetlights
+    assert cols == {"cctv_id", "geom", "h3r9_id", "beahiv202_id"}  # schema mirrors streetlights
 
     # only the two nodes with coordinates survive; id carries the node/ prefix
     ids = {r[0] for r in con.execute("SELECT cctv_id FROM t").fetchall()}
     assert ids == {"node/1", "node/2"}
     # geometry reprojected to BNG metres, not left as lon/lat; every row gets a res-9 h3 id
     assert con.execute("SELECT MIN(ST_X(geom)) FROM t").fetchone()[0] > 1000
-    assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM t WHERE h3r9_id IS NULL").fetchone()[0] == 0
     con.close()
 
 
@@ -388,7 +389,7 @@ def test_naptan_extracts_active_stops_and_categorises(tmp_path, monkeypatch):
     naptan.extract(_ctx(tmp_path))  # cached CSV → no download
     con = _read_parquet(tmp_path / "naptan.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert {"atco_code", "naptan_code", "name", "stop_type", "stop_category", "geom", "h3_9_id"} <= cols
+    assert {"atco_code", "naptan_code", "name", "stop_type", "stop_category", "geom", "h3r9_id", "beahiv202_id"} <= cols
 
     # only the four active stops with valid coordinates survive (inactive + zero-coord dropped)
     assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 4
@@ -397,9 +398,9 @@ def test_naptan_extracts_active_stops_and_categorises(tmp_path, monkeypatch):
     assert cats == {"BCT": "bus", "RLY": "rail", "MET": "tram_metro", "ZZZ": "other"}
 
     # every row gets a lowercase-hex resolution-9 H3 cell id
-    h3 = con.execute("SELECT h3_9_id FROM t WHERE atco_code = '0100A'").fetchone()[0]
+    h3 = con.execute("SELECT h3r9_id FROM t WHERE atco_code = '0100A'").fetchone()[0]
     assert h3 == h3.lower() and all(c in "0123456789abcdef" for c in h3)
-    assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM t WHERE h3r9_id IS NULL").fetchone()[0] == 0
 
     # coordinates land in BNG metres (Easting/Northing passed straight through, no reprojection)
     east = con.execute("SELECT ST_X(geom) FROM t WHERE atco_code = '0100A'").fetchone()[0]
@@ -467,7 +468,16 @@ def test_food_outlets_extracts_england_and_wales_food_venues(tmp_path, monkeypat
     food_outlets.extract(_ctx(tmp_path))  # cached CSV → no download
     con = _read_parquet(tmp_path / "food_outlets.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert {"fhrsid", "business_name", "business_type", "postcode", "rating_value", "geom", "h3_9_id"} <= cols
+    assert {
+        "fhrsid",
+        "business_name",
+        "business_type",
+        "postcode",
+        "rating_value",
+        "geom",
+        "h3r9_id",
+        "beahiv202_id",
+    } <= cols
     # address + all component scores dropped; rating_value is the only hygiene field kept (plus postcode)
     assert {"address", "hygiene_score", "structural_score", "confidence_score"}.isdisjoint(cols)
 
@@ -480,9 +490,9 @@ def test_food_outlets_extracts_england_and_wales_food_venues(tmp_path, monkeypat
 
     # geometry reprojected to BNG metres; every row gets a res-9 h3 id
     assert con.execute("SELECT MIN(ST_X(geom)) FROM t").fetchone()[0] > 1000  # BNG metres, not lon/lat
-    h3 = con.execute("SELECT h3_9_id FROM t WHERE fhrsid = 1").fetchone()[0]
+    h3 = con.execute("SELECT h3r9_id FROM t WHERE fhrsid = 1").fetchone()[0]
     assert h3 == h3.lower() and all(c in "0123456789abcdef" for c in h3)
-    assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM t WHERE h3r9_id IS NULL").fetchone()[0] == 0
     con.close()
 
 
@@ -696,8 +706,8 @@ def test_schools_builds_isochrones(tmp_path, monkeypatch):
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
     assert {"urn", "geom", "isochrone", "isochrone_area_km2"} <= cols
     # H3 cell ids (resolutions 8-11) derived from the school location
-    assert {"h3_9_id"} <= cols
-    assert con.execute("SELECT COUNT(*) FROM t WHERE h3_9_id IS NULL").fetchone()[0] == 0
+    assert {"h3r9_id", "beahiv202_id"} <= cols
+    assert con.execute("SELECT COUNT(*) FROM t WHERE h3r9_id IS NULL").fetchone()[0] == 0
     # the closed school (status 4) is filtered out
     assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
     # the isochrone is a polygon with positive area (the reachable square)
@@ -885,11 +895,11 @@ def test_run_transform_caches_outputs_and_skips_unless_rebuild(tmp_path, monkeyp
         )
 
     steps = (
-        fake_step("crime_counts", "crime_counts_h3_8"),
-        fake_step("geo_lookups", *(f"h3_8_{key}_lookup" for key in GEOGRAPHY_MAPPINGS), depends_on=("crime_counts",)),
+        fake_step("crime_counts", "h3r8_crime_counts"),
+        fake_step("geo_lookups", *(f"h3r8_{key}_lookup" for key in GEOGRAPHY_MAPPINGS), depends_on=("crime_counts",)),
         fake_step("overlap_lookups", depends_on=("crime_counts",)),
         fake_step("retail_centre_lookups", depends_on=("crime_counts",)),
-        fake_step("geogs", "h3_8_geogs", depends_on=("geo_lookups", "overlap_lookups", "retail_centre_lookups")),
+        fake_step("geogs", "h3r8_geogs", depends_on=("geo_lookups", "overlap_lookups", "retail_centre_lookups")),
     )
     monkeypatch.setattr(data_pipeline, "STEPS", steps)
 
@@ -897,9 +907,9 @@ def test_run_transform_caches_outputs_and_skips_unless_rebuild(tmp_path, monkeyp
     tdir.mkdir()
 
     data_pipeline.run_transform(tmp_path, tdir, list(ALL_GRIDS))
-    assert (tdir / "crime_counts_h3_8.parquet").exists()  # crime_counts step (now in transform) wrote its output
-    assert (tdir / "h3_8_geogs.parquet").exists()  # geogs step wrote its output
-    assert (tdir / "h3_8_lad24cd_lookup.parquet").exists()  # a derived lookup is written
+    assert (tdir / "h3r8_crime_counts.parquet").exists()  # crime_counts step (now in transform) wrote its output
+    assert (tdir / "h3r8_geogs.parquet").exists()  # geogs step wrote its output
+    assert (tdir / "h3r8_lad24cd_lookup.parquet").exists()  # a derived lookup is written
     assert not (tdir / "req_geom.parquet").exists()  # imported inputs are not written by transform
     assert calls["crime_counts"] == 1 and calls["geo_lookups"] == 1 and calls["geogs"] == 1
 
@@ -1063,8 +1073,8 @@ def test_sync_includes_the_root_index_parquet(monkeypatch, tmp_path):
         "extract/hotspots.parquet",  # the hexes themselves
         "transform/hotspots_geogs.parquet",  # a relation keyed on the unit
         "transform/hotspots_lad24cd_lookup.parquet",
-        "transform/crime_counts_hotspots.parquet",  # counts aggregated onto the unit
-        "transform/streetlight_counts_hotspots.parquet",
+        "transform/hotspots_crime_counts.parquet",  # counts aggregated onto the unit
+        "transform/hotspots_streetlight_counts.parquet",
     ],
 )
 def test_local_only_names_are_recognised(name):
@@ -1073,29 +1083,46 @@ def test_local_only_names_are_recognised(name):
 
 @pytest.mark.parametrize(
     "name",
-    ["extract/crime_data.parquet", "transform/h3_9_geogs.parquet", "transform/crime_counts_h3_9.parquet"],
+    ["extract/crime_data.parquet", "transform/h3r9_geogs.parquet", "transform/h3r9_crime_counts.parquet"],
 )
 def test_shareable_names_are_not_local_only(name):
     assert not is_local_only(name)
+
+
+def test_every_relation_on_the_hotspot_unit_is_excluded():
+    """The exclusion follows from the naming convention rather than from a list of table names.
+
+    Every relation is ``{grid key}_{dataset}``, so anything minted on the hotspot unit is caught
+    whatever a future step decides to call it — which is the property that keeps confidential data out
+    of the container without this module being edited each time. The pre-convention shape (the counts
+    trailing the unit) is still in the container and on machines, so it must stay excluded too.
+    """
+    from safer_streets_tooling.transform.base import relation
+    from safer_streets_tooling.transform.hotspots import HOTSPOT_UNIT
+
+    for dataset in ("crime_counts", "geogs", "lad24cd_lookup", "a_dataset_nobody_has_written_yet"):
+        assert is_local_only(f"transform/{relation(HOTSPOT_UNIT.key, dataset)}.parquet")
+    assert is_local_only("extract/hotspots.parquet")  # the hexes themselves
+    assert is_local_only("transform/crime_counts_hotspots.parquet")  # pre-convention, still excluded
 
 
 def test_sync_never_uploads_local_only_parquet(monkeypatch, tmp_path):
     """The hotspot family stays local under every policy, alongside an ordinary table that does upload."""
     edir, tdir = _sync_dirs(monkeypatch, tmp_path)
     _write_local(edir / "hotspots.parquet", b"hexes", mtime=5000.0)
-    _write_local(tdir / "crime_counts_hotspots.parquet", b"counts", mtime=5000.0)
+    _write_local(tdir / "hotspots_crime_counts.parquet", b"counts", mtime=5000.0)
     _write_local(tdir / "hotspots_geogs.parquet", b"geogs", mtime=5000.0)
-    _write_local(tdir / "crime_counts_h3_9.parquet", b"h3", mtime=5000.0)
+    _write_local(tdir / "h3r9_crime_counts.parquet", b"h3", mtime=5000.0)
 
     storage = _FakeBlobStorage()
     up, skipped = data_pipeline._sync_upload(storage, tmp_path, UpdatePolicy.IGNORE)
     assert (up, skipped) == (1, 0)  # the hotspot three were never even considered
-    assert set(storage.blobs) == {"transform/crime_counts_h3_9.parquet"}
+    assert set(storage.blobs) == {"transform/h3r9_crime_counts.parquet"}
 
     storage = _FakeBlobStorage()
     up, down, skipped = data_pipeline._sync_newer(storage, tmp_path)
     assert (up, down, skipped) == (1, 0, 0)
-    assert set(storage.blobs) == {"transform/crime_counts_h3_9.parquet"}
+    assert set(storage.blobs) == {"transform/h3r9_crime_counts.parquet"}
 
 
 def test_sync_newer_leaves_a_pre_existing_local_only_blob_alone(monkeypatch, tmp_path):
@@ -1115,7 +1142,7 @@ def test_sync_newer_leaves_a_pre_existing_local_only_blob_alone(monkeypatch, tmp
 def test_sync_reports_what_it_held_back(monkeypatch, tmp_path):
     edir, tdir = _sync_dirs(monkeypatch, tmp_path)
     _write_local(edir / "hotspots.parquet", b"hexes", mtime=5000.0)
-    _write_local(tdir / "crime_counts_h3_9.parquet", b"h3", mtime=5000.0)
+    _write_local(tdir / "h3r9_crime_counts.parquet", b"h3", mtime=5000.0)
 
     assert data_pipeline._local_only_files(tmp_path) == ["extract/hotspots.parquet"]
 

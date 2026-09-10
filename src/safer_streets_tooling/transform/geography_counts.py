@@ -1,4 +1,4 @@
-"""``crime_counts_{key}`` — crimes counted per ONS geography code / crime type / month.
+"""``{key}_crime_counts`` — crimes counted per ONS geography code / crime type / month.
 
 The same schema as the per-cell counts (``spatial_id`` / ``crime_type`` / ``month`` / ``count``) and the
 same exclusions, on the ONS geographies rather than a grid. Split out of :mod:`.crime_counts` because it
@@ -95,31 +95,31 @@ def _place_locations(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def _count_per(con: duckdb.DuckDBPyConnection, code: str, expected: int, replace: bool) -> None:
-    """Build ``crime_counts_{code}`` by grouping the crime rows on their location's ``code``.
+    """Build ``{code}_crime_counts`` by grouping the crime rows on their location's ``code``.
 
     ``CRIME_FILTER`` is applied here as well as when the locations were built: BTP crimes sit on the same
     snapped points as everything else, so the join alone would let them back in. Only an upper bound can
     be asserted — a crime whose location no polygon covers has no code and simply does not appear.
     """
     con.execute(f"""
-        {create_clause("TABLE", f"crime_counts_{code}", replace=replace)} AS
+        {create_clause("TABLE", f"{code}_crime_counts", replace=replace)} AS
         SELECT g.{code} AS spatial_id, c.crime_type, c._month AS month, COUNT(*) AS count
         FROM crime_data c
         JOIN {LOCATION_GEOGRAPHIES} g USING ({", ".join(crime_locations.JOIN_KEYS)})
         WHERE {CRIME_FILTER} AND g.{code} IS NOT NULL
         GROUP BY g.{code}, c.crime_type, c._month;
     """)
-    actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM crime_counts_{code}").fetchone()[0]  # ty:ignore[not-subscriptable]
+    actual = con.execute(f"SELECT COALESCE(SUM(count), 0) FROM {code}_crime_counts").fetchone()[0]  # ty:ignore[not-subscriptable]
     if actual > expected:
         raise ValueError(
-            f"crime_counts_{code}: counted {actual:,} crimes but only {expected:,} input rows passed the "
+            f"{code}_crime_counts: counted {actual:,} crimes but only {expected:,} input rows passed the "
             f"filter — some crimes were counted in more than one area"
         )
-    print(f"  crime_counts_{code}: {actual:,}/{expected:,} crimes fall within a boundary")
+    print(f"  {code}_crime_counts: {actual:,}/{expected:,} crimes fall within a boundary")
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``crime_counts_{key}`` for every ONS geography."""
+    """Create ``{key}_crime_counts`` for every ONS geography."""
     _place_locations(con)
     expected = expected_crimes(con)
     for code in ons_hierarchy.GEOGRAPHY_MAPPINGS:
@@ -127,7 +127,7 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
-    return [f"crime_counts_{code}" for code in ons_hierarchy.GEOGRAPHY_MAPPINGS]
+    return [f"{code}_crime_counts" for code in ons_hierarchy.GEOGRAPHY_MAPPINGS]
 
 
 STEP = TransformStep(

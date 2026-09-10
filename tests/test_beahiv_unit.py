@@ -122,9 +122,9 @@ def test_cell_area_is_the_exact_hexagon_area():
 def test_relation_names_follow_the_unit_key():
     """Every relation on this grid carries one key, so it needs no naming special case."""
     key, counts_table = KEY, beahiv.COUNTS_TABLE
-    assert key == f"beahiv_{SIDE_LENGTH}"
+    assert key == f"beahiv{SIDE_LENGTH}"
     assert beahiv.BEAHIV_UNIT.key == key
-    assert counts_table == f"crime_counts_{key}"
+    assert counts_table == f"{key}_crime_counts"
 
 
 def test_steps_are_a_noop_without_the_counts():
@@ -153,7 +153,7 @@ def test_lookup_and_geogs_steps_build_the_beahiv_relations():
     beahiv_geogs.build(con, True)
 
     # the geography lookups are built (geogs reads them) but not published: their codes are columns of
-    # beahiv_202_geogs over the same cells, so a parquet each would be the same data twice
+    # beahiv202_geogs over the same cells, so a parquet each would be the same data twice
     assert beahiv_lookups.outputs(con) == [f"{KEY}_retail_centre_lookup"]
     for key in GEOGRAPHY_MAPPINGS:
         assert con.execute(f"SELECT COUNT(*) FROM {KEY}_{key}_lookup").fetchone()[0] > 0
@@ -162,7 +162,7 @@ def test_lookup_and_geogs_steps_build_the_beahiv_relations():
 
 
 def test_geogs_schema_matches_h3_apart_from_the_id_type():
-    """h3_9_geogs and beahiv_202_geogs carry the same columns in the same order, so the two griddings
+    """h3r9_geogs and beahiv202_geogs carry the same columns in the same order, so the two griddings
     are directly comparable and a consumer can swap one for the other.
 
     Only ``spatial_id`` differs, and only in type: an H3 cell is identified by its canonical hex
@@ -186,7 +186,7 @@ def test_geogs_schema_matches_h3_apart_from_the_id_type():
             [table],
         ).fetchall()
 
-    beahiv_schema, h3_schema = schema(f"{KEY}_geogs"), schema("h3_9_geogs")
+    beahiv_schema, h3_schema = schema(f"{KEY}_geogs"), schema("h3r9_geogs")
     assert [name for name, _ in beahiv_schema] == [name for name, _ in h3_schema]
     assert beahiv_schema[0] == ("spatial_id", "BIGINT")
     assert h3_schema[0] == ("spatial_id", "VARCHAR")
@@ -221,3 +221,38 @@ def test_steps_registered_in_dependency_order():
     # geogs also lists beahiv_counts directly: the geography lookups between them publish no parquet,
     # so they carry no mtime for the staleness check
     assert beahiv_geogs.STEP.depends_on == ("beahiv_counts", "beahiv_lookups")
+
+
+def test_extract_cell_id_columns_tag_the_cell_containing_the_feature():
+    """The ids the extracts tag onto each feature are the cells that actually contain it.
+
+    This is what makes the two phases joinable: the extract writes ``beahiv202_id`` / ``h3r9_id``
+    columns, the transform aggregates crimes onto grids of the same name, and a consumer joins one to
+    the other. Two encodings of "the same" grid that disagreed would join to nothing without ever
+    raising, so the tagged cell is checked against beahiv's own polygon rather than against the encoder
+    that produced it.
+    """
+    from shapely import Point
+
+    from safer_streets_tooling.extract._common import cell_id_columns
+    from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
+
+    con = _connect()
+    con.execute(f"""
+        CREATE TABLE features AS
+        SELECT city, lat, lon,
+               ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
+        FROM (VALUES {", ".join(f"('{c}', {lat}, {lon})" for c, (lat, lon) in _CITIES.items())}) t(city, lat, lon)
+    """)
+    rows = con.execute(f"""
+        SELECT city, ST_X(geom), ST_Y(geom), {cell_id_columns(con, "lat", "lon", "geom")}
+        FROM features ORDER BY city
+    """).fetchall()
+    assert [r[0] for r in rows] == sorted(_CITIES)
+
+    columns = [d[0] for d in con.description]
+    assert columns[-2:] == [H3_ID, BEAHIV_ID]  # named off the grid keys, not spelled out here
+
+    for _city, x, y, h3_id, beahiv_id in rows:
+        assert isinstance(h3_id, str) and len(h3_id) == 15  # a res-9 cell's canonical hex
+        assert cell_polygon(beahiv_id).contains(Point(x, y))  # beahiv's own geometry, not the encoder's
