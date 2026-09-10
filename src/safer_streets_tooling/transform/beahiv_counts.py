@@ -1,19 +1,35 @@
-"""``beahiv202_crime_counts`` — crimes counted per BEAHIV hexagonal cell / crime type / month.
+"""``beahiv202_*_counts`` — the per-cell counts, aggregated onto the BEAHIV hexagonal grid.
 
 The same schema and exclusions as ``h3r{res}_crime_counts`` (see :mod:`.crime_counts`), on the
 equal-area hexagonal grid described in :mod:`.beahiv` instead of H3. The BEAHIV counterpart of
 ``hotspot_counts`` — except that placing a crime needs no spatial join: a cell id is arithmetic on the
 crime's BNG coordinates, so this is the H3 mechanism with beahiv's encoder in place of
 ``h3_latlng_to_cell``, and the same exact-conservation guarantee follows.
+
+The crime counts are built here because the encoder and their conservation checks are specific to this
+grid; the other four (street lights, buildings, population, road intersections) are the same measures
+the H3 grid carries, so each lives with its H3 counterpart (``building_counts.build_beahiv`` and
+friends) and this module only wires them in — as ``hotspot_counts`` does for the hexes. Those four are
+restricted to cells carrying crimes, which *are* this grid's cells: ``beahiv202_geogs`` covers no
+others, so a count outside them would join to nothing.
 """
 
 import duckdb
 from beahiv import INVALID_CELL_ID
 
 from safer_streets_tooling.beahiv_grid import SIDE_LENGTH
-from safer_streets_tooling.transform import beahiv
+from safer_streets_tooling.transform import (
+    beahiv,
+    building_counts,
+    population_counts,
+    road_intersection_counts,
+    streetlight_counts,
+)
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause
 from safer_streets_tooling.transform.crime_counts import CRIME_FILTER, expected_crimes
+
+# the modules whose counts have a BEAHIV equivalent; each exposes build_beahiv / beahiv_outputs
+_MODULES = (streetlight_counts, building_counts, population_counts, road_intersection_counts)
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
@@ -66,9 +82,13 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     cells = con.execute(f"SELECT COUNT(DISTINCT spatial_id) FROM {name}").fetchone()[0]  # ty:ignore[not-subscriptable]
     print(f"  {name}: {actual:,} crimes in {cells:,} cells")
 
+    # the crime counts are this grid's cells, so they must exist before the others restrict to them
+    for module in _MODULES:
+        module.build_beahiv(con, replace)
+
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
-    return [beahiv.COUNTS_TABLE]
+    return [beahiv.COUNTS_TABLE] + [name for module in _MODULES for name in module.beahiv_outputs(con)]
 
 
 STEP = TransformStep(
@@ -76,6 +96,13 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.BEAHIV,
-    description=f"Crimes counted per BEAHIV {SIDE_LENGTH}m-side flat hexagonal cell / crime_type / month (BTP excluded).",
-    extract_inputs=("crime_data",),
+    description=f"Crime / street light / building / population / road-intersection counts per BEAHIV {SIDE_LENGTH}m-side hexagonal cell, keyed by spatial_id.",
+    extract_inputs=(
+        "crime_data",
+        "streetlights",
+        "buildings",
+        "workplace_population",
+        "residential_population",
+        "road_intersections",
+    ),
 )

@@ -33,6 +33,7 @@ __all__ = [
     "Grid",
     "SpatialUnit",
     "TransformStep",
+    "column_exists",
     "create_clause",
     "h3_key",
     "h3_unit",
@@ -133,6 +134,22 @@ def create_clause(kind: str, name: str, *, replace: bool) -> str:
     replace=False -> ``CREATE {kind} IF NOT EXISTS {name}`` (kept if it already exists)
     """
     return f"CREATE OR REPLACE {kind} {name}" if replace else f"CREATE {kind} IF NOT EXISTS {name}"
+
+
+def column_exists(con: duckdb.DuckDBPyConnection, table: str, column: str) -> bool:
+    """True when ``table`` carries ``column``.
+
+    Gates a step on an extract that predates a column: a cached parquet built before the column existed
+    is skipped with a warning rather than failing the build, until it is re-extracted.
+    """
+    return (
+        con.execute(
+            "SELECT COUNT(*) FROM information_schema.columns "
+            "WHERE table_name = ? AND column_name = ? AND table_schema = 'main'",
+            [table, column],
+        ).fetchone()[0]  # ty:ignore[not-subscriptable]
+        > 0
+    )
 
 
 def table_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:

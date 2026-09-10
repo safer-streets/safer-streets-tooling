@@ -2,34 +2,61 @@
 
 import duckdb
 
-from safer_streets_tooling.transform import hotspots
+from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
+from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
+from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
 BUILDINGS_TABLE = "buildings"
 DATASET = "building_counts"
 RESOLUTION = 9
 
 
-def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``h3r9_building_counts`` counting buildings per resolution-9 H3 cell / ``map_simple_use``.
+def _build_on(con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace: bool) -> None:
+    """Create ``{unit_key}_building_counts`` from the cell id the extract already tags on each footprint.
 
-    Keyed by ``spatial_id`` (the lowercase-hex res-9 cell, matching ``h3r9_crime_counts`` /
-    ``h3r9_geogs``) plus the ``map_simple_use`` class (Residential / Non Residential / Mixed Use), so a
-    consumer joins the per-class counts straight onto those by ``spatial_id``. Each building is placed by
-    its footprint *centroid*: the ``buildings`` extract already tags every footprint with its res-9 cell
-    (``h3r9_id``), so this just reads that column. Output is restricted to cells that appear in
-    ``h3r9_crime_counts`` so the count grid lines up with the crime grid. No-op if the buildings table is
-    absent. Only resolution 9 is ever produced — the extract carries a single ``h3r9_id``.
+    Both the H3 and BEAHIV grids tag their cell onto the building (``h3r9_id`` / ``beahiv202_id``), so
+    counting is a group-and-count on that column whichever of them is asked for; only the hotspot hexes,
+    which carry no id, need a spatial join (see :func:`build_hotspots`). Each building is placed by its
+    footprint *centroid* — the point both id columns are derived from.
+
+    Keyed by ``spatial_id`` plus the ``map_simple_use`` class (Residential / Non Residential / Mixed
+    Use), so a consumer joins the per-class counts straight onto the unit's counts / geogs. Output is
+    restricted to cells that appear in the unit's crime counts, so the count grid lines up with the
+    crime grid — which is also what makes the two grids comparable cell for cell.
     """
+    con.execute(f"""
+        {create_clause("TABLE", relation(unit_key, DATASET), replace=replace)} AS
+        SELECT {cell} AS spatial_id, map_simple_use, COUNT(*) AS building_count
+        FROM {BUILDINGS_TABLE}
+        WHERE {cell} IN (SELECT spatial_id FROM {relation(unit_key, CRIME_COUNTS)})
+        GROUP BY {cell}, map_simple_use;
+    """)
+
+
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``h3r9_building_counts``. No-op if the buildings table is absent. Only resolution 9 is
+    ever produced — the extract carries a single ``h3r9_id``."""
     if not table_exists(con, BUILDINGS_TABLE):
         return
-    con.execute(f"""
-        {create_clause("TABLE", relation(h3_key(RESOLUTION), DATASET), replace=replace)} AS
-        SELECT h3r9_id AS spatial_id, map_simple_use, COUNT(*) AS building_count
-        FROM {BUILDINGS_TABLE}
-        WHERE h3r9_id IN (SELECT spatial_id FROM h3r{RESOLUTION}_crime_counts)
-        GROUP BY h3r9_id, map_simple_use;
-    """)
+    _build_on(con, h3_key(RESOLUTION), H3_ID, replace)
+
+
+def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``beahiv202_building_counts`` — the same counts on the BEAHIV grid, off its own id column.
+
+    No-op until the buildings extract has been re-run to carry ``beahiv202_id`` (see
+    :func:`.beahiv.tagged`).
+    """
+    if not beahiv.tagged(con, BUILDINGS_TABLE):
+        return
+    _build_on(con, beahiv.BEAHIV_UNIT.key, BEAHIV_ID, replace)
+
+
+def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    if not beahiv.tagged(con, BUILDINGS_TABLE):
+        return []
+    return [relation(beahiv.BEAHIV_UNIT.key, DATASET)]
 
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:

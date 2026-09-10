@@ -2,32 +2,60 @@
 
 import duckdb
 
-from safer_streets_tooling.transform import hotspots
+from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
+from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
+from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
 STREETLIGHTS_TABLE = "streetlights"
 DATASET = "streetlight_counts"
 RESOLUTION = 9
 
 
-def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``h3r9_streetlight_counts`` counting street lights per resolution-9 H3 cell.
+def _build_on(
+    con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace: bool, *, crime_cells_only: bool
+) -> None:
+    """Create ``{unit_key}_streetlight_counts`` from the cell id the extract tags on each light.
 
-    Keyed by ``spatial_id`` (the lowercase-hex res-9 cell, matching ``h3r9_crime_counts`` /
-    ``h3r9_geogs``), so a consumer joins the count straight onto those by ``spatial_id``. The street
-    lights extract already carries an ``h3r9_id``, so this is a plain group-and-count. No-op if the
-    streetlights table is absent. Only resolution 9 is ever produced — the extract carries a single
-    ``h3r9_id``.
+    Both the H3 and BEAHIV grids tag their cell onto the light, so this is a group-and-count on that
+    column for either; only the hotspot hexes need a spatial join (see :func:`build_hotspots`).
+
+    ``crime_cells_only`` restricts the output to cells carrying crimes. The BEAHIV grid *is* its crime
+    cells — its geogs cover no others — so a count outside them would join to nothing; the H3 table
+    predates that reasoning and still covers every cell with a light.
     """
+    restrict = (
+        f"{cell} IN (SELECT spatial_id FROM {relation(unit_key, CRIME_COUNTS)})"
+        if crime_cells_only
+        else f"{cell} IS NOT NULL"
+    )
+    con.execute(f"""
+        {create_clause("TABLE", relation(unit_key, DATASET), replace=replace)} AS
+        SELECT {cell} AS spatial_id, COUNT(*) AS streetlight_count
+        FROM {STREETLIGHTS_TABLE}
+        WHERE {restrict}
+        GROUP BY {cell};
+    """)
+
+
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``h3r9_streetlight_counts``. No-op if the streetlights table is absent."""
     if not table_exists(con, STREETLIGHTS_TABLE):
         return
-    con.execute(f"""
-        {create_clause("TABLE", relation(h3_key(RESOLUTION), DATASET), replace=replace)} AS
-        SELECT h3r9_id AS spatial_id, COUNT(*) AS streetlight_count
-        FROM {STREETLIGHTS_TABLE}
-        WHERE h3r9_id IS NOT NULL
-        GROUP BY h3r9_id;
-    """)
+    _build_on(con, h3_key(RESOLUTION), H3_ID, replace, crime_cells_only=False)
+
+
+def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``beahiv202_streetlight_counts``. No-op until the extract carries ``beahiv202_id``."""
+    if not beahiv.tagged(con, STREETLIGHTS_TABLE):
+        return
+    _build_on(con, beahiv.BEAHIV_UNIT.key, BEAHIV_ID, replace, crime_cells_only=True)
+
+
+def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    if not beahiv.tagged(con, STREETLIGHTS_TABLE):
+        return []
+    return [relation(beahiv.BEAHIV_UNIT.key, DATASET)]
 
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:

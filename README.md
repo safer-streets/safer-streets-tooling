@@ -65,7 +65,11 @@ cells come from the polygons rather than from the crime counts, so those steps d
 (and are a clean no-op when the optional `hotspots` extract is absent).
 
 A third family is built on the **BEAHIV 202m hex grid** by the `beahiv_counts` / `beahiv_lookups` /
-`beahiv_geogs` steps, giving `beahiv202_crime_counts`, `beahiv202_*_lookup` and `beahiv202_geogs`.
+`beahiv_geogs` steps, giving `beahiv202_*_counts`, `beahiv202_*_lookup` and `beahiv202_geogs`. Like the
+hotspot family it carries the full set of counts — crime, street light, building, population, road
+intersection — but off the `beahiv202_id` the extracts tag on each feature rather than a spatial join;
+only the crime counts need the encoder. All but the crime counts are restricted to cells carrying
+crimes, which are the only cells this grid *has*: its `geogs` describes no others.
 Like the H3 family its cells come from its own crime counts, so the chain has the H3 one's shape on the
 other grid; see [Spatial units](#spatial-units) for why the grid is there at all.
 
@@ -112,6 +116,7 @@ flowchart LR
    hotspot_lookups["hotspots_*_lookup"]
    hotspots_geogs
    beahiv202_crime_counts
+   beahiv_counts_other["beahiv202_*_counts"]
    beahiv_lookups["beahiv202_*_lookup"]
    beahiv202_geogs
 
@@ -176,6 +181,12 @@ flowchart LR
 
     %% transform edges: the same relations on the BEAHIV grid (its cells come from its own counts)
     crime_data --> beahiv202_crime_counts
+    beahiv202_crime_counts --> beahiv_counts_other
+    streetlights --> beahiv_counts_other
+    buildings --> beahiv_counts_other
+    workplace_population --> beahiv_counts_other
+    residential_population --> beahiv_counts_other
+    road_intersections --> beahiv_counts_other
     beahiv202_crime_counts --> beahiv_lookups
     police_force_areas --> beahiv_lookups
     local_authority_districts --> beahiv_lookups
@@ -192,7 +203,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv202,hotspots extract;
-    class h3r9_crime_counts,geog_crime_counts,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,beahiv202_crime_counts,beahiv_lookups,beahiv202_geogs transform;
+    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,beahiv202_crime_counts,beahiv_lookups,beahiv202_geogs transform;
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the per-cell
@@ -337,7 +348,7 @@ respects `depends_on`:
 | `hotspot_counts` | [hotspot_counts.py](src/safer_streets_tooling/transform/hotspot_counts.py) | `ho` | `hotspots_crime_counts`, `hotspots_{streetlight,building,population,road_intersection}_counts` | — |
 | `hotspot_lookups` | [hotspot_lookups.py](src/safer_streets_tooling/transform/hotspot_lookups.py) | `ho` | `hotspots_{name}_lookup`, `hotspots_retail_centre_lookup` (the `hotspots_{key}_lookup` stay in memory) | — |
 | `hotspot_geogs` | [hotspot_geogs.py](src/safer_streets_tooling/transform/hotspot_geogs.py) | `ho` | `hotspots_geogs` | `hotspot_lookups` |
-| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `beahiv` | `beahiv202_crime_counts` | — |
+| `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `beahiv` | `beahiv202_crime_counts`, `beahiv202_{streetlight,building,population,road_intersection}_counts` | — |
 | `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv` | `beahiv202_{name}_lookup`, `beahiv202_retail_centre_lookup` (the `beahiv202_{key}_lookup` stay in memory) | `beahiv_counts` |
 | `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `beahiv202_geogs` | `beahiv_counts`, `beahiv_lookups` |
 

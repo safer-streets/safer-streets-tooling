@@ -256,3 +256,53 @@ def test_extract_cell_id_columns_tag_the_cell_containing_the_feature():
     for _city, x, y, h3_id, beahiv_id in rows:
         assert isinstance(h3_id, str) and len(h3_id) == 15  # a res-9 cell's canonical hex
         assert cell_polygon(beahiv_id).contains(Point(x, y))  # beahiv's own geometry, not the encoder's
+
+
+def _buildings_on_cells(con, crime_cell, empty_cell):
+    """A buildings layer tagged with beahiv cells: two in a cell carrying crimes, one in a cell without."""
+    con.execute(f"""
+        CREATE OR REPLACE TABLE buildings AS
+        SELECT * FROM (VALUES
+            ({crime_cell}, 'Residential'),
+            ({crime_cell}, 'Residential'),
+            ({empty_cell}, 'Residential')
+        ) t(beahiv202_id, map_simple_use)
+    """)
+
+
+def test_beahiv_counts_cover_the_other_layers_restricted_to_crime_cells():
+    """The grid carries the same per-cell counts H3 does, off the id the extract tags on each feature —
+    and only for cells carrying crimes, which are the only cells beahiv202_geogs describes."""
+    from safer_streets_tooling.transform import building_counts
+
+    con = _connect()
+    _crime_counts(con, beahiv_too=False)
+    beahiv.register_udfs(con)
+    crime_cell = con.execute(f"SELECT {beahiv.ENCODE_UDF}(ST_X(geom), ST_Y(geom)) FROM crime_data LIMIT 1").fetchone()[
+        0
+    ]
+    _buildings_on_cells(con, crime_cell, crime_cell + 1)
+
+    beahiv_counts.build(con, True)
+
+    counts = dict(
+        con.execute(f"SELECT spatial_id, SUM(building_count) FROM {KEY}_building_counts GROUP BY 1").fetchall()
+    )
+    assert counts == {crime_cell: 2}  # the building in the crime-free cell is left out
+    assert f"{KEY}_building_counts" in beahiv_counts.outputs(con)
+    assert building_counts.beahiv_outputs(con) == [f"{KEY}_building_counts"]
+
+
+def test_beahiv_counts_skip_a_layer_extracted_before_the_cell_id_existed():
+    """A parquet predating the beahiv202_id column is skipped with no output, not a failed build — the
+    extracts are re-run on their own schedule."""
+    from safer_streets_tooling.transform import building_counts
+
+    con = _connect()
+    _crime_counts(con, beahiv_too=False)
+    con.execute("CREATE OR REPLACE TABLE buildings AS SELECT 'abc' AS h3r9_id, 'Residential' AS map_simple_use")
+
+    beahiv_counts.build(con, True)  # must not raise
+
+    assert building_counts.beahiv_outputs(con) == []
+    assert not beahiv.tagged(con, "buildings")

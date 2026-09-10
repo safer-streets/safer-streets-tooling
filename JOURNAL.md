@@ -7,6 +7,50 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## The BEAHIV grid gets the other four counts
+
+**Why** — the grid had crime counts, lookups and geogs, but none of the building / population /
+street-light / road-intersection counts the H3 and hotspot grids carry, so `beahiv202_building_counts`
+was simply never produced. That was the original scope ("crime counts + geogs") and nothing had
+extended it. Now that every point layer is tagged with `beahiv202_id`, the missing counts are the H3
+query with one column swapped.
+
+**What** — each counts module gained a `build_beahiv` / `beahiv_outputs` beside its existing
+`build_hotspots`, and `beahiv_counts` wires the four in after building the crime counts, exactly as
+`hotspot_counts` does for the hexes. The step now emits `beahiv202_{crime,streetlight,building,
+population,road_intersection}_counts`.
+
+The H3 and BEAHIV paths collapsed into **one** builder per module rather than two: both grids tag their
+cell onto the feature, so counting is a group-and-count on `{grid}_id` either way, and the modules now
+carry one id-column builder used twice plus the point-in-polygon one the hotspot hexes need because
+they have no id column. Fewer code paths than before, not more.
+
+**Design decisions**
+
+- **Restricted to cells carrying crimes.** The BEAHIV grid *is* its crime cells — `beahiv202_geogs`
+  covers no others, since the unit's cells come from `beahiv202_crime_counts` — so a count outside them
+  would join to nothing. It also keeps the two grids comparable cell for cell, which is why the grid
+  exists.
+- **Population is filtered *after* allocation, not before.** Each building's share is normalised within
+  its OA, so filtering the buildings going in would redistribute an OA's whole population across only
+  those in crime cells and inflate them. Allocating over every building and then keeping the crime
+  cells leaves each cell's figure untouched.
+- **Road intersections stay an expression, not a column.** That layer is derived from the road network
+  rather than extracted as a point layer, so it carries no cell id; the H3 path computes one via the h3
+  extension (needing WGS-84) and BEAHIV by arithmetic on the BNG point. The shared builder therefore
+  takes a cell *expression*, which the three tagged layers satisfy with a bare column name.
+- **A layer without the column is skipped, not fatal.** `beahiv.tagged()` gates on the column existing,
+  so parquet extracted before it was added are passed over with no output until they are re-run —
+  matching how `population_counts` already handles the buildings size columns.
+
+**Follow-ups**
+
+- `h3r9_streetlight_counts` is *not* restricted to crime cells (it predates this reasoning) while its
+  BEAHIV twin is, so the two are not directly comparable for that one layer. Aligning them changes an
+  existing published table, so it is left as a decision rather than folded in here.
+- The counts only appear once the extracts are re-run: `buildings` and `streetlights` need
+  `beahiv202_id` before their BEAHIV counts build at all.
+
 ## A cell id per grid on every point layer, and one place that names grids
 
 **Why** — the extracts tagged each feature with `h3_9_id` and nothing else, so anything wanting the

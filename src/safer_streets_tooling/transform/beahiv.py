@@ -33,12 +33,13 @@ from beahiv import cell_polygons
 from duckdb.sqltypes import BIGINT, BLOB
 
 from safer_streets_tooling.beahiv_grid import CELL_AREA, ENCODE_UDF, KEY, register_encoder
-from safer_streets_tooling.transform.base import SpatialUnit, register_udf, relation, table_exists
+from safer_streets_tooling.grids import BEAHIV_ID
+from safer_streets_tooling.transform.base import SpatialUnit, column_exists, register_udf, relation, table_exists
 from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
 # re-exported: the encoder moved to `beahiv_grid` (the extract phase tags features with a cell too),
 # but the counts step reaches for it here, alongside this grid's other UDF
-__all__ = ["BEAHIV_UNIT", "COUNTS_TABLE", "ENCODE_UDF", "available", "register_udfs"]
+__all__ = ["BEAHIV_UNIT", "COUNTS_TABLE", "ENCODE_UDF", "available", "register_udfs", "tagged"]
 
 COUNTS_TABLE = relation(KEY, CRIME_COUNTS)
 
@@ -91,3 +92,14 @@ def available(con: duckdb.DuckDBPyConnection) -> bool:
     no-op rather than a failure (mirroring how a hotspot step behaves without its extract).
     """
     return table_exists(con, COUNTS_TABLE)
+
+
+def tagged(con: duckdb.DuckDBPyConnection, table: str) -> bool:
+    """True when ``table`` can be counted onto this grid: the grid exists and the layer carries its id.
+
+    The extract tags every point layer with its cell (:data:`~safer_streets_tooling.grids.BEAHIV_ID`),
+    so counting onto this grid is a group-and-count rather than a spatial join — but a parquet extracted
+    before that column existed has to be skipped until it is re-extracted, which is what the column
+    check is for. The counts themselves are this grid's cells, hence :func:`available` as well.
+    """
+    return available(con) and table_exists(con, table) and column_exists(con, table, BEAHIV_ID)

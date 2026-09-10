@@ -10,8 +10,10 @@ plausibly live and work.
 
 import duckdb
 
-from safer_streets_tooling.transform import hotspots
+from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
+from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
+from safer_streets_tooling.transform.crime_counts import DATASET as CRIME_COUNTS
 
 BUILDINGS_TABLE = "buildings"
 DATASET = "population_counts"
@@ -137,12 +139,43 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """
     if not _ready(con):
         return
-    buildings = f"SELECT h3r9_id AS spatial_id, oa21cd, map_simple_use, gross_area, premise_area FROM {BUILDINGS_TABLE}"
+    buildings = f"SELECT {H3_ID} AS spatial_id, oa21cd, map_simple_use, gross_area, premise_area FROM {BUILDINGS_TABLE}"
     con.execute(f"""
         {create_clause("TABLE", relation(h3_key(RESOLUTION), DATASET), replace=replace)} AS
         {_allocation_sql(buildings)};
     """)
     _report_allocated(con, relation(h3_key(RESOLUTION), DATASET))
+
+
+def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``beahiv202_population_counts``: the same allocation, summed onto the BEAHIV cells.
+
+    Identical weighting (:func:`_allocation_sql`); only the cell a building belongs to differs — read
+    from the extract's ``beahiv202_id`` instead of its ``h3r9_id``.
+
+    The restriction to crime-carrying cells is applied to the *result*, not to the buildings going in:
+    each building's share is normalised within its OA, so filtering the input first would redistribute
+    an OA's whole population across only the buildings in crime cells and inflate them. Allocating over
+    every building and then keeping the crime cells leaves each cell's figure untouched.
+    """
+    if not (_ready(con) and beahiv.tagged(con, BUILDINGS_TABLE)):
+        return
+    unit = beahiv.BEAHIV_UNIT.key
+    buildings = (
+        f"SELECT {BEAHIV_ID} AS spatial_id, oa21cd, map_simple_use, gross_area, premise_area FROM {BUILDINGS_TABLE}"
+    )
+    con.execute(f"""
+        {create_clause("TABLE", relation(unit, DATASET), replace=replace)} AS
+        SELECT * FROM ({_allocation_sql(buildings)})
+        WHERE spatial_id IN (SELECT spatial_id FROM {relation(unit, CRIME_COUNTS)});
+    """)
+    _report_allocated(con, relation(unit, DATASET))
+
+
+def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    if not (_ready(con) and beahiv.tagged(con, BUILDINGS_TABLE)):
+        return []
+    return [relation(beahiv.BEAHIV_UNIT.key, DATASET)]
 
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
