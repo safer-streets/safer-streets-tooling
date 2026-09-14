@@ -8,7 +8,7 @@ import requests
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.extract._common import download, raw_dir
+from safer_streets_tooling.extract._common import cell_id_columns, download, raw_dir
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # Isochrones are 10-minute walk catchments over the open_roads network.
@@ -123,7 +123,7 @@ def extract(ctx: ExtractContext) -> None:
             )
             SELECT
                 * EXCLUDE pt,
-                lower(hex(h3_latlng_to_cell(ST_Y(pt), ST_X(pt), 9)))  AS h3_9_id,
+                {cell_id_columns(con, "ST_Y(pt)", "ST_X(pt)", "geom")},
             FROM pts;
         """)
 

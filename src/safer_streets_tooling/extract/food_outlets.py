@@ -6,7 +6,7 @@ pubs/bars/nightclubs, other catering premises, mobile caterers and hotels/B&Bs (
 ``business_type_ids`` in the catalogue) — in England & Wales: ``SchemeType = 'FHRS'`` drops Scotland
 (which runs the separate FHIS scheme) and ``BT`` postcodes drop Northern Ireland, keeping only records
 with a valid Geocode. The supplied WGS-84 Longitude/Latitude become a point ``geom`` (reprojected to
-BNG) plus a resolution-9 ``h3_9_id`` (lowercase hex) for joining to the H3 grid.
+BNG) plus a resolution-9 ``h3r9_id`` (lowercase hex) for joining to the H3 grid.
 """
 
 from pathlib import Path
@@ -14,7 +14,7 @@ from pathlib import Path
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.extract._common import download, raw_dir
+from safer_streets_tooling.extract._common import cell_id_columns, download, raw_dir
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 
@@ -41,7 +41,7 @@ def extract(ctx: ExtractContext) -> None:
     Only the catalogue's ``business_type_ids`` (food & drink venues) in England & Wales with a valid
     Geocode are kept; the raw ``BusinessType`` is carried as ``business_type``, the WGS-84
     Longitude/Latitude become a point ``geom`` (reprojected to BNG, EPSG:27700) and a resolution-9 H3
-    cell id (``h3_9_id``, lowercase hex). The CSV is downloaded automatically (cached unless
+    cell id (``h3r9_id``, lowercase hex). The CSV is downloaded automatically (cached unless
     force_download).
     """
     src = data_source("food_outlets")
@@ -64,7 +64,7 @@ def extract(ctx: ExtractContext) -> None:
                     ST_Point(CAST(Longitude AS DOUBLE), CAST(Latitude AS DOUBLE)),
                     'EPSG:4326', 'EPSG:27700', always_xy := true
                 ) AS geom,
-                lower(hex(h3_latlng_to_cell(CAST(Latitude AS DOUBLE), CAST(Longitude AS DOUBLE), 9))) AS h3_9_id
+                {cell_id_columns(con, "CAST(Latitude AS DOUBLE)", "CAST(Longitude AS DOUBLE)", "geom")}
             FROM read_csv_auto('{csv_path}', all_varchar=true)
             WHERE BusinessTypeID IN ({business_type_ids})
               AND SchemeType = 'FHRS'                                   -- England, Wales, NI (not Scotland's FHIS)

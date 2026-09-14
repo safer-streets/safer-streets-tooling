@@ -2,7 +2,15 @@
 
 import duckdb
 
-from safer_streets_tooling.transform.base import SpatialUnit, TransformStep, create_clause, h3_unit, table_exists
+from safer_streets_tooling.transform.base import (
+    H3_RESOLUTIONS,
+    Grid,
+    SpatialUnit,
+    TransformStep,
+    create_clause,
+    h3_unit,
+    table_exists,
+)
 
 # retail centres (CDRC Retail Centre Boundaries): unlike the overlap layers, each cell is matched
 # to its *nearest* centre within RETAIL_RADIUS metres, folded into the unit's geogs as scalar
@@ -39,19 +47,20 @@ def unit_outputs(con: duckdb.DuckDBPyConnection, unit: SpatialUnit) -> list[str]
     return [f"{unit.key}_retail_centre_lookup"]
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    for res in resolutions:
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    for res in H3_RESOLUTIONS:
         build_unit(con, h3_unit(res), replace)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
-    return [name for res in resolutions for name in unit_outputs(con, h3_unit(res))]
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    return [name for res in H3_RESOLUTIONS for name in unit_outputs(con, h3_unit(res))]
 
 
 STEP = TransformStep(
     name="retail_centre_lookups",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="Per-cell lookup of each H3 cell's nearest retail centre (within 2km) + distance.",
     depends_on=("crime_counts",),
     extract_inputs=(RETAIL_CENTRES_TABLE,),

@@ -1,4 +1,4 @@
-"""``population_counts_h3_9`` / ``population_counts_hotspots`` — residential + workplace population per cell.
+"""``h3r9_population_counts`` / ``hotspots_population_counts`` — residential + workplace population per cell.
 
 The Census 2021 populations are published per output area: TS001 usual residents (the
 ``residential_population`` extract) and WP001 workplace population (the ``workplace_population``
@@ -10,10 +10,12 @@ plausibly live and work.
 
 import duckdb
 
-from safer_streets_tooling.transform import hotspots
-from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
+from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
+from safer_streets_tooling.transform import beahiv, hotspots
+from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
 
 BUILDINGS_TABLE = "buildings"
+DATASET = "population_counts"
 WORKPLACE_TABLE = "workplace_population"
 RESIDENTIAL_TABLE = "residential_population"
 RESOLUTION = 9
@@ -47,7 +49,7 @@ def _ready(con: duckdb.DuckDBPyConnection) -> bool:
     if not _has_size_columns(con):
         print(
             f"  [population_counts] {BUILDINGS_TABLE} lacks the size columns (gross_area/premise_area); "
-            f"re-extract buildings to build population_counts_h3_{RESOLUTION} — skipping"
+            f"re-extract buildings to build h3r{RESOLUTION}_population_counts — skipping"
         )
         return False
     return True
@@ -115,49 +117,77 @@ def _report_allocated(con: duckdb.DuckDBPyConnection, table: str) -> None:
     )
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    """Create ``population_counts_h3_9``: the OA populations assigned to buildings, then summed per cell.
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``h3r9_population_counts``: the OA populations assigned to buildings, then summed per cell.
 
     Each building's share of its OA (buildings carry ``oa21cd`` from the extract) is its total floor
     area (``gross_area``, falling back to the footprint ``premise_area`` where the floor count is
     unknown) times its USE_WEIGHTS multiplier, normalised within the OA — one weighting per population:
     the workplace population goes to Non Residential (×1.0) and Mixed Use (×0.5) buildings, the
     residential population (households + communal establishments) to Residential (×1.0) and Mixed Use
-    (×0.5). The per-building assignments are then grouped by the building's res-9 ``h3_9_id`` and
-    summed, keyed by ``spatial_id`` to match ``crime_counts_h3_9`` / ``h3_9_geogs``.
+    (×0.5). The per-building assignments are then grouped by the building's res-9 ``h3r9_id`` and
+    summed, keyed by ``spatial_id`` to match ``h3r9_crime_counts`` / ``h3r9_geogs``.
 
     Both populations are conserved onto the grid except where they cannot be assigned: an OA with no
     building of the right type (its population has nowhere to land), and buildings whose centroid falls
     in no OA (they receive nothing). The allocated shares of the source totals are reported. No-op if
     any input table is absent, or if the buildings table predates the size columns.
-    ``resolutions`` is ignored — this is only produced at resolution 9.
+    Only resolution 9 is ever produced — the buildings extract carries a single ``h3r9_id``.
 
     The allocation itself lives in :func:`_allocation_sql`, shared with the hotspot-hex version.
     """
     if not _ready(con):
         return
-    buildings = f"SELECT h3_9_id AS spatial_id, oa21cd, map_simple_use, gross_area, premise_area FROM {BUILDINGS_TABLE}"
+    buildings = f"SELECT {H3_ID} AS spatial_id, oa21cd, map_simple_use, gross_area, premise_area FROM {BUILDINGS_TABLE}"
     con.execute(f"""
-        {create_clause("TABLE", f"population_counts_h3_{RESOLUTION}", replace=replace)} AS
+        {create_clause("TABLE", relation(h3_key(RESOLUTION), DATASET), replace=replace)} AS
         {_allocation_sql(buildings)};
     """)
-    _report_allocated(con, f"population_counts_h3_{RESOLUTION}")
+    _report_allocated(con, relation(h3_key(RESOLUTION), DATASET))
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``beahiv202_population_counts``: the same allocation, summed onto the BEAHIV cells.
+
+    Identical weighting (:func:`_allocation_sql`); only the cell a building belongs to differs — read
+    from the extract's ``beahiv202_id`` instead of its ``h3r9_id``.
+
+    Every cell the allocation reaches is kept, matching the H3 table and the other per-cell counts —
+    see :func:`.building_counts._build_on`.
+    """
+    if not (_ready(con) and beahiv.tagged(con, BUILDINGS_TABLE)):
+        return
+    unit = beahiv.BEAHIV_UNIT.key
+    buildings = (
+        f"SELECT {BEAHIV_ID} AS spatial_id, oa21cd, map_simple_use, gross_area, premise_area FROM {BUILDINGS_TABLE}"
+    )
+    con.execute(f"""
+        {create_clause("TABLE", relation(unit, DATASET), replace=replace)} AS
+        {_allocation_sql(buildings)};
+    """)
+    _report_allocated(con, relation(unit, DATASET))
+
+
+def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    if not (_ready(con) and beahiv.tagged(con, BUILDINGS_TABLE)):
+        return []
+    return [relation(beahiv.BEAHIV_UNIT.key, DATASET)]
+
+
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not (
         all(table_exists(con, t) for t in (BUILDINGS_TABLE, WORKPLACE_TABLE, RESIDENTIAL_TABLE))
         and _has_size_columns(con)
     ):
         return []
-    return [f"population_counts_h3_{RESOLUTION}"]
+    return [relation(h3_key(RESOLUTION), DATASET)]
 
 
 def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``population_counts_hotspots``: the same allocation summed per hotspot hex.
+    """Create ``hotspots_population_counts``: the same allocation summed per hotspot hex.
 
     Identical weighting (:func:`_allocation_sql`); only the cell a building belongs to differs — placed
-    by footprint centroid into a hex rather than read from the extract's ``h3_9_id``. The placement is an
+    by footprint centroid into a hex rather than read from the extract's ``h3r9_id``. The placement is an
     *outer* join so buildings outside every hex still count towards their OA's shares (they just receive
     nothing); much less of each OA total therefore lands here than on the national H3 grid. No-op if any
     input is absent, or if the buildings table predates the size columns.
@@ -174,10 +204,10 @@ def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
         outer=True,
     )
     con.execute(f"""
-        {create_clause("TABLE", "population_counts_hotspots", replace=replace)} AS
+        {create_clause("TABLE", relation(hotspots.HOTSPOT_UNIT.key, DATASET), replace=replace)} AS
         {_allocation_sql(buildings)};
     """)
-    _report_allocated(con, "population_counts_hotspots")
+    _report_allocated(con, relation(hotspots.HOTSPOT_UNIT.key, DATASET))
 
 
 def hotspot_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
@@ -187,13 +217,14 @@ def hotspot_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
         and hotspots.available(con)
     ):
         return []
-    return ["population_counts_hotspots"]
+    return [relation(hotspots.HOTSPOT_UNIT.key, DATASET)]
 
 
 STEP = TransformStep(
     name="population_counts",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="Census 2021 residential (TS001) + workplace (WP001) population per res-9 cell, allocated via buildings by floor area × use weight.",
     extract_inputs=(BUILDINGS_TABLE, WORKPLACE_TABLE, RESIDENTIAL_TABLE),
 )

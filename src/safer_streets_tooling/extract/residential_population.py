@@ -8,7 +8,7 @@ The source is the nomis API (table TS001 = ``NM_2021_1``; ported from the safer-
 ``buildings.ipynb`` prototype): the count of usual residents per 2021 output area split by residence
 type — ``household_population`` (lives in a household) and ``communal_population`` (lives in a communal
 establishment, e.g. care homes, student halls, prisons) — keyed by ``spatial_id`` (the OA21 code,
-joinable to ``buildings.oa21cd`` / ``h3_*_geogs.oa21cd``). Requires ``NOMIS_API_KEY`` (free
+joinable to ``buildings.oa21cd`` / ``h3r*_geogs.oa21cd``). Requires ``NOMIS_API_KEY`` (free
 registration at https://www.nomisweb.co.uk); the dataset is optional, so the extract is skipped with a
 warning when the key is absent.
 """

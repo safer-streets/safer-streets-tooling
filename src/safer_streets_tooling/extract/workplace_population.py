@@ -7,7 +7,7 @@ home, or do not have a fixed place of work, in their area of usual residence.
 The source is the nomis Census 2021 workplace population bulk download
 (https://www.nomisweb.co.uk/sources/census_2021_wp): ``wp001.zip`` holds one CSV per geography level,
 of which only the OA-level ``WP001_oa.csv`` is used — one row per 2021 output area, keyed by
-``spatial_id`` (the OA21 code, joinable to ``buildings.oa21cd`` / ``h3_*_geogs.oa21cd``).
+``spatial_id`` (the OA21 code, joinable to ``buildings.oa21cd`` / ``h3r*_geogs.oa21cd``).
 """
 
 from safer_streets_core.database import duckdb_connector, write_geoparquet

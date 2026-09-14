@@ -20,9 +20,9 @@ def dirs(tmp_path):
     tdir.mkdir()
     # an extract table carrying geometry, plus an optional source and its transform output
     _write(edir / "poi.parquet", spatial_id=["a", "b"], category=["x", "y"], geom=[b"\x00", b"\x01"])
-    _write(edir / "streetlights.parquet", spatial_id=["h3"], h3_9_id=["h3"])
-    _write(tdir / "crime_counts_h3_9.parquet", spatial_id=["h3"], crime_type=["x"], month=["2024-01"], count=[3])
-    _write(tdir / "streetlight_counts_h3_9.parquet", spatial_id=["h3"], streetlight_count=[5])
+    _write(edir / "streetlights.parquet", spatial_id=["h3"], h3r9_id=["h3"])
+    _write(tdir / "h3r9_crime_counts.parquet", spatial_id=["h3"], crime_type=["x"], month=["2024-01"], count=[3])
+    _write(tdir / "h3r9_streetlight_counts.parquet", spatial_id=["h3"], streetlight_count=[5])
     return edir, tdir
 
 
@@ -36,7 +36,7 @@ def test_build_index_rows_and_schema(dirs, tmp_path):
     edir, tdir = dirs
     out = tmp_path / "index.parquet"
 
-    count = build_index(edir, tdir, out, resolutions=[9])
+    count = build_index(edir, tdir, out)
     assert count == 4
 
     idx = pd.read_parquet(out).set_index("name")
@@ -52,7 +52,7 @@ def test_build_index_rows_and_schema(dirs, tmp_path):
     ]
 
     assert idx.loc["poi", "phase"] == "extract"
-    assert idx.loc["crime_counts_h3_9", "phase"] == "transform"
+    assert idx.loc["h3r9_crime_counts", "phase"] == "transform"
     assert idx.loc["poi", "n_rows"] == 2
     assert idx.loc["poi", "n_columns"] == 3
     assert idx.loc["poi", "columns"] == "spatial_id,category,geom"
@@ -66,7 +66,7 @@ def test_last_modified_is_the_parquet_mtime(dirs, tmp_path):
     edir, tdir = dirs
     os.utime(edir / "poi.parquet", (5_000_000.0, 5_000_000.0))
     out = tmp_path / "index.parquet"
-    build_index(edir, tdir, out, resolutions=[9])
+    build_index(edir, tdir, out)
     idx = pd.read_parquet(out).set_index("name")
 
     assert idx.loc["poi", "last_modified"] == datetime.fromtimestamp(5_000_000.0, tz=UTC)
@@ -75,24 +75,24 @@ def test_last_modified_is_the_parquet_mtime(dirs, tmp_path):
 def test_geometry_flag_tracks_the_geom_column(dirs, tmp_path):
     edir, tdir = dirs
     out = tmp_path / "index.parquet"
-    build_index(edir, tdir, out, resolutions=[9])
+    build_index(edir, tdir, out)
     idx = pd.read_parquet(out).set_index("name")
 
     assert bool(idx.loc["poi", "has_geometry"]) is True
-    assert bool(idx.loc["crime_counts_h3_9", "has_geometry"]) is False
+    assert bool(idx.loc["h3r9_crime_counts", "has_geometry"]) is False
 
 
 def test_descriptions_come_from_the_registries(dirs, tmp_path):
     """Extract rows take Dataset.description; an optional-gated transform output takes its step's."""
     edir, tdir = dirs
     out = tmp_path / "index.parquet"
-    build_index(edir, tdir, out, resolutions=[9])
+    build_index(edir, tdir, out)
     idx = pd.read_parquet(out).set_index("name")
 
     poi_desc = next(ds.description for ds in DATASETS if ds.name == "poi")
     assert idx.loc["poi", "description"] == poi_desc
-    # streetlight_counts_h3_9 is only described because its source (streetlights) is present as a view
-    assert idx.loc["streetlight_counts_h3_9", "description"].strip()
+    # h3r9_streetlight_counts is only described because its source (streetlights) is present as a view
+    assert idx.loc["h3r9_streetlight_counts", "description"].strip()
 
 
 def test_local_only_flags_the_hotspot_family(dirs, tmp_path):
@@ -100,15 +100,15 @@ def test_local_only_flags_the_hotspot_family(dirs, tmp_path):
     edir, tdir = dirs
     _write(edir / "hotspots.parquet", spatial_id=["hex_1"], pfa=["West Yorkshire"], geom=[b"\x00"])
     _write(tdir / "hotspots_geogs.parquet", spatial_id=["hex_1"], lad24cd=["E08000035"])
-    _write(tdir / "crime_counts_hotspots.parquet", spatial_id=["hex_1"], count=[3])
+    _write(tdir / "hotspots_crime_counts.parquet", spatial_id=["hex_1"], count=[3])
     out = tmp_path / "index.parquet"
 
-    count = build_index(edir, tdir, out, resolutions=[9])
+    count = build_index(edir, tdir, out)
     assert count == 7  # the four shareable tables plus the three hotspot ones
 
     idx = pd.read_parquet(out).set_index("name")
     flagged = set(idx.index[idx["local_only"]])
-    assert flagged == {"hotspots", "hotspots_geogs", "crime_counts_hotspots"}
+    assert flagged == {"hotspots", "hotspots_geogs", "hotspots_crime_counts"}
     # blank descriptions: the catalogue is synced, so a flagged row says only that the table exists
     assert (idx.loc[sorted(flagged), "description"] == "").all()
     # ...while the registry description that was suppressed is genuinely non-empty
@@ -118,7 +118,7 @@ def test_local_only_flags_the_hotspot_family(dirs, tmp_path):
 def test_local_only_is_false_for_shareable_tables(dirs, tmp_path):
     edir, tdir = dirs
     out = tmp_path / "index.parquet"
-    build_index(edir, tdir, out, resolutions=[9])
+    build_index(edir, tdir, out)
     idx = pd.read_parquet(out).set_index("name")
 
     assert not idx["local_only"].any()

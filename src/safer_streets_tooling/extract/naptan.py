@@ -12,7 +12,7 @@ from pathlib import Path
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.extract._common import download, raw_dir
+from safer_streets_tooling.extract._common import cell_id_columns, download, raw_dir
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # NAPTAN StopType code -> coarse category. Codes not listed fall through to 'other'.
@@ -62,7 +62,7 @@ def extract(ctx: ExtractContext) -> None:
 
     Only active stops with a valid Easting/Northing are kept; the supplied BNG coordinates become a
     point ``geom`` (EPSG:27700) and the raw ``StopType`` is mapped to a coarse ``stop_category``. A
-    resolution-9 H3 cell id (``h3_9_id``, lowercase hex) is derived from ``geom`` (transformed to
+    resolution-9 H3 cell id (``h3r9_id``, lowercase hex) is derived from ``geom`` (transformed to
     WGS-84) for joining to the H3 grid — using ``geom`` rather than the CSV's own Longitude/Latitude,
     which are blank for ~8% of otherwise-valid stops. The CSV is downloaded automatically (cached unless
     force_download).
@@ -79,7 +79,7 @@ def extract(ctx: ExtractContext) -> None:
             CREATE TABLE naptan AS
             SELECT
                 * EXCLUDE pt,
-                lower(hex(h3_latlng_to_cell(ST_Y(pt), ST_X(pt), 9))) AS h3_9_id
+                {cell_id_columns(con, "ST_Y(pt)", "ST_X(pt)", "geom")}
             FROM (
                 SELECT *, ST_Transform(geom, 'EPSG:27700', 'EPSG:4326', always_xy := true) AS pt
                 FROM (

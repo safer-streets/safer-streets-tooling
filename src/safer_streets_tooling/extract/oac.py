@@ -5,7 +5,7 @@ repeated across every OA:
 
 - ``oac`` — one row per OA: ``spatial_id`` (the OA21 code) + its OAC ``code``. The code is the full
   hierarchical subgroup code (``1a1`` → group ``1a`` → supergroup ``1``), so the group and supergroup are
-  prefixes of it. A consumer joins it via ``h3_*_geogs.oa21cd``.
+  prefixes of it. A consumer joins it via ``h3r*_geogs.oa21cd``.
 - ``oac_classification`` — the decode/dimension table, one row per ``code`` (~51): the subgroup, group
   and supergroup *names* for that code. The group / supergroup codes aren't stored (they're prefixes of
   ``code``). Joined on ``oac.code``.

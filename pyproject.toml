@@ -10,8 +10,10 @@ dependencies = [
     # Runtime libraries (duckdb, geopandas, pandas, pyarrow, shapely, scipy, requests, tqdm, typer,
     # networkx, odfpy, overturemaps) come transitively from safer-streets-core, which declares them all.
     "safer-streets-core",
-    # the hex indexing library behind the beahiv_202 grid extract
-    "beahiv",
+    # the hex indexing library behind the beahiv_202 grid extract and the BEAHIV transform steps.
+    # [arrow] pins the pyarrow its vectorised *_to_cell overloads need — the transform hands whole
+    # DuckDB vectors straight to them as pyarrow arrays.
+    "beahiv[arrow]",
 ]
 
 [project.scripts]

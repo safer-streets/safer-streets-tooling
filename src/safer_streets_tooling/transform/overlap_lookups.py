@@ -4,7 +4,15 @@ from dataclasses import dataclass
 
 import duckdb
 
-from safer_streets_tooling.transform.base import SpatialUnit, TransformStep, create_clause, h3_unit, table_exists
+from safer_streets_tooling.transform.base import (
+    H3_RESOLUTIONS,
+    Grid,
+    SpatialUnit,
+    TransformStep,
+    create_clause,
+    h3_unit,
+    table_exists,
+)
 
 
 @dataclass(frozen=True)
@@ -98,19 +106,20 @@ def unit_outputs(con: duckdb.DuckDBPyConnection, unit: SpatialUnit) -> list[str]
     return [f"{unit.key}_{f.name}_lookup" for f in OVERLAP_FEATURES if table_exists(con, f.table)]
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    for res in resolutions:
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    for res in H3_RESOLUTIONS:
         build_unit(con, h3_unit(res), replace)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
-    return [name for res in resolutions for name in unit_outputs(con, h3_unit(res))]
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    return [name for res in H3_RESOLUTIONS for name in unit_outputs(con, h3_unit(res))]
 
 
 STEP = TransformStep(
     name="overlap_lookups",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="Per-cell lookup of every overlapping feature (greenspace, land cover, roads, school catchments).",
     depends_on=("crime_counts",),
     extract_inputs=tuple(dict.fromkeys(f.table for f in OVERLAP_FEATURES)),

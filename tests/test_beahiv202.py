@@ -1,4 +1,4 @@
-"""Tests for the beahiv_202 hex-grid extract.
+"""Tests for the beahiv202 hex-grid extract.
 
 Offline-safe: the extractor's only input is the upstream police_force_areas parquet, which these
 tests synthesise, so nothing is downloaded. Skipped when DuckDB cannot fetch its spatial extension.
@@ -13,7 +13,7 @@ from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.extract import BY_NAME, DATASETS
 from safer_streets_tooling.extract.base import ExtractContext
-from safer_streets_tooling.extract.beahiv_202 import (
+from safer_streets_tooling.extract.beahiv202 import (
     ORIENTATION,
     SIDE_LENGTH,
     cell_proportions,
@@ -51,10 +51,10 @@ def _row(con, sql):
 
 
 def test_registered_after_its_dependency():
-    """The registry validator requires police_force_areas to precede beahiv_202."""
+    """The registry validator requires police_force_areas to precede beahiv202."""
     names = [ds.name for ds in DATASETS]
-    assert names.index("police_force_areas") < names.index("beahiv_202")
-    assert BY_NAME["beahiv_202"].depends_on == ("police_force_areas",)
+    assert names.index("police_force_areas") < names.index("beahiv202")
+    assert BY_NAME["beahiv202"].depends_on == ("police_force_areas",)
 
 
 def test_quad_tiles_returns_whole_geometry_when_small():
@@ -115,7 +115,7 @@ def test_proportions_match_a_direct_clip():
 def test_cell_proportions_all_inside():
     """A polygon far larger than the cells leaves every proportion at exactly 1.0."""
     geom = _square(400000, 400000, 50000)
-    cell_ids = np.asarray(bh.polyfill(_square(430000, 430000, 2000), SIDE_LENGTH, ORIENTATION), dtype=np.uint64)
+    cell_ids = np.asarray(bh.polyfill(_square(430000, 430000, 2000), SIDE_LENGTH, ORIENTATION), dtype=np.int64)
     cell_polys = np.asarray(bh.cell_polygons(cell_ids), dtype=object)
     assert (cell_proportions(geom, cell_polys) == 1.0).all()
 
@@ -137,14 +137,17 @@ def test_extract_writes_one_row_per_cell_and_force(tmp_path):
         ],
     )
     extract(ExtractContext(staging=tmp_path))
-    out = tmp_path / "beahiv_202.parquet"
+    out = tmp_path / "beahiv202.parquet"
     assert out.exists()
 
     con = duckdb_connector(writeable=True)
     try:
         con.execute(f"CREATE TABLE g AS SELECT * FROM read_parquet('{out.as_posix()}')")
-        cols = [r[1] for r in con.execute("PRAGMA table_info('g')").fetchall()]
-        assert cols == ["spatial_id", "proportion", "pfa24cd", "pfa24nm", "geom"]
+        info = con.execute("PRAGMA table_info('g')").fetchall()
+        assert [r[1] for r in info] == ["spatial_id", "proportion", "pfa24cd", "pfa24nm", "geom"]
+        # a signed integer id, matching beahiv202_crime_counts: beahiv's reserved top bits put every
+        # cell id below 2**61, so the grid and the counts join without a cast on either side
+        assert info[0][2] == "BIGINT"
 
         rows, cells, forces = _row(con, "SELECT count(*), count(DISTINCT spatial_id), count(DISTINCT pfa24cd) FROM g")
         assert forces == 2

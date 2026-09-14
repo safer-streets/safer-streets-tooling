@@ -1,7 +1,7 @@
 """
-Build the production DuckDB database from modular, per-dataset parquet intermediates.
+Build the production GeoParquet outputs from modular, per-dataset parquet intermediates.
 
-The pipeline has three phases (extract → transform → load):
+The pipeline has two phases (extract → transform):
 
   1. **extract**    each dataset (``safer_streets_tooling.extract.DATASETS``) is downloaded and
      preprocessed in its own in-memory DuckDB and dumped to a ``<name>.parquet`` GeoParquet file under
@@ -9,29 +9,19 @@ The pipeline has three phases (extract → transform → load):
      ``safer_streets_tooling.extract.pipeline``), respecting ``depends_on`` edges. The parquet files are
      a durable, per-dataset cache: a single dataset can be refreshed without touching the others.
   2. **transform**  the extracted parquet are loaded into a throwaway in-memory DuckDB, geometry is
-     indexed, and the H3 aggregation steps (``safer_streets_tooling.transform.STEPS``) are built; every
-     derived relation (the BTP-filtered ``crime_counts_h3_*``, the per-cell lookups and
-     ``h3_{res}_geogs``) is written out as its own parquet under ``data_dir()/transform``. No live
-     database is touched — the parquet are a durable cache of the aggregations, so they can be rebuilt
-     without re-importing or re-extracting.
-  3. **load**       *(optional — not currently used; consumers query the parquet directly with an
-     in-memory DuckDB, locally or from the Azure blob container ``sync`` maintains)* a minimal
-     consumer database is assembled from the transform parquet —
-     ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined on
-     ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
-     and the schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac (+ oac_classification) feature layers,
-     plus the building / population / road-intersection per-cell counts —
-     into a ``<name>.staging.db`` that is only promoted over the live database with an atomic
-     ``os.replace`` once every table loaded, so read-only consumers always see a complete database.
-     ``--include NAME`` adds further tables (an intermediate lookup or a feature layer). This step is
-     optional: the parquet are the durable outputs; the database is just a convenience bundle.
+     indexed, and the aggregation steps (``safer_streets_tooling.transform.STEPS``) are built; every
+     derived relation (the BTP-filtered ``*_crime_counts``, the per-cell lookups and the ``*_geogs``)
+     is written out as its own parquet under ``data_dir()/transform``. ``--grid`` narrows the run to
+     one or more of the three grid families (``h3`` / ``ho`` / ``beahiv``); by default all three are
+     built. The parquet are a durable cache of the aggregations, so they can be rebuilt without
+     re-importing or re-extracting.
 
-``build`` runs all three phases; ``assemble`` runs transform + load over already-extracted parquet.
-Every command that (re)builds parquet (``extract`` / ``transform`` / ``assemble`` / ``build``) then
-rewrites ``index.parquet`` (also available standalone as ``index``) — a catalogue with one row per
-extract + transform table (phase, name, description, schema; see ``safer_streets_tooling.index``).
-The live database is the standard database (``database_path()``, under ``SAFER_STREETS_DATA_DIR``);
-pass ``--db-path`` to override.
+The parquet **are** the deliverable: consumers query them directly with an in-memory DuckDB, locally
+or from the Azure blob container ``sync`` maintains. ``build`` runs both phases; ``transform`` runs the
+transform alone over already-extracted parquet. Every command that (re)builds parquet
+(``extract`` / ``transform`` / ``build``) then rewrites ``index.parquet`` (also available standalone as
+``index``) — a catalogue with one row per extract + transform table (phase, name, description, schema;
+see ``safer_streets_tooling.index``).
 
 ``sync`` reconciles the extract + transform parquet (and the ``index.parquet`` catalogue) with the
 ``phase2`` Azure Blob Storage container (account URL from ``SAFER_STREETS_BLOB_STORAGE``); it is
@@ -41,7 +31,7 @@ independent of the build phases. Most policies are upload-only; ``--update newer
 
 Adding a dataset: write a module under ``safer_streets_tooling/extract/`` exposing a ``DATASET`` and
 register it in ``safer_streets_tooling/extract/__init__.py``. Then ``data extract --only <name>``
-and ``data assemble``.
+and ``data transform``.
 """
 
 import os
@@ -54,17 +44,14 @@ from safer_streets_core.database import (
     read_geoparquet,
 )
 from safer_streets_core.file_storage import AzureBlobStorage, DataSource, UpdatePolicy, blob_mtime
-from safer_streets_core.utils import blob_storage_url, data_dir, database_path
+from safer_streets_core.utils import blob_storage_url, data_dir
 
 from safer_streets_tooling.extract import BY_NAME, DATASETS, ExtractContext, run_extract
 from safer_streets_tooling.index import INDEX_NAME, build_index
 from safer_streets_tooling.local_only import is_local_only
-from safer_streets_tooling.transform import STEPS, build_all
-from safer_streets_tooling.transform.base import H3_RESOLUTIONS
-from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
-from safer_streets_tooling.transform.hotspots import HOTSPOT_UNIT
+from safer_streets_tooling.transform import ALL_GRIDS, STEPS, Grid, build_all
 
-app = typer.Typer(help="Build the crime + boundaries + H3 DuckDB database from per-dataset parquet intermediates.")
+app = typer.Typer(help="Build the crime + boundaries + per-cell GeoParquet outputs from per-dataset intermediates.")
 
 
 def extract_dir() -> Path:
@@ -75,7 +62,7 @@ def extract_dir() -> Path:
 
 
 def transform_dir() -> Path:
-    """Directory holding the H3 aggregation parquet produced by the transform phase (durable cache)."""
+    """Directory holding the aggregation parquet produced by the transform phase (durable cache)."""
     d = data_dir() / "transform"
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -138,158 +125,41 @@ def _configure_transform_db(con, tdir: Path, threads: int = TRANSFORM_THREADS, m
 def run_transform(
     edir: Path,
     tdir: Path,
-    resolutions: list[int],
+    grids: list[Grid],
     *,
     rebuild: bool = False,
     threads: int = TRANSFORM_THREADS,
     memory_limit: str | None = None,
 ) -> None:
-    """Build the H3 aggregation parquet under ``tdir`` from the extracted dataset parquet in ``edir``.
+    """Build the hex aggregation parquet under ``tdir`` from the extracted dataset parquet in ``edir``.
 
     The extracted base tables are imported into a throwaway in-memory DuckDB and geometry is indexed
-    (validity repair + RTree, so the spatial joins are correct and fast). The H3 transforms then run:
-    the BTP-filtered ``crime_counts_h3_*`` are aggregated from ``crime_data``, then the per-cell lookups
-    and ``h3_{res}_geogs`` are built off them. Each transform node owns its output parquet under ``tdir``
-    (a durable cache the *load* step imports): a node reuses its cached output only while it is newer than
+    (validity repair + RTree, so the spatial joins are correct and fast). The transforms for each grid
+    family in ``grids`` then run: the BTP-filtered ``*_crime_counts`` are aggregated from ``crime_data``,
+    then the per-cell lookups and the ``*_geogs`` are built off them. Each transform node owns its output
+    parquet under ``tdir``: a node reuses its cached output only while it is newer than
     its inputs (the extract parquet it reads + its upstream steps' outputs), else rebuilds; ``rebuild``
-    forces every step. No live database is touched.
+    forces every step. Narrowing ``grids`` leaves the other families' parquet on disk untouched — they
+    are simply not rebuilt.
 
     ``threads`` / ``memory_limit`` bound the throwaway DuckDB's resource usage (see
     ``_configure_transform_db``): the concurrent spatial joins are memory-hungry, and the DuckDB
     defaults (all cores, 80% of RAM) can drive the build into swap and the OOM killer.
     """
-    print(f"\n=== Transforming (extract: {edir} → transform: {tdir}){' [rebuild]' if rebuild else ''} ===\n")
+    grids_label = ", ".join(grids)
+    print(
+        f"\n=== Transforming (extract: {edir} → transform: {tdir})"
+        f" [grids: {grids_label}]{' [rebuild]' if rebuild else ''} ===\n"
+    )
     con = duckdb_connector(writeable=True)  # in-memory; discarded once the parquet are written
     try:
         _configure_transform_db(con, tdir, threads, memory_limit)
         _import_datasets(con, edir)
         index_geometry_tables(con)
-        build_all(STEPS, con, resolutions=resolutions, replace=False, rebuild=rebuild, edir=edir, tdir=tdir)
+        build_all(STEPS, con, grids=grids, replace=False, rebuild=rebuild, edir=edir, tdir=tdir)
     finally:
         con.close()
-    print(f"\n=== Done. H3 aggregation parquet → {tdir} ===")
-
-
-# Feature layers included in the database by default (extract datasets, loaded from ``edir``).
-DEFAULT_FEATURE_TABLES: tuple[str, ...] = (
-    "schools",
-    "poi",
-    "naptan",
-    "food_outlets",
-    "cctv",
-    "imd_scores_pct",
-    "land_cover",
-    "oac",
-    "oac_classification",
-    "hotspots",  # the hotspot hexes themselves: the geometry the hotspot counts/geogs are keyed by
-)
-
-# Transform outputs included in the database by default (loaded from ``tdir``), beyond the per-resolution
-# crime counts + geogs. Each is skipped with a warning if its parquet is absent (e.g. an optional
-# extract — buildings / the population tables — was not run). Note: the raw point/footprint layers are
-# deliberately *not* in DEFAULT_FEATURE_TABLES — the per-cell counts (`building_counts_h3_9`,
-# `road_intersection_counts_h3_{res}`, etc.) are the useful form for consumers (the raw layers are
-# millions/tens of millions of rows); the hotspot hexes are the exception, since they are the geometry
-# their counts are keyed by. `streetlight_counts_h3_9` (and its hotspot twin) is built by the transform
-# phase but not bundled by default; pull it in with `--include streetlight_counts_h3_9`.
-DEFAULT_TRANSFORM_TABLES: tuple[str, ...] = (
-    "building_counts_h3_9",
-    "population_counts_h3_9",
-    "road_intersection_counts_h3_9",
-    # the hotspot-hex grid: the same counts + attributes keyed by the hex spatial_id (absent unless the
-    # optional hotspots extract ran, in which case each is skipped with a warning like any other)
-    f"crime_counts_{HOTSPOT_UNIT.key}",
-    f"{HOTSPOT_UNIT.key}_geogs",
-    f"building_counts_{HOTSPOT_UNIT.key}",
-    f"population_counts_{HOTSPOT_UNIT.key}",
-    f"road_intersection_counts_{HOTSPOT_UNIT.key}",
-)
-
-
-def _minimal_tables(resolutions: list[int]) -> list[str]:
-    """The relations the minimal consumer database needs:
-
-    - ``crime_counts_h3_{res}`` — per-cell crime counts (keyed by the H3 ``spatial_id``);
-    - ``crime_counts_{key}`` — the same counts per ONS geography code (PFA / LAD / MSOA / LSOA / OA);
-    - ``h3_{res}_geogs`` — per-cell attributes (also keyed by ``spatial_id``);
-    - the ONS boundary tables ``h3_*_geogs`` references by code (PFA / LAD / MSOA / LSOA / OA), so a
-      consumer can resolve a cell's codes to the boundary geometry;
-    - the ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac +
-      ``oac_classification``; ``oac`` is the per-OA 2021 Output Area Classification code, keyed by
-      ``oa21cd``, decoded to tier names via the ``oac_classification`` dimension table);
-    - the ``DEFAULT_TRANSFORM_TABLES`` transform outputs (``building_counts_h3_9``,
-      ``population_counts_h3_9`` and the per-resolution ``road_intersection_counts_h3_{res}`` —
-      per-cell counts keyed by ``spatial_id`` — plus the hotspot-hex counts and ``hotspots_geogs``).
-
-    The intermediate lookups and the other raw extract datasets are build inputs, not part of the output.
-    """
-    counts = [f"crime_counts_h3_{res}" for res in resolutions] + [f"crime_counts_{key}" for key in GEOGRAPHY_MAPPINGS]
-    geogs = [f"h3_{res}_geogs" for res in resolutions]
-    return (
-        counts
-        + geogs
-        + list(GEOGRAPHY_MAPPINGS.values())
-        + list(DEFAULT_FEATURE_TABLES)
-        + list(DEFAULT_TRANSFORM_TABLES)
-    )
-
-
-def run_load(
-    db_path: Path, tdir: Path, resolutions: list[int], *, edir: Path | None = None, include: list[str] | None = None
-) -> None:
-    """Assemble a minimal consumer database from the transform parquet, then atomically promote it.
-
-    By default the ``crime_counts_h3_{res}``, per-geography ``crime_counts_{key}`` and ``h3_{res}_geogs``
-    parquet (under ``tdir``) plus the ONS
-    boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA, under ``edir``) and the
-    ``DEFAULT_FEATURE_TABLES`` feature layers (schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac (+ oac_classification), under ``edir``)
-    and the ``DEFAULT_TRANSFORM_TABLES`` transform outputs (the building / population /
-    road-intersection per-cell counts, under ``tdir``) are
-    imported — the per-cell counts and attributes the app joins on ``spatial_id``, the boundaries those
-    cells resolve to, and the feature layers. ``include`` names further tables to add (each looked up
-    under ``tdir`` then ``edir``) —
-    e.g. an intermediate ``h3_*_lookup`` or a feature layer. The boundary tables' geometry is repaired
-    and RTree-indexed; the counts/geogs carry none. A table backed by an *optional* dataset (e.g. the
-    licensed ``land_cover`` extract) is skipped with a warning when its parquet is absent; a missing
-    *required* parquet aborts. The staging DB is only promoted over ``db_path`` with ``os.replace`` once
-    every present table loaded, so consumers only ever see a complete database.
-
-    This load step is **optional and not currently used**: the per-dataset and transform parquet are the
-    durable build outputs, and consumers query them directly (in-memory DuckDB, locally or from Azure
-    Blob); the database is just a convenience bundle for consumers that prefer a single file.
-    """
-    search_dirs = [d for d in (tdir, edir) if d is not None]
-    tables = _minimal_tables(resolutions) + (include or [])
-    # tables backed by an optional dataset are skipped with a warning when absent (e.g. the licensed
-    # land_cover extract, or building_counts when the optional buildings extract was skipped); a
-    # missing required table still aborts the build.
-    optional_tables = {ds.table for ds in DATASETS if ds.optional} | set(DEFAULT_TRANSFORM_TABLES)
-
-    staging = db_path.with_suffix(".staging.db")
-    staging.unlink(missing_ok=True)
-
-    print(f"\n=== Loading {db_path} (staging: {staging}) ===\n")
-    con = duckdb_connector(staging, writeable=True)
-    loaded = 0
-    try:
-        for name in tables:
-            parquet = next((d / f"{name}.parquet" for d in search_dirs if (d / f"{name}.parquet").exists()), None)
-            if parquet is None:
-                searched = ", ".join(str(d) for d in search_dirs)
-                if name in optional_tables:
-                    print(f"  {name}: optional parquet absent, skipping (searched: {searched})")
-                    continue
-                raise FileNotFoundError(f"required table '{name}' parquet not found in: {searched}")
-            con.execute(f'CREATE OR REPLACE TABLE "{name}" AS {read_geoparquet(parquet)}')
-            loaded += 1
-            print(f"  {name}: loaded")
-
-        index_geometry_tables(con)  # no-op for the minimal tables (no geometry); indexes any included layers
-    finally:
-        con.close()
-
-    os.replace(staging, db_path)
-    print(f"\n=== Done. Promoted minimal database ({loaded} table(s)) → {db_path} ===")
+    print(f"\n=== Done. Aggregation parquet → {tdir} ===")
 
 
 def index_path() -> Path:
@@ -297,10 +167,10 @@ def index_path() -> Path:
     return data_dir() / f"{INDEX_NAME}.parquet"
 
 
-def run_index(edir: Path, tdir: Path, out_path: Path, resolutions: list[int] | None = None) -> None:
+def run_index(edir: Path, tdir: Path, out_path: Path) -> None:
     """Write the ``index.parquet`` catalogue describing every extract + transform table on disk."""
     print(f"\n=== Indexing extract ({edir}) + transform ({tdir}) → {out_path} ===\n")
-    count = build_index(edir, tdir, out_path, resolutions=resolutions)
+    count = build_index(edir, tdir, out_path)
     print(f"=== Done. Catalogued {count} table(s) → {out_path} ===")
 
 
@@ -337,99 +207,64 @@ _THREADS_OPTION = typer.Option(
 _MEMORY_LIMIT_OPTION = typer.Option(
     None, help="DuckDB memory cap for the transform, e.g. '12GB' (default: half of physical RAM)."
 )
+_GRID_OPTION = typer.Option(
+    list(ALL_GRIDS),
+    "--grid",
+    help="Grid family to build, repeatable: h3 (H3 cells), ho (Home Office hotspot hexes), beahiv "
+    "(BEAHIV 202m hexes), ons (OA/LSOA/MSOA/LAD/PFA). Default: all four.",
+)
 
 
 @app.command("transform")
 def transform(
-    resolutions: list[int] = H3_RESOLUTIONS,
+    grids: list[Grid] = _GRID_OPTION,
     all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
     threads: int = _THREADS_OPTION,
     memory_limit: str | None = _MEMORY_LIMIT_OPTION,
 ) -> None:
-    """Build the H3 aggregation parquet under ``data_dir()/transform`` from the extracted parquet.
+    """Build the hex aggregation parquet under ``data_dir()/transform`` from the extracted parquet.
 
-    Loads the extracted datasets into a throwaway in-memory DuckDB, runs the H3 transforms, and writes
-    each derived relation (lookups + ``h3_{res}_geogs``) out as its own parquet. By default a node whose
-    output parquet already exist is skipped; ``--all`` rebuilds them all. No live database is touched;
-    ``load`` imports the result.
+    Loads the extracted datasets into a throwaway in-memory DuckDB, runs the transforms for each
+    ``--grid`` family, and writes each derived relation (counts, lookups, ``*_geogs``) out as its own
+    parquet. By default a node whose output parquet already exist is skipped; ``--all`` rebuilds them
+    all. The parquet are the build's deliverable — consumers query them directly.
     """
-    run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_, threads=threads, memory_limit=memory_limit)
-    run_index(extract_dir(), transform_dir(), index_path(), resolutions)
-
-
-@app.command("load")
-def load(
-    db_path: Path | None = None,
-    resolutions: list[int] = H3_RESOLUTIONS,
-    include: list[str] | None = None,
-) -> None:
-    """Assemble a minimal database from the transform parquet, then atomically swap it in.
-
-    By default ``crime_counts_h3_{res}`` and ``h3_{res}_geogs`` (the per-cell counts + attributes, joined
-    on ``spatial_id``) plus the ONS boundary tables they reference by code (PFA / LAD / MSOA / LSOA / OA)
-    and the schools / poi / naptan / food_outlets / cctv / imd_scores_pct / land_cover / oac (+ oac_classification) feature layers,
-    plus the building / population / road-intersection per-cell counts, are imported.
-    ``--include NAME`` (repeatable)
-    adds further tables (an intermediate ``h3_*_lookup`` or a feature layer), looked up in the transform
-    then extract dirs. This step is optional and not currently used — the parquet are the durable
-    outputs, queried directly by consumers; the database is a convenience bundle.
-    """
-    run_load(db_path or database_path(), transform_dir(), resolutions, edir=extract_dir(), include=include)
+    run_transform(extract_dir(), transform_dir(), grids, rebuild=all_, threads=threads, memory_limit=memory_limit)
+    run_index(extract_dir(), transform_dir(), index_path())
 
 
 @app.command("index")
-def index(resolutions: list[int] = H3_RESOLUTIONS) -> None:
+def index() -> None:
     """Write ``index.parquet`` cataloguing every extract + transform table currently on disk.
 
     One row per parquet under ``data_dir()/extract`` and ``data_dir()/transform``: its phase, name,
     registry description, row/column counts, geometry flag, column list and last-modified timestamp
     (the parquet's mtime). Regenerated by every command
-    that (re)builds parquet (``extract`` / ``transform`` / ``assemble`` / ``build``); run standalone to
+    that (re)builds parquet (``extract`` / ``transform`` / ``build``); run standalone to
     refresh it by hand (e.g. after deleting a parquet).
     """
-    run_index(extract_dir(), transform_dir(), index_path(), resolutions)
-
-
-@app.command("assemble")
-def assemble(
-    db_path: Path | None = None,
-    resolutions: list[int] = H3_RESOLUTIONS,
-    all_: bool = typer.Option(False, "--all", help="Rebuild every aggregation even if its parquet exists."),
-    include: list[str] | None = None,
-    threads: int = _THREADS_OPTION,
-    memory_limit: str | None = _MEMORY_LIMIT_OPTION,
-) -> None:
-    """Transform then load: build the H3 aggregation parquet, then assemble + promote the minimal database.
-
-    ``--include NAME`` (repeatable) adds extra tables to the database beyond the minimal set.
-    """
-    run_transform(extract_dir(), transform_dir(), resolutions, rebuild=all_, threads=threads, memory_limit=memory_limit)
-    run_load(db_path or database_path(), transform_dir(), resolutions, edir=extract_dir(), include=include)
-    run_index(extract_dir(), transform_dir(), index_path(), resolutions)
+    run_index(extract_dir(), transform_dir(), index_path())
 
 
 @app.command("build")
 def build(
-    db_path: Path | None = None,
-    resolutions: list[int] = H3_RESOLUTIONS,
+    grids: list[Grid] = _GRID_OPTION,
     force_download: bool = False,
-    include: list[str] | None = None,
     threads: int = _THREADS_OPTION,
     memory_limit: str | None = _MEMORY_LIMIT_OPTION,
 ) -> None:
-    """Full pass: extract any missing parquet (``--force-download`` re-fetches all), then transform + load.
+    """Full pass: extract any missing parquet (``--force-download`` re-fetches all), then transform.
 
     Cached transform parquet are kept; ``--force-download`` (which re-extracts) also rebuilds them so the
-    aggregations reflect the refreshed inputs. ``--include NAME`` (repeatable) adds extra tables to the
-    database beyond the minimal set.
+    aggregations reflect the refreshed inputs. ``--grid`` (repeatable) narrows the transform to a subset
+    of the grid families.
     """
     ctx = ExtractContext(staging=extract_dir(), force_download=force_download)
     run_extract(list(DATASETS), ctx, rebuild=force_download)
     run_transform(
-        ctx.staging, transform_dir(), resolutions, rebuild=force_download, threads=threads, memory_limit=memory_limit
+        ctx.staging, transform_dir(), grids, rebuild=force_download, threads=threads, memory_limit=memory_limit
     )
-    run_load(db_path or database_path(), transform_dir(), resolutions, edir=ctx.staging, include=include)
-    run_index(ctx.staging, transform_dir(), index_path(), resolutions)
+    run_index(ctx.staging, transform_dir(), index_path())
 
 
 # Azure Blob Storage container for the phase-2 parquet. The account URL comes from the

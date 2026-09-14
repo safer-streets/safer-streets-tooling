@@ -8,16 +8,29 @@ the cell maps to, the cell's overlap with each feature layer (``{prefix}_ids`` +
 
 It deliberately does **not** carry attributes that are a property of a geography the cell already
 references — e.g. IMD scores, which are an LSOA-level attribute. Those stay in their own table and a
-consumer joins to them via the relevant code (``h3_*_geogs.lsoa21cd`` → the IMD table), so a value held
+consumer joins to them via the relevant code (``h3r*_geogs.lsoa21cd`` → the IMD table), so a value held
 once per LSOA isn't duplicated across every cell in that LSOA.
 """
 
 import duckdb
 
-from safer_streets_tooling.transform.base import SpatialUnit, TransformStep, create_clause, h3_unit, table_exists
+from safer_streets_tooling.transform.base import (
+    H3_RESOLUTIONS,
+    Grid,
+    SpatialUnit,
+    TransformStep,
+    create_clause,
+    h3_key,
+    h3_unit,
+    relation,
+    table_exists,
+)
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 from safer_streets_tooling.transform.overlap_lookups import OVERLAP_FEATURES
 from safer_streets_tooling.transform.retail_centre_lookups import RETAIL_CENTRES_TABLE
+
+# the dataset half of this step's relation names: `{grid}_geogs` on every unit it is built for
+DATASET = "geogs"
 
 # the geography used as the base table for the *_geogs tables (broadest coverage: incl. NI/Scotland).
 # Validated at import: a key that isn't in the mapping used to fall back to the first geography
@@ -80,7 +93,7 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
     extra_join_sql = "\n".join(extra_joins)
 
     con.execute(f"""
-        {create_clause("TABLE", f"{unit.key}_geogs", replace=replace)} AS
+        {create_clause("TABLE", relation(unit.key, DATASET), replace=replace)} AS
         {with_clause}
         SELECT base.spatial_id, {unit.area} AS cell_area, {select_cols}{extra_col_sql}
         FROM {unit.key}_{base}_lookup base
@@ -90,19 +103,24 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
     """)
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    for res in resolutions:
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    for res in H3_RESOLUTIONS:
         build_unit(con, h3_unit(res), replace)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
-    return [f"h3_{res}_geogs" for res in resolutions]
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    return [relation(h3_key(res), DATASET) for res in H3_RESOLUTIONS]
 
 
 STEP = TransformStep(
     name="geogs",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="One row per H3 cell: ONS codes, overlap id lists + measures, cell_area, nearest retail centre.",
-    depends_on=("geo_lookups", "overlap_lookups", "retail_centre_lookups"),
+    # crime_counts and the boundary tables are listed even though geo_lookups sits between: that step
+    # publishes no parquet (its lookups are in-memory), so it carries no mtime for the staleness check
+    # and a refreshed cell set or boundary layer would otherwise leave this cached output in place.
+    depends_on=("crime_counts", "geo_lookups", "overlap_lookups", "retail_centre_lookups"),
+    extract_inputs=tuple(GEOGRAPHY_MAPPINGS.values()),
 )

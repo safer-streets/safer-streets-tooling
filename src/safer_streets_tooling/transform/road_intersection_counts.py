@@ -1,51 +1,90 @@
-"""``road_intersection_counts_h3_{res}`` / ``road_intersection_counts_hotspots`` — road intersections counted per cell."""
+"""``h3r{res}_road_intersection_counts`` / ``hotspots_road_intersection_counts`` — road intersections counted per cell."""
 
 import duckdb
 
-from safer_streets_tooling.transform import hotspots
-from safer_streets_tooling.transform.base import TransformStep, create_clause, table_exists
+from safer_streets_tooling.beahiv_grid import cell_id_sql
+from safer_streets_tooling.transform import beahiv, hotspots
+from safer_streets_tooling.transform.base import (
+    H3_RESOLUTIONS,
+    Grid,
+    TransformStep,
+    create_clause,
+    h3_key,
+    relation,
+    table_exists,
+)
 
 ROAD_INTERSECTIONS_TABLE = "road_intersections"
+DATASET = "road_intersection_counts"
 
 
-def build(con: duckdb.DuckDBPyConnection, resolutions: list[int], replace: bool) -> None:
-    """Create ``road_intersection_counts_h3_{res}`` counting road intersections per H3 cell.
+def _build_on(
+    con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace: bool, source: str | None = None
+) -> None:
+    """Create ``{unit_key}_road_intersection_counts``, placing each junction node by ``cell``.
 
-    Keyed by ``spatial_id`` (the lowercase-hex cell, matching ``crime_counts_h3_{res}`` /
-    ``h3_{res}_geogs``), so a consumer joins the count straight onto those by ``spatial_id`` — a
-    companion to the ``road_overlap_length`` (total road length) already carried in ``h3_{res}_geogs``.
-    Each intersection (an OS Open Roads junction/roundabout node, EPSG:27700) is placed by transforming
-    its point back to WGS-84 and taking its cell at each resolution. Output is restricted to cells that
-    appear in ``crime_counts_h3_{res}`` so the count grid lines up with the crime / road-length grid.
-    No-op if the road_intersections table is absent.
+    Unlike the other layers this one carries no cell id — the intersections are derived from the road
+    network rather than extracted as a point layer — so the cell is computed here: an h3 lookup for the
+    H3 grids (which needs the point back in WGS-84, hence ``source``), arithmetic on the BNG point for
+    BEAHIV. Every cell holding an intersection is counted, on either grid — see
+    :func:`.building_counts._build_on`.
+    """
+    con.execute(f"""
+        {create_clause("TABLE", relation(unit_key, DATASET), replace=replace)} AS
+        WITH cells AS (SELECT {cell} AS spatial_id FROM {source or ROAD_INTERSECTIONS_TABLE})
+        SELECT spatial_id, COUNT(*) AS road_intersection_count
+        FROM cells
+        WHERE spatial_id IS NOT NULL
+        GROUP BY spatial_id;
+    """)
+
+
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``h3r{res}_road_intersection_counts`` counting road intersections per H3 cell.
+
+    Keyed by ``spatial_id``, so a consumer joins the count straight onto the unit's counts / geogs — a
+    companion to the ``road_overlap_length`` (total road length) those geogs already carry. Each
+    intersection (an OS Open Roads junction/roundabout node, EPSG:27700) is placed by transforming its
+    point back to WGS-84 and taking its cell. No-op if the road_intersections table is absent.
     """
     if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
         return
-    for res in resolutions:
-        con.execute(f"""
-            {create_clause("TABLE", f"road_intersection_counts_h3_{res}", replace=replace)} AS
-            WITH cells AS (
-                SELECT lower(hex(h3_latlng_to_cell(ST_Y(pt), ST_X(pt), {res}))) AS spatial_id
-                FROM (
-                    SELECT ST_Transform(geom, 'EPSG:27700', 'EPSG:4326', always_xy := true) AS pt
-                    FROM {ROAD_INTERSECTIONS_TABLE}
-                )
-            )
-            SELECT spatial_id, COUNT(*) AS road_intersection_count
-            FROM cells
-            WHERE spatial_id IN (SELECT spatial_id FROM crime_counts_h3_{res})
-            GROUP BY spatial_id;
-        """)
+    wgs84 = (
+        f"(SELECT ST_Transform(geom, 'EPSG:27700', 'EPSG:4326', always_xy := true) AS pt "
+        f"FROM {ROAD_INTERSECTIONS_TABLE})"
+    )
+    for res in H3_RESOLUTIONS:
+        _build_on(con, h3_key(res), f"lower(hex(h3_latlng_to_cell(ST_Y(pt), ST_X(pt), {res})))", replace, wgs84)
 
 
-def outputs(con: duckdb.DuckDBPyConnection, resolutions: list[int]) -> list[str]:
+def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create ``beahiv202_road_intersection_counts``: the nodes are already BNG, so the cell is
+    arithmetic on the point rather than a reprojection. No-op if the layer is absent.
+
+    Gated on the layer alone, never on the grid: ``outputs`` is resolved before ``build``, so a check
+    for a relation this step creates would read False just as the pipeline decides what to write (see
+    :func:`.beahiv.tagged`).
+    """
+    if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
+        return
+    beahiv.register_udfs(con)
+    _build_on(con, beahiv.BEAHIV_UNIT.key, cell_id_sql("geom"), replace)
+
+
+def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
         return []
-    return [f"road_intersection_counts_h3_{res}" for res in resolutions]
+    return [relation(beahiv.BEAHIV_UNIT.key, DATASET)]
+
+
+def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
+    if not table_exists(con, ROAD_INTERSECTIONS_TABLE):
+        return []
+    return [relation(h3_key(res), DATASET) for res in H3_RESOLUTIONS]
 
 
 def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``road_intersection_counts_hotspots`` counting road intersections per hotspot hex.
+    """Create ``hotspots_road_intersection_counts`` counting road intersections per hotspot hex.
 
     The intersection nodes are already BNG points, so unlike the H3 counts (which transform back to
     WGS-84 to take a cell id) this is a plain point-in-polygon join. No restriction to the crime grid is
@@ -54,7 +93,7 @@ def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     if not (table_exists(con, ROAD_INTERSECTIONS_TABLE) and hotspots.available(con)):
         return
     con.execute(f"""
-        {create_clause("TABLE", "road_intersection_counts_hotspots", replace=replace)} AS
+        {create_clause("TABLE", relation(hotspots.HOTSPOT_UNIT.key, DATASET), replace=replace)} AS
         SELECT spatial_id, COUNT(*) AS road_intersection_count
         FROM ({hotspots.placed_points(ROAD_INTERSECTIONS_TABLE)})
         GROUP BY spatial_id;
@@ -64,13 +103,14 @@ def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 def hotspot_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not (table_exists(con, ROAD_INTERSECTIONS_TABLE) and hotspots.available(con)):
         return []
-    return ["road_intersection_counts_hotspots"]
+    return [relation(hotspots.HOTSPOT_UNIT.key, DATASET)]
 
 
 STEP = TransformStep(
     name="road_intersection_counts",
     build=build,
     outputs=outputs,
+    grid=Grid.H3,
     description="Road intersections (OS Open Roads junctions/roundabouts) counted per H3 cell, keyed by spatial_id.",
     depends_on=("crime_counts",),
     extract_inputs=(ROAD_INTERSECTIONS_TABLE,),

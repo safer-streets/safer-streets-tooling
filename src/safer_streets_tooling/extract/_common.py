@@ -1,7 +1,7 @@
 """Shared helpers for dataset extractors.
 
 Downloading, zip-member extraction, and geometry-column normalisation. The parquet read/write
-primitives that move data between the in-memory *extract* phase and the *assemble* phase live in
+primitives that move data between the in-memory *extract* phase and the *transform* phase live in
 ``safer_streets_core.database`` (``write_geoparquet`` / ``read_geoparquet``).
 
 Geometry is British National Grid (EPSG:27700) everywhere by convention. Sources supplied in another
@@ -16,6 +16,29 @@ import duckdb
 import requests
 from safer_streets_core.utils import data_dir
 from tqdm import tqdm
+
+from safer_streets_tooling.beahiv_grid import cell_id_sql, register_encoder
+from safer_streets_tooling.grids import BEAHIV_ID, H3_ID, H3_RESOLUTION
+
+
+def cell_id_columns(con: duckdb.DuckDBPyConnection, lat: str, lon: str, bng_geom: str) -> str:
+    """SQL for the grid-id columns a point layer carries: ``h3r9_id`` and ``beahiv202_id``.
+
+    Every point extract tags each feature with the cell it falls in on both grids, so the transform can
+    group by a column instead of doing a spatial join, and a consumer can join a feature straight to
+    ``h3r9_geogs`` or ``beahiv202_geogs``. Emitting them from one place keeps the two layers' columns
+    identically named and derived — the H3 id from the WGS-84 lat/lon the h3 extension wants, the
+    BEAHIV id by arithmetic on the BNG point (see :mod:`safer_streets_tooling.beahiv_grid`).
+
+    ``bng_geom`` should be the *same* point the lat/lon describe — for a polygon layer, its centroid —
+    or a feature lands in unrelated cells on the two grids. Registers the BEAHIV encoder on ``con`` as
+    a side effect, so a caller needs nothing but this fragment.
+    """
+    register_encoder(con)
+    return (
+        f"lower(hex(h3_latlng_to_cell({lat}, {lon}, {H3_RESOLUTION}))) AS {H3_ID}, "
+        f"{cell_id_sql(bng_geom)} AS {BEAHIV_ID}"
+    )
 
 
 def raw_dir() -> Path:
