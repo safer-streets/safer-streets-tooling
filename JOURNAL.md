@@ -7,6 +7,62 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## The crime extract notices a superseded archive (and stops crashing on uncoordinated crimes)
+
+**Why** — two faults met in one command. `data extract --only crime_data` died with `TypeError: '<'
+not supported between instances of 'str' and 'NoneType'`, and the archive it was reading was a month
+out of date: the cached `police_uk_crime_data_latest.zip` was reused on sight, so once downloaded it
+was never refreshed. police.uk publishes a new archive around the 15th of the month, and a file dated
+17 Aug held data only to 2026-06 while 2026-07 had been out since mid-September. Every downstream
+output was silently built from last month's crimes.
+
+**What** — two independent changes.
+
+1. *(in [`safer-streets-core`](../safer-streets-core))* `_geo_metadata` no longer sorts NULL among the
+   geometry type names. 260,828 of the 17.8M police.uk crimes (~1.5%) carry no coordinates, so their
+   `geom` is NULL, `list(DISTINCT ST_GeometryType(geom))` returns a NULL element, and
+   `sorted({..., None})` raised. A NULL geometry is legal in GeoParquet and simply contributes no
+   type. The rows are kept, as before: `CRIME_FILTER` already excludes them in the transforms, so the
+   extract stays a faithful copy of the source.
+2. `crime.extract` checks the cached archive is still the published release before reusing it, and
+   re-downloads when it isn't. `_release_due` asks whether a 15th has passed since the file was
+   written; only then does `_published_month` HEAD `latest.zip` *without following the redirect* and
+   read the month out of the `Location` it 302s to (`…/archive/2026-07.zip`), comparing it with the
+   newest month directory inside the cached zip.
+
+**Design decisions**
+
+- **The date gates the check; the server gives the verdict.** Calendar arithmetic alone would re-download
+  1.7GB whenever a release slipped or was skipped, because "it's past the 15th" is not "a new archive
+  exists". Asking the server on every run would be correct but pointlessly chatty. Gating on the 15th
+  means the common run makes no network call at all, and the runs that do make one make exactly one
+  HEAD. The two signals must agree before anything is downloaded.
+- **Identify the cache by what it contains, not by its name or timestamp.** The alternative was to name
+  the download after its release (`archive_path("2026-07")` already supports it) and treat "file
+  missing" as "stale". That orphans the existing 1.7GB file under the old name and makes the check
+  depend on our own naming. Reading the newest `????-??` directory from the zip's central directory
+  costs 0.01s even on a 1.7GB archive, compares the *data* rather than a label, and classifies an
+  archive downloaded before this check existed correctly.
+- **A failed check keeps the cache, an unreadable archive replaces it.** An unreachable server or an
+  unparseable redirect is no evidence of a new release, so the build goes on with what it has rather
+  than starting a 1.7GB download on a transient network error. A file that won't open as a zip is
+  unusable either way, so it is re-downloaded without bothering the server.
+- **`--force-download` still bypasses everything**, so the escape hatch is unchanged.
+
+**Verified**: the core fix has a regression test reproducing the exact `TypeError` (checked that it
+does fail against the pre-fix line). The currency logic is tested against the real failure — a stub
+archive holding 2026-06, written 17 Aug, with the server answering 2026-07 — plus the release-slipped,
+unreachable-server, corrupt-file and no-15th-yet cases; the last asserts the network is not touched at
+all.
+
+**Follow-ups**
+
+- The staleness check only runs for `crime_data`. Other cached downloads (the ONS boundaries, the OS
+  Open Roads and buildings archives) are still reused indefinitely once present, and have no equivalent
+  currency signal wired up.
+- A re-verified-but-unchanged archive is not re-stamped (no `os.utime`), so between the 15th and an
+  actual release every run costs one HEAD. Cheap enough not to warrant the extra state.
+
 ## Fix: the four new BEAHIV counts were built but never written to parquet
 
 **Why** — after re-extracting with `beahiv202_id` on every point layer, `data transform --grid beahiv`

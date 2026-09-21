@@ -1,22 +1,37 @@
 """Tests for the concurrent extract phase (AsyncPipeline wiring)."""
 
 import asyncio
+import os
+from datetime import datetime
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import duckdb
 import pandas as pd
 import pytest
+import requests
 
 from safer_streets_tooling import data_pipeline
 from safer_streets_tooling.async_node import AsyncNode
 from safer_streets_tooling.async_pipeline import AsyncPipeline
-from safer_streets_tooling.extract import build_pipeline, residential_population, run_extract, workplace_population
+from safer_streets_tooling.extract import (
+    build_pipeline,
+    crime,
+    residential_population,
+    run_extract,
+    workplace_population,
+)
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 from safer_streets_tooling.result import Err, Ok
 
 
 def _ctx(tmp_path):
     return ExtractContext(staging=tmp_path)
+
+
+def _unreachable(*args, **kwargs):
+    """A network call the test asserts is never made."""
+    raise AssertionError("the network was contacted")
 
 
 def test_dependency_runs_before_dependent(tmp_path):
@@ -183,6 +198,81 @@ def test_residential_population_missing_api_key_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(residential_population, "api_key", no_key)
     with pytest.raises(RuntimeError, match="NOMIS_API_KEY"):
         residential_population.extract(_ctx(tmp_path))
+
+
+class TestCrimeArchiveCurrency:
+    """The cached police.uk archive is reused only while it is still the published release.
+
+    Two independent signals, and both must agree before 1.7GB is downloaded again: the calendar says
+    a release is *due* (a 15th has passed since the file was written), and the server says one has
+    actually *happened* (``latest.zip`` redirects to a later month than the cache holds).
+    """
+
+    def _archive(self, tmp_path, month, mtime):
+        """A stand-in archive holding data up to ``month``, written at ``mtime``."""
+        path = tmp_path / "police_uk_crime_data_latest.zip"
+        with ZipFile(path, "w") as z:
+            z.writestr(f"{month}/avon-and-somerset-street.csv", "Longitude,Latitude\n")
+        os.utime(path, (mtime.timestamp(), mtime.timestamp()))
+        return path
+
+    def _head(self, monkeypatch, month):
+        """Stub the HEAD so it answers with the 302 to ``month``'s archive, as police.uk does."""
+        location = f"https://policeuk-data.s3.amazonaws.com/archive/{month}.zip"
+        monkeypatch.setattr(crime.requests, "head", lambda *a, **kw: SimpleNamespace(headers={"location": location}))
+
+    @pytest.mark.parametrize(
+        ("now", "due"),
+        [
+            (datetime(2026, 9, 14), False),  # 17 Aug → 14 Sep: no 15th has passed
+            (datetime(2026, 9, 15), True),  # …→ 15 Sep: this month's release is due
+            (datetime(2026, 8, 20), False),  # written after the 15th of its own month
+            (datetime(2027, 1, 3), True),  # months behind; the step back crosses a year end
+        ],
+    )
+    def test_release_due_gates_on_the_15th(self, now, due):
+        assert crime._release_due(datetime(2026, 8, 17, 13, 57).timestamp(), now) is due
+
+    def test_fresh_download_is_not_rechecked(self, tmp_path, monkeypatch):
+        """No 15th since the download means no network call at all — the usual run costs nothing."""
+        archive = self._archive(tmp_path, "2026-07", datetime.now())
+        monkeypatch.setattr(crime.requests, "head", _unreachable)
+        assert crime._is_stale("https://data.police.uk/data/archive/latest.zip", archive) is False
+
+    def test_superseded_archive_is_stale(self, tmp_path, monkeypatch):
+        """The 17 Aug file: a 15th has passed and the server now serves a later month."""
+        archive = self._archive(tmp_path, "2026-06", datetime(2026, 8, 17))
+        self._head(monkeypatch, "2026-07")
+        assert crime._is_stale("https://data.police.uk/data/archive/latest.zip", archive) is True
+
+    def test_overdue_but_unreleased_archive_is_kept(self, tmp_path, monkeypatch):
+        """A release is due but hasn't landed: the server still names the cached month, so no download.
+
+        This is why the date is only a gate — releases slip, and the calendar alone would throw away
+        a perfectly current archive.
+        """
+        archive = self._archive(tmp_path, "2026-06", datetime(2026, 8, 17))
+        self._head(monkeypatch, "2026-06")
+        assert crime._is_stale("https://data.police.uk/data/archive/latest.zip", archive) is False
+
+    def test_unreachable_server_keeps_the_cache(self, tmp_path, monkeypatch):
+        """A failed check is no evidence of a new release; the build goes on with what it has."""
+        archive = self._archive(tmp_path, "2026-06", datetime(2026, 8, 17))
+
+        def boom(*args, **kwargs):
+            raise requests.ConnectionError("no route to host")
+
+        monkeypatch.setattr(crime.requests, "head", boom)
+        assert crime._is_stale("https://data.police.uk/data/archive/latest.zip", archive) is False
+
+    def test_unreadable_archive_is_stale(self, tmp_path, monkeypatch):
+        """A file that won't open as a zip is unusable, so it is replaced without asking the server."""
+        archive = tmp_path / "police_uk_crime_data_latest.zip"
+        archive.write_bytes(b"not a zip")
+        stale = datetime(2026, 8, 17).timestamp()
+        os.utime(archive, (stale, stale))
+        monkeypatch.setattr(crime.requests, "head", _unreachable)
+        assert crime._is_stale("https://data.police.uk/data/archive/latest.zip", archive) is True
 
 
 def test_run_extract_exposed_on_data_pipeline():
