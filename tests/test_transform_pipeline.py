@@ -65,6 +65,7 @@ def test_pipeline_wires_data_dependencies():
     assert pipeline.nodes["beahiv_counts"].dependency_ids == ()  # independent of crime_counts
     assert pipeline.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
     assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_counts", "beahiv_lookups")
+    assert pipeline.nodes["beahiv_descriptions"].dependency_ids == ("beahiv_lookups", "beahiv_geogs")
 
 
 def test_grids_narrow_the_pipeline_to_those_families():
@@ -72,7 +73,7 @@ def test_grids_narrow_the_pipeline_to_those_families():
     con = duckdb.connect()
 
     beahiv_only = build_pipeline(STEPS, con, grids=[Grid.BEAHIV])
-    assert set(beahiv_only.nodes) == {"beahiv_counts", "beahiv_lookups", "beahiv_geogs"}
+    assert set(beahiv_only.nodes) == {"beahiv_counts", "beahiv_lookups", "beahiv_geogs", "beahiv_descriptions"}
     assert beahiv_only.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
 
     two = build_pipeline(STEPS, con, grids=[Grid.H3, Grid.HO])

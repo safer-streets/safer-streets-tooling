@@ -18,6 +18,7 @@ any subset of the grids: ``data transform --grid beahiv``.
 
 from safer_streets_tooling.transform import (
     beahiv_counts,
+    beahiv_descriptions,
     beahiv_geogs,
     beahiv_lookups,
     building_counts,
@@ -53,6 +54,7 @@ STEPS: tuple[TransformStep, ...] = (
     beahiv_counts.STEP,  # independent: the same crime counts on the BEAHIV hex grid
     beahiv_lookups.STEP,  # depends on beahiv_counts: the three lookups on the BEAHIV cells
     beahiv_geogs.STEP,  # depends on beahiv_lookups
+    beahiv_descriptions.STEP,  # depends on beahiv_geogs + beahiv_lookups: names for every cell
 )
 
 

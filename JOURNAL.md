@@ -7,6 +7,54 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Human-readable locations for BEAHIV cells (`beahiv_descriptions`)
+
+**Why** — every BEAHIV cell is identified by a 19-digit id and a set of codes, so an analyst looking at a
+hotspot cannot tell where it is without a map. The ids in `beahiv202_geogs` already resolve to names
+(roads, parks, schools, retail centres, ONS areas); they were being resolved ad hoc in
+`safer-streets-eda` (`hex_descriptions.py`), which is the wrong home for a table other consumers need.
+
+**What** — a `beahiv_descriptions` transform step (`Grid.BEAHIV`, after `beahiv_geogs`) builds
+`beahiv202_descriptions`: per cell, the named components (`road`, `road_pair`, `roads`, `greenspace`,
+`school`, `retail_centre`, `retail_locality`, `character`, ONS names) and two labels assembled from them —
+`short_location` (*"Old Steine / East Street, The Lanes, Brighton and Hove"*, the LSOA name when no road is
+named) and `description` (a sentence). Pure SQL over pipeline outputs; 221,453 cells build in about a
+second.
+
+**Design decisions**
+
+- **Name the cell's main road by class-weighted length, list the roads by raw length.** Pure length makes
+  a long cul-de-sac the "main road" of a high-street cell; weighting by class (motorway 4 … access road
+  0.5) picks the road people would name. `roads` stays by length because it is a listing, not a choice.
+  Ties break on the name so a rebuild is deterministic.
+- **The school is the one sited in the cell, not the geogs' `school_ids`.** Those are walking-isochrone
+  catchments — often the whole cell and its neighbours — so they say nothing about where a cell is. The
+  extract's `beahiv202_id` tag on each school is the site.
+- **The retail centre supplies a locality, the cell supplies its district.** CDRC names read
+  "street; locality; district (region)". Only the locality is used in `short_location`: the street slot
+  often repeats a road, and the district is the *centre's*, which across a boundary is the wrong one
+  (Herne Hill cells were labelled Southwark though they lie in Lambeth). Whether a name has a street slot
+  is judged on its part count *before* repeats are removed ("Corporation Road; Middlesbrough;
+  Middlesbrough" still has one).
+- **"Open space" for parks.** A park inside a town has no built-up land cover, so the urban/suburban
+  shares alone called a golf course in Wimbledon "Rural".
+- **Missing sources drop their clause, not the build.** Every name source is optional, as it is for the
+  lookups; an absent land cover makes `character` NULL (unknown) rather than "Rural", which it would
+  otherwise imply.
+
+**Verified**: 14 new offline tests on synthetic tables. On the real data the step reproduces the eda
+prototype's `road_pair` and `character` exactly for all 221,453 cells; the `short_location` differences
+(~5k) are the district and street-slot fixes above.
+
+**Follow-ups**
+
+- Northern Ireland cells (~12k) get only their district: OS Open Roads and the LSOA names are GB-only,
+  and there is no land cover, so `character` is NULL there.
+- The step is BEAHIV-only; `build_unit` takes a `SpatialUnit`, so an H3 step is a registry entry away.
+- Friendlier MSOA names (House of Commons Library) would improve `description`; not an extract yet.
+- Landmark names ("Piccadilly Circus") are not in any extract; an LLM batch labeller built on this table
+  was prototyped in `safer-streets-eda` (`hex_labels_batch.py`) and left there.
+
 ## The crime extract notices a superseded archive (and stops crashing on uncoordinated crimes)
 
 **Why** — two faults met in one command. `data extract --only crime_data` died with `TypeError: '<'
