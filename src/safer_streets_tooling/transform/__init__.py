@@ -27,6 +27,7 @@ from safer_streets_tooling.transform import (
     geography_counts,
     geogs,
     hotspot_counts,
+    hotspot_descriptions,
     hotspot_geogs,
     hotspot_lookups,
     overlap_lookups,
@@ -51,6 +52,7 @@ STEPS: tuple[TransformStep, ...] = (
     hotspot_counts.STEP,  # independent: the same counts on the hotspot hexes (their own grid)
     hotspot_lookups.STEP,  # independent: the three lookups on the hotspot hexes
     hotspot_geogs.STEP,  # depends on hotspot_lookups
+    hotspot_descriptions.STEP,  # depends on hotspot_geogs + hotspot_lookups: names for every hex
     beahiv_counts.STEP,  # independent: the same crime counts on the BEAHIV hex grid
     beahiv_lookups.STEP,  # depends on beahiv_counts: the three lookups on the BEAHIV cells
     beahiv_geogs.STEP,  # depends on beahiv_lookups
