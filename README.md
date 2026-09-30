@@ -78,6 +78,8 @@ other grid; see [Spatial units](#spatial-units) for why the grid is there at all
 The BEAHIV family ends with `beahiv_descriptions`, which resolves the ids in `beahiv202_geogs` and its
 lookups to names and gives every cell a human-readable `short_location` (*"Old Steine / East Street, The
 Lanes, Brighton and Hove"*, or the LSOA name where no road is named) and a sentence-long `description`.
+`hotspot_descriptions` runs the same query over `hotspots_geogs` to give `hotspots_descriptions` — without
+the school clause, since schools carry no hotspot-hex tag — which, like every hotspot table, never syncs.
 
 ```mermaid
 flowchart LR
@@ -121,6 +123,7 @@ flowchart LR
    hotspot_counts["hotspots_*_counts"]
    hotspot_lookups["hotspots_*_lookup"]
    hotspots_geogs
+   hotspots_descriptions
    beahiv202_crime_counts
    beahiv_counts_other["beahiv202_*_counts"]
    beahiv_lookups["beahiv202_*_lookup"]
@@ -185,6 +188,14 @@ flowchart LR
     open_roads --> hotspot_lookups
     retail_centres --> hotspot_lookups
     hotspot_lookups --> hotspots_geogs
+    hotspots_geogs --> hotspots_descriptions
+    hotspot_lookups --> hotspots_descriptions
+    open_roads --> hotspots_descriptions
+    open_greenspace --> hotspots_descriptions
+    retail_centres --> hotspots_descriptions
+    local_authority_districts --> hotspots_descriptions
+    msoa_2021 --> hotspots_descriptions
+    lsoa_2021 --> hotspots_descriptions
 
     %% transform edges: the same relations on the BEAHIV grid (its cells come from its own counts)
     crime_data --> beahiv202_crime_counts
@@ -219,7 +230,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv202,hotspots extract;
-    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,beahiv202_crime_counts,beahiv_lookups,beahiv202_geogs,beahiv202_descriptions transform;
+    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,hotspots_descriptions,beahiv202_crime_counts,beahiv_lookups,beahiv202_geogs,beahiv202_descriptions transform;
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the per-cell
@@ -365,6 +376,7 @@ respects `depends_on`:
 | `hotspot_counts` | [hotspot_counts.py](src/safer_streets_tooling/transform/hotspot_counts.py) | `ho` | `hotspots_crime_counts`, `hotspots_{streetlight,building,population,road_intersection}_counts` | — |
 | `hotspot_lookups` | [hotspot_lookups.py](src/safer_streets_tooling/transform/hotspot_lookups.py) | `ho` | `hotspots_{name}_lookup`, `hotspots_retail_centre_lookup` (the `hotspots_{key}_lookup` stay in memory) | — |
 | `hotspot_geogs` | [hotspot_geogs.py](src/safer_streets_tooling/transform/hotspot_geogs.py) | `ho` | `hotspots_geogs` | `hotspot_lookups` |
+| `hotspot_descriptions` | [hotspot_descriptions.py](src/safer_streets_tooling/transform/hotspot_descriptions.py) | `ho` | `hotspots_descriptions` (as `beahiv202_descriptions`, without `school`) | `hotspot_lookups`, `hotspot_geogs` |
 | `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `beahiv` | `beahiv202_crime_counts`, `beahiv202_{streetlight,building,population,road_intersection}_counts` | — |
 | `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv` | `beahiv202_{name}_lookup`, `beahiv202_retail_centre_lookup` (the `beahiv202_{key}_lookup` stay in memory) | `beahiv_counts` |
 | `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `beahiv202_geogs` | `beahiv_counts`, `beahiv_lookups` |

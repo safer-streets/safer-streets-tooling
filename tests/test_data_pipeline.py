@@ -1075,6 +1075,7 @@ def test_sync_includes_the_root_index_parquet(monkeypatch, tmp_path):
         "transform/hotspots_lad24cd_lookup.parquet",
         "transform/hotspots_crime_counts.parquet",  # counts aggregated onto the unit
         "transform/hotspots_streetlight_counts.parquet",
+        "transform/hotspots_descriptions.parquet",  # names the hexes: as confidential as the hexes
     ],
 )
 def test_local_only_names_are_recognised(name):

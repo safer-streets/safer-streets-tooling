@@ -7,6 +7,39 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Human-readable locations for hotspot hexes (`hotspot_descriptions`)
+
+**Why** — the Home Office hotspot hexes are the grid analysts actually triage, and they were left with ids
+and codes only; `beahiv202_descriptions` showed the labels are useful, and nothing in its query is specific
+to BEAHIV.
+
+**What** — a `hotspot_descriptions` step (`Grid.HO`, after `hotspot_geogs`) calls the existing
+`beahiv_descriptions.build_unit` with `HOTSPOT_UNIT`, building `hotspots_descriptions` from
+`hotspots_geogs` and the hotspot lookups — same columns and labels as the BEAHIV table.
+
+**Design decisions**
+
+- **Reuse `build_unit` in place, don't move it.** It reads only `{unit.key}`-named relations, so it was
+  already grid-generic; a new step module that calls it mirrors how `hotspot_geogs` reuses
+  `geogs.build_unit`. Moving it to a neutral `descriptions.py` was considered and rejected as churn for no
+  behavioural gain — revisit if a third grid adopts it.
+- **A separate step, not a second grid in the BEAHIV one.** Steps may only depend on their own grid family
+  (so `--grid` subsets stay sound), and one module exposes one `STEP`.
+- **Read the built `hotspots_geogs`, no spatial join.** Everything the labels need is in the geogs and
+  lookups; placing features in hexes again would duplicate the lookups' work.
+- **No school clause on hotspots.** The school is the one *sited* in the cell, found via the cell-id tag the
+  point extracts carry (`beahiv202_id`); there is no hotspot tag. The `school_ids` in `hotspots_geogs` are
+  walking catchments, which would silently change "near X" to "within walking distance of X". The existing
+  missing-source path already returns no school, so this needed no code; `schools` is left out of the
+  step's `extract_inputs` since it cannot affect the output.
+- **Local-only by name.** `hotspots_descriptions` names the confidential hexes, so it must not sync;
+  `is_local_only` already matches the `hotspots_` prefix, so a test case pins that rather than new code.
+
+**Follow-ups**
+
+- If school proximity matters on hotspots, a spatial join of school sites to the hexes (or a catchment
+  clause worded differently) would restore it.
+
 ## Human-readable locations for BEAHIV cells (`beahiv_descriptions`)
 
 **Why** — every BEAHIV cell is identified by a 19-digit id and a set of codes, so an analyst looking at a

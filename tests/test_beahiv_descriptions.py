@@ -1,4 +1,5 @@
-"""Tests for ``beahiv202_descriptions``: the human-readable labels built from the geogs and their lookups.
+"""Tests for ``beahiv202_descriptions`` / ``hotspots_descriptions``: the human-readable labels built from the
+geogs and their lookups.
 
 The contract: every cell of ``beahiv202_geogs`` gets exactly one row with a non-empty ``short_location``
 ("main road / second road, locality, own LAD", else the LSOA name) and ``description``; names are resolved
@@ -10,7 +11,8 @@ import duckdb
 import pytest
 
 from safer_streets_tooling.beahiv_grid import KEY
-from safer_streets_tooling.transform import STEPS, beahiv, beahiv_descriptions
+from safer_streets_tooling.transform import STEPS, beahiv, beahiv_descriptions, hotspot_descriptions, hotspots
+from safer_streets_tooling.transform.base import Grid
 
 CELL_AREA = 100_000.0
 BUSY, EMPTY, PARK = 1, 2, 3  # a town-centre cell, a cell with no named roads, a park with no built-up land
@@ -170,3 +172,41 @@ def test_step_gated_on_the_beahiv_grid_and_registered_after_geogs():
     names = [s.name for s in STEPS]
     assert names.index("beahiv_geogs") < names.index("beahiv_descriptions")
     assert set(beahiv_descriptions.STEP.depends_on) == {"beahiv_geogs", "beahiv_lookups"}
+
+
+def test_hotspot_hexes_are_described_by_the_same_query():
+    """The hotspot grid: string hex ids, its own geogs and lookups, and no school (no hex tag on schools)."""
+    con = duckdb.connect()
+    con.execute(f"""
+        CREATE TABLE hotspots_geogs AS SELECT 'hexA' AS spatial_id, 1.0 AS cell_area,
+            'L' AS lad24cd, 'M' AS msoa21cd, 'S' AS lsoa21cd;
+        CREATE TABLE local_authority_districts AS SELECT 'L' AS spatial_id, 'Leeds' AS lad24nm;
+        CREATE TABLE msoa_2021 AS SELECT 'M' AS spatial_id, 'Leeds 045' AS msoa21nm;
+        CREATE TABLE lsoa_2021 AS SELECT 'S' AS spatial_id, 'Leeds 045A' AS lsoa21nm;
+        CREATE TABLE open_roads AS SELECT 'r1' AS id, 'Briggate' AS name_1, NULL::VARCHAR AS road_classification_number;
+        CREATE TABLE hotspots_road_network_lookup AS
+            SELECT 'hexA' AS spatial_id, 'r1' AS road_id, 'Local Road' AS type, 100.0 AS overlap_length;
+        -- tagged with its BEAHIV cell only, so it must not surface on the hotspot grid
+        CREATE TABLE schools AS SELECT 1::BIGINT AS {KEY}_id, 'Big Academy' AS establishmentname,
+            900 AS schoolcapacity;
+    """)
+    beahiv_descriptions.build_unit(con, hotspots.HOTSPOT_UNIT, replace=True)
+    row = con.execute("SELECT * FROM hotspots_descriptions").df().iloc[0].to_dict()
+    assert row["spatial_id"] == "hexA"
+    assert row["road"] == "Briggate"
+    assert row["school"] is None
+    assert row["short_location"] == "Briggate, Leeds"
+    assert row["description"] == "on Briggate. Leeds 045."
+
+
+def test_hotspot_step_gated_on_the_hexes_and_registered_after_geogs():
+    con = duckdb.connect()
+    hotspot_descriptions.build(con, True)  # no hotspots extract: a no-op
+    assert hotspot_descriptions.outputs(con) == []
+    con.execute(f"CREATE TABLE {hotspots.HOTSPOTS_TABLE} AS SELECT 'hexA' AS spatial_id")
+    assert hotspot_descriptions.outputs(con) == ["hotspots_descriptions"]
+
+    names = [s.name for s in STEPS]
+    assert names.index("hotspot_geogs") < names.index("hotspot_descriptions")
+    assert set(hotspot_descriptions.STEP.depends_on) == {"hotspot_geogs", "hotspot_lookups"}
+    assert hotspot_descriptions.STEP.grid is Grid.HO

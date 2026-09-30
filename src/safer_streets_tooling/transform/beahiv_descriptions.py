@@ -15,6 +15,10 @@ longest named roads.
 
 Every name source is optional, as it is for the lookups: a missing table or column contributes an empty
 relation, and its clause drops out of the labels.
+
+:func:`build_unit` reads only ``{unit.key}``-named relations, so it serves any grid with a ``*_geogs``:
+:mod:`.hotspot_descriptions` builds ``hotspots_descriptions`` with it (without the school, which is placed
+by a cell-id column only the BEAHIV and H3 grids carry).
 """
 
 import duckdb
@@ -47,7 +51,7 @@ def _empty(geogs: str, columns: str) -> str:
     """A relation with ``geogs``' ``spatial_id`` type and the given typed NULL columns, but no rows.
 
     Stands in for a missing name source. ``spatial_id`` is taken from the geogs rather than typed by hand
-    because it is a BIGINT on BEAHIV and a hex string on H3.
+    because it is a BIGINT on BEAHIV and a hex string on H3 and the hotspot hexes.
     """
     return f"SELECT spatial_id, {columns} FROM {geogs} WHERE false"
 
