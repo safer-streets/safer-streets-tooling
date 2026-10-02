@@ -306,7 +306,7 @@ absence). Registry order respects `depends_on`:
 | Dataset(s) | Module | Required? | Depends on |
 | ---------- | ------ | --------- | ---------- |
 | `crime_data` | [crime.py](src/safer_streets_tooling/extract/crime.py) | yes | — |
-| `crime_coverage` | [crime.py](src/safer_streets_tooling/extract/crime.py) | no | `crime_data` (counts per force × month × crime type, zero-filled so reporting gaps show) |
+| `crime_coverage` | [crime.py](src/safer_streets_tooling/extract/crime.py) | no | `crime_data` (counts per force × month × crime type, zero-filled so reporting gaps show; forces from the police.uk API, so absent ones such as GMP are included) |
 | 5 ONS boundary tables | [boundaries.py](src/safer_streets_tooling/extract/boundaries.py) | yes | — |
 | `open_greenspace` | [greenspace.py](src/safer_streets_tooling/extract/greenspace.py) | no | — |
 | `land_cover` | [land_cover.py](src/safer_streets_tooling/extract/land_cover.py) | no | — |

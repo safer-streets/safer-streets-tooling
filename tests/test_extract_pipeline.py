@@ -275,13 +275,8 @@ class TestCrimeArchiveCurrency:
         assert crime._is_stale("https://data.police.uk/data/archive/latest.zip", archive) is True
 
 
-def test_crime_coverage_has_a_row_for_every_force_month_and_type(tmp_path):
-    """Gaps in the source show up as zero rows, not missing ones.
-
-    Bravo submitted nothing for 2026-02, and nobody reported a Burglary in Bravo in 2026-01; both are
-    still rows, with ``n_crimes = 0``. One Alpha crime has no coordinates: it counts towards
-    ``n_crimes`` but not ``n_located``.
-    """
+def _crime_data(tmp_path):
+    """A crime_data parquet for two forces over two months."""
     pd.DataFrame(
         [
             ("Alpha", "2026-01", "Burglary", -1.5, 53.8),
@@ -291,6 +286,27 @@ def test_crime_coverage_has_a_row_for_every_force_month_and_type(tmp_path):
         ],
         columns=["falls_within", "_month", "crime_type", "longitude", "latitude"],
     ).to_parquet(tmp_path / "crime_data.parquet")
+
+
+def _forces_api(monkeypatch, *names):
+    """Stub police.uk's /forces to list ``names``."""
+    response = SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: [{"id": n.lower(), "name": n} for n in names]
+    )
+    monkeypatch.setattr(crime.requests, "get", lambda *a, **kw: response)
+
+
+def test_crime_coverage_has_a_row_for_every_force_month_and_type(tmp_path, monkeypatch):
+    """Gaps in the source show up as zero rows, not missing ones.
+
+    Bravo submitted nothing for 2026-02, and nobody reported a Burglary in Bravo in 2026-01; both are
+    still rows, with ``n_crimes = 0``. Charlie (think Greater Manchester Police) is listed by police.uk
+    but absent from the archive, so it is all zeros. Bravo (think British Transport Police) is in the
+    archive but not the API's list, and is kept. One Alpha crime has no coordinates: it counts towards
+    ``n_crimes`` but not ``n_located``.
+    """
+    _crime_data(tmp_path)
+    _forces_api(monkeypatch, "Alpha", "Charlie")
 
     try:
         crime.extract_coverage(_ctx(tmp_path))
@@ -309,7 +325,27 @@ def test_crime_coverage_has_a_row_for_every_force_month_and_type(tmp_path):
         ("Bravo", "2026-01", "Robbery"): (1, 1),
         ("Bravo", "2026-02", "Burglary"): (0, 0),
         ("Bravo", "2026-02", "Robbery"): (0, 0),
+        ("Charlie", "2026-01", "Burglary"): (0, 0),
+        ("Charlie", "2026-01", "Robbery"): (0, 0),
+        ("Charlie", "2026-02", "Burglary"): (0, 0),
+        ("Charlie", "2026-02", "Robbery"): (0, 0),
     }
+
+
+def test_crime_coverage_without_the_force_list_writes_nothing(tmp_path, monkeypatch):
+    """No force list, no table: one built from the archive alone would silently drop the absent forces.
+
+    The raise makes the (optional) dataset a skip in ``run_extract``.
+    """
+    _crime_data(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise requests.ConnectionError("no route to host")
+
+    monkeypatch.setattr(crime.requests, "get", boom)
+    with pytest.raises(requests.ConnectionError):
+        crime.extract_coverage(_ctx(tmp_path))
+    assert not (tmp_path / "crime_coverage.parquet").exists()
 
 
 def test_run_extract_exposed_on_data_pipeline():

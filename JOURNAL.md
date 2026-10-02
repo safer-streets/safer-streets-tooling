@@ -12,19 +12,34 @@ Write the entry as part of the change, not after the fact.
 **Why** — police.uk coverage is uneven, and nothing in the outputs showed it. In the current archive British
 Transport Police has data for 18 of the 36 months, Gloucestershire for 30 and North Yorkshire for 35. A
 missing month looks just like a month with no crime, so a per-cell trend can drop for reasons that have
-nothing to do with crime.
+nothing to do with crime. Greater Manchester Police is absent from the archive altogether.
 
 **What** — a `crime_coverage` extract dataset (in `crime.py`, depends on `crime_data`) writes one row per
 force × month × crime type with `n_crimes` and `n_located` (crimes with coordinates). Every combination is
-present, zero-filled: on the current data that is 22,176 rows, 389 of them zero, built in about a second.
+present, zero-filled. The forces are the police.uk API's list (`{POLICE_API_BASE_URL}/forces`) combined with
+any found in the data, so GMP is included. On the current data that is 45 forces and 22,680 rows, 893 of
+them zero, built in about a second.
 
 **Design decisions**
 
 - **List every combination, zero-filled, not only the ones present.** The question is "is there data
   here?", and an absent row can't answer it without the reader rebuilding the full grid. The full grid is
-  the cross product of the distinct forces, months and types seen anywhere in the extract, so an
-  all-zero row means "nobody in this force recorded this type this month". That covers both a force that
-  didn't submit and a type it never records. 22k rows costs nothing.
+  the cross product of the forces with the distinct months and types seen anywhere in the extract, so an
+  all-zero row means "nobody in this force recorded this type this month". That covers a force that didn't
+  submit and a type it never records. 22k rows costs nothing.
+- **The force list comes from the police.uk API combined with the data.** The archive can't list a force
+  that is missing from it altogether, so the list has to come from somewhere else. The API names match
+  `falls_within` exactly (checked: 44 each). The API includes GMP but not British Transport Police, which
+  is in the archive, hence combining the two. Alternatives rejected:
+  - *`police_force_areas` boundaries*: offline, but the ONS names differ from the archive's ("Greater
+    Manchester" vs "Greater Manchester Police", "London, City of" vs "City of London Police"), so they need
+    a hand-kept crosswalk, and they still miss BTP and PSNI.
+  - *Core's `Force` literal*: its names convert exactly to the archive's file names via
+    `tokenize_force_name`, but `crime_data` doesn't keep the file name, so this would mean a new `force_id`
+    column and a re-extract of the 1.7GB zip.
+- **No force list, no table.** If the API call fails the extractor raises, so this optional dataset is
+  skipped with a warning. Falling back to the archive's forces would silently drop GMP, which is the
+  failure the table exists to expose. The URL is core's `POLICE_API_BASE_URL`, so core needs no edit.
 - **A second dataset, not a second file from the `crime_data` extract.** The extract pipeline assumes one
   parquet per dataset: caching checks `ctx.parquet(name)`, the `index.parquet` catalogue comes from the
   registry, and `--only` selects by name. A file written on the side would get none of these. Reading
@@ -32,7 +47,7 @@ present, zero-filled: on the current data that is 22,176 rows, 389 of them zero,
 - **Not a transform step.** Steps belong to a grid family and `--grid` selects among them; this summary has
   nothing to do with grids.
 - **`force` is `falls_within`.** `reported_by` equals it on every row of the current archive; `falls_within`
-  is the column the transforms already use.
+  is the column the transforms already use, and its names match the API's.
 - **`n_located` alongside `n_crimes`.** About 1.5% of crimes have no coordinates and `CRIME_FILTER` drops
   them in the transforms, so the located count is what actually reaches the grids.
 - **Outcomes left out.** `last_outcome_category` is about outcomes, not whether data is present.

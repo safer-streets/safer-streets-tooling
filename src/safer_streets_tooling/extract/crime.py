@@ -7,7 +7,7 @@ from zipfile import BadZipFile, ZipFile
 
 import requests
 from safer_streets_core.database import duckdb_connector, write_geoparquet
-from safer_streets_core.utils import archive_path
+from safer_streets_core.utils import POLICE_API_BASE_URL, archive_path
 
 from safer_streets_tooling.config import data_source
 from safer_streets_tooling.extract._common import download, raw_dir
@@ -133,19 +133,36 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  crime_data: {row_count:,} rows")
 
 
+def _police_forces() -> list[str]:
+    """Every force police.uk knows of, by the same name the archive's ``falls_within`` uses.
+
+    The archive can't say which forces are missing from it — a force that submits nothing (currently
+    Greater Manchester Police) simply has no files. The API lists it
+    regardless. Raises on failure: a coverage table that silently left out the absent forces would hide
+    exactly what it exists to show, so skipping the (optional) dataset is the better outcome.
+    """
+    response = requests.get(f"{POLICE_API_BASE_URL}/forces", timeout=30)
+    response.raise_for_status()
+    return [force["name"] for force in response.json()]
+
+
 def extract_coverage(ctx: ExtractContext) -> None:
     """
     Write the ``crime_coverage`` parquet: crime counts for every force × month × crime type.
 
-    Every combination of the forces, months and crime types seen anywhere in ``crime_data`` gets a row,
-    including those with no crimes, so a gap in the source (a force that did not submit a month) is a
+    The forces are those police.uk lists (see :func:`_police_forces`) together with any others found in
+    ``crime_data`` — British Transport Police is in the archive but not the API's force list. Months and
+    crime types are those seen anywhere in ``crime_data``. Every combination gets a row, including those
+    with no crimes, so a gap in the source (a force that did not submit a month, or at all) is a
     queryable ``n_crimes = 0`` rather than an absent row. ``n_located`` counts the crimes with
     coordinates — the ones the transforms can place on a grid.
     """
+    listed = _police_forces()
     crime_pq = ctx.parquet("crime_data")
     con = duckdb_connector(writeable=True)
     try:
-        con.execute(f"""
+        con.execute(
+            f"""
             CREATE TABLE crime_coverage AS
             WITH crimes AS (
                 SELECT falls_within AS force, _month AS month, crime_type, longitude
@@ -158,7 +175,7 @@ def extract_coverage(ctx: ExtractContext) -> None:
             ),
             combinations AS (
                 SELECT force, month, crime_type
-                FROM (SELECT DISTINCT force FROM crimes)
+                FROM (SELECT UNNEST(?::VARCHAR[]) AS force UNION SELECT DISTINCT force FROM crimes)
                 CROSS JOIN (SELECT DISTINCT month FROM crimes)
                 CROSS JOIN (SELECT DISTINCT crime_type FROM crimes)
             )
@@ -171,7 +188,9 @@ def extract_coverage(ctx: ExtractContext) -> None:
             FROM combinations
             LEFT JOIN counts USING (force, month, crime_type)
             ORDER BY force, month, crime_type;
-        """)
+            """,
+            [listed],
+        )
         row_count = con.execute("SELECT COUNT(*) FROM crime_coverage").fetchone()[0]  # ty:ignore[not-subscriptable]
         write_geoparquet(con, "SELECT * FROM crime_coverage", ctx.parquet("crime_coverage"))
     finally:
@@ -191,7 +210,7 @@ DATASETS: tuple[Dataset, ...] = (
         name="crime_coverage",
         table="crime_coverage",
         extract=extract_coverage,
-        description="police.uk crime counts per force × month × crime type, zero where a force reported none.",
+        description="police.uk crime counts per force × month × crime type; zero-filled, incl. forces absent from the archive.",
         geometry=False,
         depends_on=("crime_data",),
     ),
