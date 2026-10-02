@@ -74,7 +74,7 @@ wheels = [
 
 [[package]]
 name = "beahiv"
-version = "1.0.1"
+version = "0.0.2"
 source = { editable = "../beahiv" }
 dependencies = [
     { name = "numpy" },
