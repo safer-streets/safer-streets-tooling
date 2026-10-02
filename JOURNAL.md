@@ -7,6 +7,43 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## A crime coverage table (`crime_coverage`)
+
+**Why** — police.uk coverage is uneven, and nothing in the outputs showed it. In the current archive British
+Transport Police has data for 18 of the 36 months, Gloucestershire for 30 and North Yorkshire for 35. A
+missing month looks just like a month with no crime, so a per-cell trend can drop for reasons that have
+nothing to do with crime.
+
+**What** — a `crime_coverage` extract dataset (in `crime.py`, depends on `crime_data`) writes one row per
+force × month × crime type with `n_crimes` and `n_located` (crimes with coordinates). Every combination is
+present, zero-filled: on the current data that is 22,176 rows, 389 of them zero, built in about a second.
+
+**Design decisions**
+
+- **List every combination, zero-filled, not only the ones present.** The question is "is there data
+  here?", and an absent row can't answer it without the reader rebuilding the full grid. The full grid is
+  the cross product of the distinct forces, months and types seen anywhere in the extract, so an
+  all-zero row means "nobody in this force recorded this type this month". That covers both a force that
+  didn't submit and a type it never records. 22k rows costs nothing.
+- **A second dataset, not a second file from the `crime_data` extract.** The extract pipeline assumes one
+  parquet per dataset: caching checks `ctx.parquet(name)`, the `index.parquet` catalogue comes from the
+  registry, and `--only` selects by name. A file written on the side would get none of these. Reading
+  `crime_data.parquet` back (rather than the 1.7GB zip) takes about 1s.
+- **Not a transform step.** Steps belong to a grid family and `--grid` selects among them; this summary has
+  nothing to do with grids.
+- **`force` is `falls_within`.** `reported_by` equals it on every row of the current archive; `falls_within`
+  is the column the transforms already use.
+- **`n_located` alongside `n_crimes`.** About 1.5% of crimes have no coordinates and `CRIME_FILTER` drops
+  them in the transforms, so the located count is what actually reaches the grids.
+- **Outcomes left out.** `last_outcome_category` is about outcomes, not whether data is present.
+
+**Follow-ups**
+
+- Re-extracting `crime_data` on its own (`--only crime_data`) leaves a cached `crime_coverage.parquet`
+  stale. Every `depends_on` dataset behaves this way today (e.g. `schools` on `open_roads`); a generic fix
+  would compare upstream parquet mtimes in `DatasetExtractNode`, as the transform phase already does with
+  outputs.
+
 ## Human-readable locations for hotspot hexes (`hotspot_descriptions`)
 
 **Why** — the Home Office hotspot hexes are the grid analysts actually triage, and they were left with ids

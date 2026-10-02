@@ -1,4 +1,4 @@
-"""police.uk street-level crime archive → ``crime_data.parquet``."""
+"""police.uk street-level crime archive → ``crime_data.parquet``, summarised in ``crime_coverage.parquet``."""
 
 import re
 from datetime import datetime, timedelta
@@ -133,10 +133,66 @@ def extract(ctx: ExtractContext) -> None:
     print(f"  crime_data: {row_count:,} rows")
 
 
-DATASET = Dataset(
-    name="crime_data",
-    table="crime_data",
-    extract=extract,
-    description="police.uk street-level crimes (date, type, lat/lon, reporting force).",
-    optional=False,
+def extract_coverage(ctx: ExtractContext) -> None:
+    """
+    Write the ``crime_coverage`` parquet: crime counts for every force × month × crime type.
+
+    Every combination of the forces, months and crime types seen anywhere in ``crime_data`` gets a row,
+    including those with no crimes, so a gap in the source (a force that did not submit a month) is a
+    queryable ``n_crimes = 0`` rather than an absent row. ``n_located`` counts the crimes with
+    coordinates — the ones the transforms can place on a grid.
+    """
+    crime_pq = ctx.parquet("crime_data")
+    con = duckdb_connector(writeable=True)
+    try:
+        con.execute(f"""
+            CREATE TABLE crime_coverage AS
+            WITH crimes AS (
+                SELECT falls_within AS force, _month AS month, crime_type, longitude
+                FROM read_parquet('{crime_pq}')
+            ),
+            counts AS (
+                SELECT force, month, crime_type, COUNT(*) AS n_crimes, COUNT(longitude) AS n_located
+                FROM crimes
+                GROUP BY ALL
+            ),
+            combinations AS (
+                SELECT force, month, crime_type
+                FROM (SELECT DISTINCT force FROM crimes)
+                CROSS JOIN (SELECT DISTINCT month FROM crimes)
+                CROSS JOIN (SELECT DISTINCT crime_type FROM crimes)
+            )
+            SELECT
+                force,
+                month,
+                crime_type,
+                COALESCE(n_crimes, 0) AS n_crimes,
+                COALESCE(n_located, 0) AS n_located
+            FROM combinations
+            LEFT JOIN counts USING (force, month, crime_type)
+            ORDER BY force, month, crime_type;
+        """)
+        row_count = con.execute("SELECT COUNT(*) FROM crime_coverage").fetchone()[0]  # ty:ignore[not-subscriptable]
+        write_geoparquet(con, "SELECT * FROM crime_coverage", ctx.parquet("crime_coverage"))
+    finally:
+        con.close()
+    print(f"  crime_coverage: {row_count:,} rows")
+
+
+DATASETS: tuple[Dataset, ...] = (
+    Dataset(
+        name="crime_data",
+        table="crime_data",
+        extract=extract,
+        description="police.uk street-level crimes (date, type, lat/lon, reporting force).",
+        optional=False,
+    ),
+    Dataset(
+        name="crime_coverage",
+        table="crime_coverage",
+        extract=extract_coverage,
+        description="police.uk crime counts per force × month × crime type, zero where a force reported none.",
+        geometry=False,
+        depends_on=("crime_data",),
+    ),
 )

@@ -84,6 +84,7 @@ the school clause, since schools carry no hotspot-hex tag — which, like every 
 ```mermaid
 flowchart LR
    crime_data
+   crime_coverage
    police_force_areas
    local_authority_districts
    msoa_2021
@@ -133,6 +134,7 @@ flowchart LR
    direction LR
 
     %% extract edges
+    crime_data --> crime_coverage
     open_roads --> schools
     local_authority_districts --> imd_scores_pct
     output_areas_2021 --> buildings
@@ -229,7 +231,7 @@ flowchart LR
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
-    class crime_data,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv202,hotspots extract;
+    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv202,hotspots extract;
     class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,hotspots_descriptions,beahiv202_crime_counts,beahiv_lookups,beahiv202_geogs,beahiv202_descriptions transform;
 ```
 
@@ -297,13 +299,14 @@ the contract).
 ## Datasets
 
 One module per dataset under [src/safer_streets_tooling/extract/](src/safer_streets_tooling/extract/),
-each exposing a `DATASET` (or `DATASETS` for the boundary group). Required datasets abort the build if
+each exposing a `DATASET` (or `DATASETS` where one module yields several, e.g. the boundary group). Required datasets abort the build if
 they can't be produced; optional ones are best-effort and skipped (the H3 transforms tolerate their
 absence). Registry order respects `depends_on`:
 
 | Dataset(s) | Module | Required? | Depends on |
 | ---------- | ------ | --------- | ---------- |
 | `crime_data` | [crime.py](src/safer_streets_tooling/extract/crime.py) | yes | — |
+| `crime_coverage` | [crime.py](src/safer_streets_tooling/extract/crime.py) | no | `crime_data` (counts per force × month × crime type, zero-filled so reporting gaps show) |
 | 5 ONS boundary tables | [boundaries.py](src/safer_streets_tooling/extract/boundaries.py) | yes | — |
 | `open_greenspace` | [greenspace.py](src/safer_streets_tooling/extract/greenspace.py) | no | — |
 | `land_cover` | [land_cover.py](src/safer_streets_tooling/extract/land_cover.py) | no | — |

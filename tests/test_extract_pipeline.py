@@ -275,6 +275,43 @@ class TestCrimeArchiveCurrency:
         assert crime._is_stale("https://data.police.uk/data/archive/latest.zip", archive) is True
 
 
+def test_crime_coverage_has_a_row_for_every_force_month_and_type(tmp_path):
+    """Gaps in the source show up as zero rows, not missing ones.
+
+    Bravo submitted nothing for 2026-02, and nobody reported a Burglary in Bravo in 2026-01; both are
+    still rows, with ``n_crimes = 0``. One Alpha crime has no coordinates: it counts towards
+    ``n_crimes`` but not ``n_located``.
+    """
+    pd.DataFrame(
+        [
+            ("Alpha", "2026-01", "Burglary", -1.5, 53.8),
+            ("Alpha", "2026-01", "Burglary", None, None),
+            ("Alpha", "2026-02", "Robbery", -1.5, 53.8),
+            ("Bravo", "2026-01", "Robbery", -1.2, 52.9),
+        ],
+        columns=["falls_within", "_month", "crime_type", "longitude", "latitude"],
+    ).to_parquet(tmp_path / "crime_data.parquet")
+
+    try:
+        crime.extract_coverage(_ctx(tmp_path))
+    except duckdb.HTTPException as e:  # extension download unavailable
+        pytest.skip(f"extension download unavailable: {e}")
+
+    df = pd.read_parquet(tmp_path / "crime_coverage.parquet")
+    assert list(df.columns) == ["force", "month", "crime_type", "n_crimes", "n_located"]
+    counts = {(r.force, r.month, r.crime_type): (r.n_crimes, r.n_located) for r in df.itertuples()}
+    assert counts == {
+        ("Alpha", "2026-01", "Burglary"): (2, 1),
+        ("Alpha", "2026-01", "Robbery"): (0, 0),
+        ("Alpha", "2026-02", "Burglary"): (0, 0),
+        ("Alpha", "2026-02", "Robbery"): (1, 1),
+        ("Bravo", "2026-01", "Burglary"): (0, 0),
+        ("Bravo", "2026-01", "Robbery"): (1, 1),
+        ("Bravo", "2026-02", "Burglary"): (0, 0),
+        ("Bravo", "2026-02", "Robbery"): (0, 0),
+    }
+
+
 def test_run_extract_exposed_on_data_pipeline():
     # data_pipeline re-exports run_extract so the CLI and tests share one entry point
     assert data_pipeline.run_extract is run_extract
