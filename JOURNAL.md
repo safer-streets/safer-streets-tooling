@@ -7,6 +7,32 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Shops in the POI extract
+
+**Why** — peer-hex-explorer wants a count of shops per cell, to replace `retail_centre_distance` (NULL beyond 2km
+for 31% of cells). No extract had shops: `poi` kept only catering, nightlife, hospitals, ATMs and parking, and
+`food_outlets` keeps only catering business types.
+
+**What** — `config/data_sources.json`: 27 Overture shop categories added to `poi.categories`, and the `note`
+says which ones they are. Also fixed `"police station"` to `police_station`. Overture has no category with a
+space, so the extract has never contained a police station. No code changes: `poi.py` already filters on the
+list.
+
+**Design decisions**
+
+- **Every `*_store` basic category, plus `shopping`, `shopping_mall`, `superstore`, `market`,
+  `farmers_market` and `kiosk`.** Taken from a scan of the 2026-09-23.1 release over the E&W bbox: about 490k
+  places, against about 290k for the existing categories. Left out: `coffee_shop` (catering) and
+  `shopping_service` (3 places). `hardware_home_and_garden_store` is the largest (114k) and includes builders'
+  merchants and garden centres. It's kept, because it is still retail.
+- **Same dataset, not a new `shops` one.** The consumer counts shops with the same `COUNT(*) FILTER` it uses for
+  the other POI types, and one extract keeps every POI count on the same Overture release.
+
+**Follow-ups**
+
+- A re-extract pulls the current Overture release, so the existing categories' counts move too. Anything
+  pinned to the old counts (peer-hex-explorer's notebook-parity test) needs its reference regenerated.
+
 ## A crime coverage table (`crime_coverage`)
 
 **Why** — police.uk coverage is uneven, and nothing in the outputs showed it. In the current archive British

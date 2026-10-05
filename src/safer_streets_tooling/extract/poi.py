@@ -41,8 +41,8 @@ def extract(ctx: ExtractContext) -> None:
                 names.primary AS name,
                 addresses[1].postcode AS postcode,
                 basic_category,
-                categories.primary AS primary_category,
-                categories.alternate AS alternate_category
+                taxonomy.primary AS primary_category,
+                taxonomy.alternates AS alternate_category
             FROM reader
             WHERE basic_category = ANY(?)
             """,
