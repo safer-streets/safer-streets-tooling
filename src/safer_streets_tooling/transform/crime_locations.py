@@ -10,11 +10,15 @@ each step that needs it, in the manner of :func:`safer_streets_tooling.transform
 so no step has to depend on another purely to have it built.
 """
 
+import threading
+
 import duckdb
 
 from safer_streets_tooling.transform.base import table_exists
 
 TABLE = "crime_locations"
+
+_ENSURE_LOCK = threading.Lock()
 
 # The crimes that contribute to the counts: geolocated, and not British Transport Police (their crimes
 # are reported against the rail network rather than where they occurred). Defined here rather than
@@ -27,15 +31,20 @@ JOIN_KEYS = ("longitude", "latitude")
 
 
 def ensure(con: duckdb.DuckDBPyConnection) -> None:
-    """Create ``crime_locations`` (one row per distinct snapped coordinate) unless it already exists."""
-    if table_exists(con, TABLE):
-        return
-    con.execute(f"""
-        CREATE TABLE {TABLE} AS
-        SELECT DISTINCT longitude, latitude, geom
-        FROM crime_data
-        WHERE {CRIME_FILTER};
-    """)
+    """Create ``crime_locations`` (one row per distinct snapped coordinate) unless it already exists.
+
+    Locked for the reason given in :func:`.ons_hierarchy.ensure`: concurrent steps would otherwise race to
+    create it.
+    """
+    with _ENSURE_LOCK:
+        if table_exists(con, TABLE):
+            return
+        con.execute(f"""
+            CREATE TABLE {TABLE} AS
+            SELECT DISTINCT longitude, latitude, geom
+            FROM crime_data
+            WHERE {CRIME_FILTER};
+        """)
 
 
 def placed_in(con: duckdb.DuckDBPyConnection, table: str, code: str, source: str | None = None) -> str:

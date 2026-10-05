@@ -115,7 +115,9 @@ class TransformStep:
     names of steps whose relations this one reads. ``extract_inputs`` lists the extract dataset names this
     step reads (their parquet live in the extract dir); together with the output parquet of its
     ``depends_on`` steps they are the step's inputs for staleness checks — the cached output is reused
-    only when it exists *and* is newer than every input.
+    only when it exists *and* is newer than every input. A step with ``default=False`` is left out of a
+    build unless the caller names it in ``include`` (see :func:`~.pipeline.build_pipeline`); the CLI never
+    does, so this is how a deprecated step stays available to code without being built by ``data``.
     """
 
     name: str
@@ -125,6 +127,7 @@ class TransformStep:
     description: str = ""
     depends_on: tuple[str, ...] = field(default_factory=tuple)
     extract_inputs: tuple[str, ...] = field(default_factory=tuple)
+    default: bool = True
 
 
 def create_clause(kind: str, name: str, *, replace: bool) -> str:

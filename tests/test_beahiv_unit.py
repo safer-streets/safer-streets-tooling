@@ -19,8 +19,11 @@ from safer_streets_tooling.transform import (
     STEPS,
     beahiv,
     beahiv_counts,
+    beahiv_geo_lookups,
     beahiv_geogs,
     beahiv_lookups,
+    beahiv_retail_centre_lookups,
+    build_all,
     crime_counts,
     geo_lookups,
     geogs,
@@ -134,31 +137,61 @@ def test_steps_are_a_noop_without_the_counts():
     _crime_counts(con, beahiv_too=False)
 
     assert not beahiv.available(con)
+    beahiv_geo_lookups.build(con, True)
     beahiv_lookups.build(con, True)
     beahiv_geogs.build(con, True)
+    assert beahiv_geo_lookups.outputs(con) == []
     assert beahiv_lookups.outputs(con) == []
     assert beahiv_geogs.outputs(con) == []
 
 
-def test_lookup_and_geogs_steps_build_the_beahiv_relations():
-    """The per-cell lookups and geogs exist for the BEAHIV grid, named by its key."""
-    con = _connect()
-    _crime_counts(con)
+def _retail_centres(con) -> None:
     con.execute("""
         CREATE TABLE retail_centres AS SELECT 'rc1' AS rc_id,
             ST_Buffer(ST_Transform(ST_Point(-1.501, 53.801), 'EPSG:4326', 'EPSG:27700', always_xy := true), 50) AS geom
     """)
 
+
+def _columns(con, table) -> list[str]:
+    return [name for (name,) in con.execute(f"SELECT column_name FROM (DESCRIBE {table})").fetchall()]
+
+
+def test_lookup_and_geogs_steps_build_the_beahiv_relations():
+    """The per-cell lookups and geogs exist for the BEAHIV grid, named by its key. The retail centres are
+    loaded but their lookup is opt-in, so without it geogs has no retail columns."""
+    con = _connect()
+    _crime_counts(con)
+    _retail_centres(con)
+
+    beahiv_geo_lookups.build(con, True)
     beahiv_lookups.build(con, True)
     beahiv_geogs.build(con, True)
 
     # the geography lookups are built (geogs reads them) but not published: their codes are columns of
     # beahiv202_geogs over the same cells, so a parquet each would be the same data twice
-    assert beahiv_lookups.outputs(con) == [f"{KEY}_retail_centre_lookup"]
+    assert beahiv_lookups.outputs(con) == []
     for key in GEOGRAPHY_MAPPINGS:
         assert con.execute(f"SELECT COUNT(*) FROM {KEY}_{key}_lookup").fetchone()[0] > 0
     assert beahiv_geogs.outputs(con) == [f"{KEY}_geogs"]
     assert con.execute(f"SELECT COUNT(*) FROM {KEY}_geogs").fetchone()[0] > 0
+    assert not [c for c in _columns(con, f"{KEY}_geogs") if c.startswith("retail")]
+
+
+def test_opted_in_retail_lookup_adds_the_retail_columns_to_geogs():
+    """The deprecated retail step, when a caller includes it, still yields the nearest centre per cell."""
+    con = _connect()
+    _crime_counts(con)
+    _retail_centres(con)
+
+    beahiv_geo_lookups.build(con, True)
+    beahiv_lookups.build(con, True)
+    beahiv_retail_centre_lookups.build(con, True)
+    beahiv_geogs.build(con, True)
+
+    assert beahiv_retail_centre_lookups.outputs(con) == [f"{KEY}_retail_centre_lookup"]
+    assert _columns(con, f"{KEY}_geogs")[-2:] == ["retail_centre_id", "retail_centre_distance"]
+    assert con.execute(f"SELECT COUNT(retail_centre_id) FROM {KEY}_geogs").fetchone()[0] > 0
+    assert not beahiv_retail_centre_lookups.STEP.default
 
 
 def test_geogs_schema_matches_h3_apart_from_the_id_type():
@@ -176,6 +209,7 @@ def test_geogs_schema_matches_h3_apart_from_the_id_type():
     overlap_lookups.build(con, True)
     retail_centre_lookups.build(con, True)
     geogs.build(con, True)
+    beahiv_geo_lookups.build(con, True)
     beahiv_lookups.build(con, True)
     beahiv_geogs.build(con, True)
 
@@ -201,6 +235,7 @@ def test_cells_land_in_the_right_geography():
     """
     con = _connect()
     _crime_counts(con)
+    beahiv_geo_lookups.build(con, True)
     beahiv_lookups.build(con, True)
 
     per_cell = dict(
@@ -214,13 +249,51 @@ def test_cells_land_in_the_right_geography():
 
 
 def test_steps_registered_in_dependency_order():
-    """beahiv_counts → beahiv_lookups → beahiv_geogs, the H3 chain's shape on the other grid."""
+    """beahiv_counts → beahiv_geo_lookups / beahiv_lookups → beahiv_geogs, the H3 chain's shape on the other grid."""
     names = [step.name for step in STEPS]
     assert names.index("beahiv_counts") < names.index("beahiv_lookups") < names.index("beahiv_geogs")
+    assert names.index("beahiv_counts") < names.index("beahiv_geo_lookups") < names.index("beahiv_geogs")
+    assert beahiv_geo_lookups.STEP.depends_on == ("beahiv_counts",)
     assert beahiv_lookups.STEP.depends_on == ("beahiv_counts",)
     # geogs also lists beahiv_counts directly: the geography lookups between them publish no parquet,
     # so they carry no mtime for the staleness check
-    assert beahiv_geogs.STEP.depends_on == ("beahiv_counts", "beahiv_lookups")
+    assert beahiv_geogs.STEP.depends_on == (
+        "beahiv_counts",
+        "beahiv_geo_lookups",
+        "beahiv_lookups",
+        "beahiv_retail_centre_lookups",
+    )
+    assert names.index("beahiv_counts") < names.index("beahiv_retail_centre_lookups") < names.index("beahiv_geogs")
+
+
+def test_geogs_rebuilds_while_the_overlap_lookups_are_cached(tmp_path):
+    """A cached run must still build the in-memory geography lookups, or a beahiv_geogs rebuild fails.
+
+    Regression: the geography lookups were built inside beahiv_lookups, which is served from its parquet
+    cache when fresh. With beahiv202_geogs.parquet missing, the second run reloaded the overlap lookups,
+    skipped their build — and with it the geography lookups — and beahiv_geogs failed on a missing
+    beahiv202_lad24cd_lookup. As their own step with no outputs, the geography lookups always build.
+    """
+    steps = [beahiv_geo_lookups.STEP, beahiv_lookups.STEP, beahiv_geogs.STEP]
+
+    def run():
+        con = _connect()  # a fresh connection, as a new `data transform` process would have
+        _crime_counts(con)
+        _retail_centres(con)  # loaded but its lookup is opt-in: not part of this run
+        con.execute("""
+            CREATE TABLE open_greenspace AS SELECT 'g1' AS id, 'Public Park' AS function,
+                ST_Buffer(ST_Transform(ST_Point(-1.50, 53.80), 'EPSG:4326', 'EPSG:27700', always_xy := true), 100) AS geom
+        """)
+        build_all(steps, con, tdir=tmp_path)
+        return con
+
+    run()
+    assert (tmp_path / f"{KEY}_greenspace_lookup.parquet").exists()  # beahiv_lookups is cacheable
+    (tmp_path / f"{KEY}_geogs.parquet").unlink()
+
+    con = run()  # beahiv_lookups is now a cache hit; beahiv_geogs must rebuild
+
+    assert con.execute(f"SELECT COUNT(lad24cd) FROM {KEY}_geogs").fetchone()[0] > 0
 
 
 def test_extract_cell_id_columns_tag_the_cell_containing_the_feature():

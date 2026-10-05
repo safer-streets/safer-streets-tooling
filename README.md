@@ -45,15 +45,23 @@ thread); a dependent only starts once its dependencies have produced their parqu
 (`safer_streets_tooling.transform`), each step is likewise an `AsyncNode` keyed by
 its name with `depends_on` edges: the BTP-filtered `h3rN_crime_counts` are aggregated from `crime_data`
 (and `{key}_crime_counts` point-in-polygon against each ONS boundary table);
-every H3 cell is keyed off them, then given one ONS code per geography,
-the overlapping greenspace / land-cover / road features, and its nearest retail centre — all folded
-into `h3rN_geogs`. (For brevity the transform nodes collapse the per-resolution `N`, currently just
-`{9}`; the geography / overlap / retail lookups all draw their cell set from `h3rN_crime_counts`.)
+every H3 cell is keyed off them, then given one ONS code per geography and
+the overlapping greenspace / land-cover / road features — all folded into `h3rN_geogs`. (For brevity the
+transform nodes collapse the per-resolution `N`, currently just `{9}`; the geography / overlap lookups
+all draw their cell set from `h3rN_crime_counts`.)
+
+The nearest-retail-centre lookups (`retail_centre_lookups` and their hotspot / BEAHIV twins, dotted in the
+diagram) are **deprecated and not built by default** (`TransformStep.default=False`): the distance is NULL
+beyond 2 km, about a third of H3 cells, and the POI shop counts replace it. Without them the `*_geogs`
+have no `retail_centre_id` / `retail_centre_distance` columns. Code can still opt in with
+`build_all(..., include={...})`; the `data` CLI never does.
 
 The per-geography lookups (`h3rN_{key}_lookup` and their hotspot / BEAHIV twins) are **build
 intermediates**, materialised in the transform's in-memory DuckDB and never written out: `*_geogs`
 carries every code as a column over exactly the same cells, so publishing both would be the same data
-twice and two places to look for a cell's LSOA. The overlap lookups *are* published, because `*_geogs`
+twice and two places to look for a cell's LSOA. Each grid builds them in a step of its own that declares no
+outputs (`geo_lookups`, `hotspot_geo_lookups`, `beahiv_geo_lookups`). Such a step is never served from the
+cache, so the tables exist whenever a `*_geogs` rebuild needs them. The overlap lookups *are* published, because `*_geogs`
 keeps only an id list and one aggregate measure per layer — the per-feature overlap areas and the
 descriptive columns (greenspace function, road type, school name) live only in the lookup.
 
@@ -76,9 +84,11 @@ Like the H3 family its cells come from its own crime counts, so the chain has th
 other grid; see [Spatial units](#spatial-units) for why the grid is there at all.
 
 The BEAHIV family ends with `beahiv_descriptions`, which resolves the ids in `beahiv202_geogs` and its
-lookups to names and gives every cell a human-readable `short_location` (*"Old Steine / East Street, The
-Lanes, Brighton and Hove"*, or the LSOA name where no road is named) and a sentence-long `description`.
-`hotspot_descriptions` runs the same query over `hotspots_geogs` to give `hotspots_descriptions` — without
+lookups to names and gives every cell a human-readable `short_location` (*"Old Steine / East Street, Brighton
+and Hove"*, or the LSOA name where no road is named) and a sentence-long `description` (*"Suburban, on Epsom
+Road (A24), by Ashtead Park; 12 shops. Mole Valley 001."*). The shop count, `n_shops`, is the `poi` places in a
+shop category (the POI config's `shop_categories`) within the cell; it replaces the old nearest-retail-centre
+clause. `hotspot_descriptions` runs the same query over `hotspots_geogs` to give `hotspots_descriptions` — without
 the school clause, since schools carry no hotspot-hex tag — which, like every hotspot table, never syncs.
 
 ```mermaid
@@ -119,15 +129,19 @@ flowchart LR
    h3_urban_lookup
    h3_suburban_lookup
    h3_road_network_lookup
-   h3_retail_centres_lookup
+   h3_retail_centres_lookup["h3rN_retail_centre_lookup<br/>(deprecated, opt-in)"]
    h3r9_geogs
    hotspot_counts["hotspots_*_counts"]
-   hotspot_lookups["hotspots_*_lookup"]
+   hotspot_geo_lookups["hotspots_{key}_lookup<br/>(in-memory, not published)"]
+   hotspot_lookups["hotspots_{name}_lookup"]
+   hotspots_retail_centre_lookup["hotspots_retail_centre_lookup<br/>(deprecated, opt-in)"]
    hotspots_geogs
    hotspots_descriptions
    beahiv202_crime_counts
    beahiv_counts_other["beahiv202_*_counts"]
-   beahiv_lookups["beahiv202_*_lookup"]
+   beahiv_geo_lookups["beahiv202_{key}_lookup<br/>(in-memory, not published)"]
+   beahiv_lookups["beahiv202_{name}_lookup"]
+   beahiv202_retail_centre_lookup["beahiv202_retail_centre_lookup<br/>(deprecated, opt-in)"]
    beahiv202_geogs
    beahiv202_descriptions
 
@@ -164,13 +178,14 @@ flowchart LR
     land_cover --> h3_urban_lookup
     land_cover --> h3_suburban_lookup
     open_roads --> h3_road_network_lookup
-    retail_centres --> h3_retail_centres_lookup
+    retail_centres -.-> h3_retail_centres_lookup
+    h3r9_crime_counts -.-> h3_retail_centres_lookup
     h3_geogs_lookup --> h3r9_geogs
     h3_greenspace_lookup --> h3r9_geogs
     h3_urban_lookup --> h3r9_geogs
     h3_suburban_lookup --> h3r9_geogs
     h3_road_network_lookup --> h3r9_geogs
-    h3_retail_centres_lookup --> h3r9_geogs
+    h3_retail_centres_lookup -.-> h3r9_geogs
 
     %% transform edges: the same relations on the hotspot hexes (their own grid, so no crime_counts edge)
     hotspots --> hotspot_counts
@@ -179,22 +194,26 @@ flowchart LR
     buildings --> hotspot_counts
     workplace_population --> hotspot_counts
     residential_population --> hotspot_counts
+    hotspots --> hotspot_geo_lookups
+    police_force_areas --> hotspot_geo_lookups
+    local_authority_districts --> hotspot_geo_lookups
+    msoa_2021 --> hotspot_geo_lookups
+    lsoa_2021 --> hotspot_geo_lookups
+    output_areas_2021 --> hotspot_geo_lookups
     hotspots --> hotspot_lookups
-    police_force_areas --> hotspot_lookups
-    local_authority_districts --> hotspot_lookups
-    msoa_2021 --> hotspot_lookups
-    lsoa_2021 --> hotspot_lookups
-    output_areas_2021 --> hotspot_lookups
     open_greenspace --> hotspot_lookups
     land_cover --> hotspot_lookups
     open_roads --> hotspot_lookups
-    retail_centres --> hotspot_lookups
+    hotspots -.-> hotspots_retail_centre_lookup
+    retail_centres -.-> hotspots_retail_centre_lookup
+    hotspot_geo_lookups --> hotspots_geogs
     hotspot_lookups --> hotspots_geogs
+    hotspots_retail_centre_lookup -.-> hotspots_geogs
     hotspots_geogs --> hotspots_descriptions
     hotspot_lookups --> hotspots_descriptions
     open_roads --> hotspots_descriptions
     open_greenspace --> hotspots_descriptions
-    retail_centres --> hotspots_descriptions
+    poi --> hotspots_descriptions
     local_authority_districts --> hotspots_descriptions
     msoa_2021 --> hotspots_descriptions
     lsoa_2021 --> hotspots_descriptions
@@ -207,23 +226,27 @@ flowchart LR
     workplace_population --> beahiv_counts_other
     residential_population --> beahiv_counts_other
     road_intersections --> beahiv_counts_other
+    beahiv202_crime_counts --> beahiv_geo_lookups
+    police_force_areas --> beahiv_geo_lookups
+    local_authority_districts --> beahiv_geo_lookups
+    msoa_2021 --> beahiv_geo_lookups
+    lsoa_2021 --> beahiv_geo_lookups
+    output_areas_2021 --> beahiv_geo_lookups
     beahiv202_crime_counts --> beahiv_lookups
-    police_force_areas --> beahiv_lookups
-    local_authority_districts --> beahiv_lookups
-    msoa_2021 --> beahiv_lookups
-    lsoa_2021 --> beahiv_lookups
-    output_areas_2021 --> beahiv_lookups
     open_greenspace --> beahiv_lookups
     land_cover --> beahiv_lookups
     open_roads --> beahiv_lookups
-    retail_centres --> beahiv_lookups
+    beahiv202_crime_counts -.-> beahiv202_retail_centre_lookup
+    retail_centres -.-> beahiv202_retail_centre_lookup
+    beahiv_geo_lookups --> beahiv202_geogs
     beahiv_lookups --> beahiv202_geogs
+    beahiv202_retail_centre_lookup -.-> beahiv202_geogs
     beahiv202_geogs --> beahiv202_descriptions
     beahiv_lookups --> beahiv202_descriptions
     open_roads --> beahiv202_descriptions
     open_greenspace --> beahiv202_descriptions
+    poi --> beahiv202_descriptions
     schools --> beahiv202_descriptions
-    retail_centres --> beahiv202_descriptions
     local_authority_districts --> beahiv202_descriptions
     msoa_2021 --> beahiv202_descriptions
     lsoa_2021 --> beahiv202_descriptions
@@ -231,8 +254,10 @@ flowchart LR
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
+    classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
     class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv202,hotspots extract;
-    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_lookups,hotspots_geogs,hotspots_descriptions,beahiv202_crime_counts,beahiv_lookups,beahiv202_geogs,beahiv202_descriptions transform;
+    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,beahiv202_crime_counts,beahiv_geo_lookups,beahiv_lookups,beahiv202_geogs,beahiv202_descriptions transform;
+    class h3_retail_centres_lookup,hotspots_retail_centre_lookup,beahiv202_retail_centre_lookup deprecated;
 ```
 
 Each extract node writes `<name>.parquet`; the **transform** phase turns those into the per-cell
@@ -362,8 +387,9 @@ authoritative national feed — it remains indicative only.
 
 One module per step under [src/safer_streets_tooling/transform/](src/safer_streets_tooling/transform/),
 each exposing a `STEP`. Each step writes the relations it produces out as parquet under
-`data_dir()/transform`; a step whose outputs already exist is skipped unless `--all`. Registry order
-respects `depends_on`:
+`data_dir()/transform`; a step whose outputs already exist is skipped unless `--all`. A step with
+`default=False` (marked *opt-in* below) is left out of every build unless code names it in
+`build_all(..., include=...)`; its dependents then build without it. Registry order respects `depends_on`:
 
 | Step | Module | `--grid` | Outputs | Depends on |
 | ---- | ------ | -------- | ------- | ---------- |
@@ -374,16 +400,20 @@ respects `depends_on`:
 | `road_intersection_counts` | [road_intersection_counts.py](src/safer_streets_tooling/transform/road_intersection_counts.py) | `h3` | `h3r{res}_road_intersection_counts` | `crime_counts` |
 | `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3` | *(none — `h3r{res}_{key}_lookup` stays in memory, folded into `h3r{res}_geogs`)* | `crime_counts` |
 | `overlap_lookups` | [overlap_lookups.py](src/safer_streets_tooling/transform/overlap_lookups.py) | `h3` | `h3r{res}_{name}_lookup` | `crime_counts` |
-| `retail_centre_lookups` | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3` | `h3r{res}_retail_centre_lookup` | `crime_counts` |
-| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3` | `h3r{res}_geogs` | `crime_counts`, `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
+| `retail_centre_lookups` *(deprecated, opt-in)* | [retail_centre_lookups.py](src/safer_streets_tooling/transform/retail_centre_lookups.py) | `h3` | `h3r{res}_retail_centre_lookup` | `crime_counts` |
+| `geogs` | [geogs.py](src/safer_streets_tooling/transform/geogs.py) | `h3` | `h3r{res}_geogs` (+ `retail_centre_id` / `retail_centre_distance` when the retail lookup is included) | `crime_counts`, `geo_lookups`, `overlap_lookups`, `retail_centre_lookups` |
 | `hotspot_counts` | [hotspot_counts.py](src/safer_streets_tooling/transform/hotspot_counts.py) | `ho` | `hotspots_crime_counts`, `hotspots_{streetlight,building,population,road_intersection}_counts` | — |
-| `hotspot_lookups` | [hotspot_lookups.py](src/safer_streets_tooling/transform/hotspot_lookups.py) | `ho` | `hotspots_{name}_lookup`, `hotspots_retail_centre_lookup` (the `hotspots_{key}_lookup` stay in memory) | — |
-| `hotspot_geogs` | [hotspot_geogs.py](src/safer_streets_tooling/transform/hotspot_geogs.py) | `ho` | `hotspots_geogs` | `hotspot_lookups` |
+| `hotspot_geo_lookups` | [hotspot_geo_lookups.py](src/safer_streets_tooling/transform/hotspot_geo_lookups.py) | `ho` | *(none — `hotspots_{key}_lookup` stays in memory, folded into `hotspots_geogs`)* | — |
+| `hotspot_lookups` | [hotspot_lookups.py](src/safer_streets_tooling/transform/hotspot_lookups.py) | `ho` | `hotspots_{name}_lookup` | — |
+| `hotspot_retail_centre_lookups` *(deprecated, opt-in)* | [hotspot_retail_centre_lookups.py](src/safer_streets_tooling/transform/hotspot_retail_centre_lookups.py) | `ho` | `hotspots_retail_centre_lookup` | — |
+| `hotspot_geogs` | [hotspot_geogs.py](src/safer_streets_tooling/transform/hotspot_geogs.py) | `ho` | `hotspots_geogs` | `hotspot_geo_lookups`, `hotspot_lookups`, `hotspot_retail_centre_lookups` |
 | `hotspot_descriptions` | [hotspot_descriptions.py](src/safer_streets_tooling/transform/hotspot_descriptions.py) | `ho` | `hotspots_descriptions` (as `beahiv202_descriptions`, without `school`) | `hotspot_lookups`, `hotspot_geogs` |
 | `beahiv_counts` | [beahiv_counts.py](src/safer_streets_tooling/transform/beahiv_counts.py) | `beahiv` | `beahiv202_crime_counts`, `beahiv202_{streetlight,building,population,road_intersection}_counts` | — |
-| `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv` | `beahiv202_{name}_lookup`, `beahiv202_retail_centre_lookup` (the `beahiv202_{key}_lookup` stay in memory) | `beahiv_counts` |
-| `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `beahiv202_geogs` | `beahiv_counts`, `beahiv_lookups` |
-| `beahiv_descriptions` | [beahiv_descriptions.py](src/safer_streets_tooling/transform/beahiv_descriptions.py) | `beahiv` | `beahiv202_descriptions` (`short_location`, `description` + the named components) | `beahiv_lookups`, `beahiv_geogs` |
+| `beahiv_geo_lookups` | [beahiv_geo_lookups.py](src/safer_streets_tooling/transform/beahiv_geo_lookups.py) | `beahiv` | *(none — `beahiv202_{key}_lookup` stays in memory, folded into `beahiv202_geogs`)* | `beahiv_counts` |
+| `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv` | `beahiv202_{name}_lookup` | `beahiv_counts` |
+| `beahiv_retail_centre_lookups` *(deprecated, opt-in)* | [beahiv_retail_centre_lookups.py](src/safer_streets_tooling/transform/beahiv_retail_centre_lookups.py) | `beahiv` | `beahiv202_retail_centre_lookup` | `beahiv_counts` |
+| `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `beahiv202_geogs` | `beahiv_counts`, `beahiv_geo_lookups`, `beahiv_lookups`, `beahiv_retail_centre_lookups` |
+| `beahiv_descriptions` | [beahiv_descriptions.py](src/safer_streets_tooling/transform/beahiv_descriptions.py) | `beahiv` | `beahiv202_descriptions` (`short_location`, `description` + the named components and `n_shops`) | `beahiv_lookups`, `beahiv_geogs` |
 
 ### Spatial units
 

@@ -1,4 +1,12 @@
-"""``{unit}_retail_centre_lookup`` — each cell's nearest retail centre (within a radius) + distance."""
+"""``{unit}_retail_centre_lookup`` — each cell's nearest retail centre (within a radius) + distance.
+
+Deprecated, and not built by default (``default=False``): the distance is NULL beyond ``RETAIL_RADIUS``,
+which on H3 res 9 is about a third of cells, and the POI shop counts replace it as a measure of retail
+activity. The step stays so code can still opt in (``build_all(..., include=...)``); with it left out,
+the ``*_geogs`` tables have no ``retail_centre_id`` / ``retail_centre_distance`` columns. The BEAHIV and
+hotspot grids have their own opt-in steps, :mod:`.beahiv_retail_centre_lookups` and
+:mod:`.hotspot_retail_centre_lookups`, built from :func:`build_unit`.
+"""
 
 import duckdb
 
@@ -61,7 +69,8 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.H3,
-    description="Per-cell lookup of each H3 cell's nearest retail centre (within 2km) + distance.",
+    description="Deprecated, not built by default: per-cell lookup of each H3 cell's nearest retail centre (within 2km) + distance.",
     depends_on=("crime_counts",),
     extract_inputs=(RETAIL_CENTRES_TABLE,),
+    default=False,
 )

@@ -24,11 +24,15 @@ a build intermediate (in memory, no parquet) and idempotent: :func:`ensure` is c
 needs it, so no step has to depend on another purely to have it built.
 """
 
+import threading
+
 import duckdb
 
 from safer_streets_tooling.transform.base import table_exists
 
 TABLE = "ons_hierarchy"
+
+_ENSURE_LOCK = threading.Lock()
 
 # short code -> boundary table name (the tables created by ons_boundaries.load_all). The single registry
 # of the ONS geographies: `geo_lookups` re-exports it as GEOGRAPHY_MAPPINGS, which is where the rest of
@@ -107,10 +111,17 @@ def ensure(con: duckdb.DuckDBPyConnection) -> None:
     JOIN so every OA keeps a row even where a coastal point falls outside its parent. Raises if more
     than :data:`_MAX_UNRESOLVED` of OAs fail to resolve at any level, which is what a vintage mismatch
     between the boundary layers would look like.
-    """
-    if table_exists(con, TABLE):
-        return
 
+    Safe to call from concurrent transform steps: they run in threads, each on its own cursor of one
+    connection, so without the lock two could both find the table absent and both create it — a DuckDB
+    write-write conflict. The loser waits, then finds it built.
+    """
+    with _ENSURE_LOCK:
+        if not table_exists(con, TABLE):
+            _create(con)
+
+
+def _create(con: duckdb.DuckDBPyConnection) -> None:
     ctes, joins, cols = [], [], [f"base.{BASE_CODE}"]
     for code, table, child in NESTING:
         ctes.append(f"{code}_of AS ({_nest(child, code, table)})")

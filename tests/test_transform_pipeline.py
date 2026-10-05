@@ -34,8 +34,11 @@ def _step(name, build, *, outputs=lambda con: [], grid=Grid.H3, depends_on=(), e
     )
 
 
+RETAIL_STEPS = {"retail_centre_lookups", "hotspot_retail_centre_lookups", "beahiv_retail_centre_lookups"}
+
+
 def test_pipeline_wires_data_dependencies():
-    """crime_counts has no deps; the three lookups depend on it; geogs waits for all three."""
+    """crime_counts has no deps; the lookups depend on it; geogs waits for them."""
     con = duckdb.connect()
     pipeline = build_pipeline(STEPS, con)
 
@@ -44,28 +47,37 @@ def test_pipeline_wires_data_dependencies():
     assert pipeline.nodes["population_counts"].dependency_ids == ()  # independent of crime_counts
     assert pipeline.nodes["geo_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["overlap_lookups"].dependency_ids == ("crime_counts",)
-    assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
     # geogs also waits on crime_counts directly: geo_lookups between them publishes no parquet, so it
     # carries no mtime the staleness check could use
-    assert pipeline.nodes["geogs"].dependency_ids == (
-        "crime_counts",
-        "geo_lookups",
-        "overlap_lookups",
-        "retail_centre_lookups",
-    )
+    assert pipeline.nodes["geogs"].dependency_ids == ("crime_counts", "geo_lookups", "overlap_lookups")
 
     # the hotspot hexes are their own grid (cells come from the extract, not from crime_counts), so
     # only hotspot_geogs waits on anything
     assert pipeline.nodes["hotspot_counts"].dependency_ids == ()
+    assert pipeline.nodes["hotspot_geo_lookups"].dependency_ids == ()
     assert pipeline.nodes["hotspot_lookups"].dependency_ids == ()
-    assert pipeline.nodes["hotspot_geogs"].dependency_ids == ("hotspot_lookups",)
+    assert pipeline.nodes["hotspot_geogs"].dependency_ids == ("hotspot_geo_lookups", "hotspot_lookups")
 
     # the BEAHIV grid takes its cells from its own counts, as the H3 grid does from crime_counts, so
     # its chain is the H3 one's shape on the other grid
     assert pipeline.nodes["beahiv_counts"].dependency_ids == ()  # independent of crime_counts
+    assert pipeline.nodes["beahiv_geo_lookups"].dependency_ids == ("beahiv_counts",)
     assert pipeline.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
-    assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_counts", "beahiv_lookups")
+    assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_counts", "beahiv_geo_lookups", "beahiv_lookups")
     assert pipeline.nodes["beahiv_descriptions"].dependency_ids == ("beahiv_lookups", "beahiv_geogs")
+
+
+def test_retail_centre_lookups_are_opt_in_on_every_grid():
+    """Deprecated: left out of a default build, and each geogs waits on its grid's one only when included."""
+    con = duckdb.connect()
+    assert not RETAIL_STEPS & set(build_pipeline(STEPS, con).nodes)
+
+    pipeline = build_pipeline(STEPS, con, include=RETAIL_STEPS)
+    assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
+    assert pipeline.nodes["geogs"].dependency_ids[-1] == "retail_centre_lookups"
+    assert pipeline.nodes["hotspot_geogs"].dependency_ids[-1] == "hotspot_retail_centre_lookups"
+    assert pipeline.nodes["beahiv_retail_centre_lookups"].dependency_ids == ("beahiv_counts",)
+    assert pipeline.nodes["beahiv_geogs"].dependency_ids[-1] == "beahiv_retail_centre_lookups"
 
 
 def test_grids_narrow_the_pipeline_to_those_families():
@@ -73,12 +85,81 @@ def test_grids_narrow_the_pipeline_to_those_families():
     con = duckdb.connect()
 
     beahiv_only = build_pipeline(STEPS, con, grids=[Grid.BEAHIV])
-    assert set(beahiv_only.nodes) == {"beahiv_counts", "beahiv_lookups", "beahiv_geogs", "beahiv_descriptions"}
+    assert set(beahiv_only.nodes) == {
+        "beahiv_counts",
+        "beahiv_geo_lookups",
+        "beahiv_lookups",
+        "beahiv_geogs",
+        "beahiv_descriptions",
+    }
     assert beahiv_only.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
 
     two = build_pipeline(STEPS, con, grids=[Grid.H3, Grid.HO])
     assert "crime_counts" in two.nodes and "hotspot_geogs" in two.nodes
     assert not any(name.startswith("beahiv") for name in two.nodes)
+
+
+def _noop(con, replace):
+    pass
+
+
+def _opt_in_steps():
+    return [
+        _step("counts", _noop),
+        TransformStep(
+            name="extra", build=_noop, outputs=lambda con: [], grid=Grid.H3, depends_on=("counts",), default=False
+        ),
+        _step("geogs", _noop, depends_on=("counts", "extra")),
+    ]
+
+
+def test_a_non_default_step_is_left_out_and_its_edge_dropped():
+    """default=False keeps a step out of the build; its dependent still builds, without the edge."""
+    pipeline = build_pipeline(_opt_in_steps(), duckdb.connect())
+
+    assert set(pipeline.nodes) == {"counts", "geogs"}
+    assert pipeline.nodes["geogs"].dependency_ids == ("counts",)
+
+
+def test_build_all_runs_without_the_left_out_step():
+    """The dropped edge is not awaited: the dependent runs, and the left-out step's build never does."""
+    built: list[str] = []
+    steps = [
+        _step("counts", lambda con, replace: built.append("counts")),
+        TransformStep(
+            name="extra",
+            build=lambda con, replace: built.append("extra"),
+            outputs=lambda con: [],
+            grid=Grid.H3,
+            depends_on=("counts",),
+            default=False,
+        ),
+        _step("geogs", lambda con, replace: built.append("geogs"), depends_on=("counts", "extra")),
+    ]
+
+    build_all(steps, duckdb.connect())
+
+    assert built == ["counts", "geogs"]
+
+
+def test_include_opts_a_non_default_step_back_in():
+    pipeline = build_pipeline(_opt_in_steps(), duckdb.connect(), include={"extra"})
+
+    assert set(pipeline.nodes) == {"counts", "extra", "geogs"}
+    assert pipeline.nodes["geogs"].dependency_ids == ("counts", "extra")
+
+
+def test_include_still_respects_grids():
+    """include opts a step in, not its grid: a step on an unselected grid stays out."""
+    pipeline = build_pipeline(_opt_in_steps(), duckdb.connect(), grids=[Grid.BEAHIV], include={"extra"})
+
+    assert set(pipeline.nodes) == set()
+
+
+def test_include_rejects_an_unknown_step_name():
+    """A typo would otherwise silently build nothing extra."""
+    with pytest.raises(ValueError, match="no transform step: extar"):
+        build_pipeline(_opt_in_steps(), duckdb.connect(), include={"extar"})
 
 
 def test_registry_rejects_a_cross_grid_dependency():
@@ -785,15 +866,56 @@ def test_population_counts_hotspots_allocates_only_the_hexes_share():
     assert population_counts.hotspot_outputs(con) == ["hotspots_population_counts"]
 
 
+def test_ons_hierarchy_ensure_is_safe_from_concurrent_steps(monkeypatch):
+    """Steps that need ons_hierarchy (the geography lookups on every grid, geography_counts) build it on
+    demand and run concurrently on cursors of one connection. Unlocked, two callers both found it absent
+    and both created it: a DuckDB write-write conflict on `--all`. The create is slowed so the calls
+    certainly overlap; exactly one must build it and every caller must succeed."""
+    import threading
+    import time
+
+    from safer_streets_tooling.transform import ons_hierarchy
+
+    con = _connect()
+    _boundary_tables(con)
+    created: list[int] = []
+    real_create = ons_hierarchy._create
+
+    def slow_create(cur):
+        created.append(1)
+        time.sleep(0.2)
+        real_create(cur)
+
+    monkeypatch.setattr(ons_hierarchy, "_create", slow_create)
+    errors: list[Exception] = []
+
+    def call():
+        try:
+            ons_hierarchy.ensure(con.cursor())
+        except Exception as e:  # a conflict surfaces here, in the losing thread
+            errors.append(e)
+
+    threads = [threading.Thread(target=call) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert created == [1]
+    assert con.execute(f"SELECT COUNT(*) FROM {ons_hierarchy.TABLE}").fetchone()[0] == len(_CITIES)
+
+
 def test_hotspot_lookups_and_geogs_describe_each_hex():
     """The hotspot lookups + geogs are the H3 ones on a different set of cells: each hex maps to the ONS
     code it overlaps most, and hotspots_geogs carries that code plus the hex's own polygon area."""
-    from safer_streets_tooling.transform import hotspot_geogs, hotspot_lookups
+    from safer_streets_tooling.transform import hotspot_geo_lookups, hotspot_geogs, hotspot_lookups
 
     con = _connect()
     _boundary_tables(con)
     _hotspot_table(con, cities=("leeds", "manchester"))
 
+    hotspot_geo_lookups.build(con, True)
     hotspot_lookups.build(con, True)
     hotspot_geogs.build(con, True)
 
@@ -806,18 +928,19 @@ def test_hotspot_lookups_and_geogs_describe_each_hex():
     for area in rows.values():
         assert float(area) == pytest.approx(3.14e6, rel=0.01)  # the 1km-radius fixture polygon, in m²
     # the geography lookups are built but not published — hotspots_geogs carries their codes
+    assert hotspot_geo_lookups.outputs(con) == []
     assert not set(hotspot_lookups.outputs(con)) & {f"hotspots_{key}_lookup" for key in GEOGRAPHY_MAPPINGS}
     assert hotspot_geogs.outputs(con) == ["hotspots_geogs"]
 
 
 def test_hotspot_steps_are_noops_without_the_hotspots_table():
     """Every hotspot step is a clean no-op (no relation, no output) when the optional extract is absent."""
-    from safer_streets_tooling.transform import hotspot_counts, hotspot_geogs, hotspot_lookups
+    from safer_streets_tooling.transform import hotspot_counts, hotspot_geo_lookups, hotspot_geogs, hotspot_lookups
 
     con = _connect()
     _crime_data(con)  # a source layer is present; only the hexes are missing
 
-    for step in (hotspot_counts, hotspot_lookups, hotspot_geogs):
+    for step in (hotspot_counts, hotspot_geo_lookups, hotspot_lookups, hotspot_geogs):
         step.build(con, True)  # must not raise
         assert step.outputs(con) == []
 
