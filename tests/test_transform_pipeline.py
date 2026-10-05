@@ -54,14 +54,16 @@ def test_pipeline_wires_data_dependencies():
     # the hotspot hexes are their own grid (cells come from the extract, not from crime_counts), so
     # only hotspot_geogs waits on anything
     assert pipeline.nodes["hotspot_counts"].dependency_ids == ()
+    assert pipeline.nodes["hotspot_geo_lookups"].dependency_ids == ()
     assert pipeline.nodes["hotspot_lookups"].dependency_ids == ()
-    assert pipeline.nodes["hotspot_geogs"].dependency_ids == ("hotspot_lookups",)
+    assert pipeline.nodes["hotspot_geogs"].dependency_ids == ("hotspot_geo_lookups", "hotspot_lookups")
 
     # the BEAHIV grid takes its cells from its own counts, as the H3 grid does from crime_counts, so
     # its chain is the H3 one's shape on the other grid
     assert pipeline.nodes["beahiv_counts"].dependency_ids == ()  # independent of crime_counts
+    assert pipeline.nodes["beahiv_geo_lookups"].dependency_ids == ("beahiv_counts",)
     assert pipeline.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
-    assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_counts", "beahiv_lookups")
+    assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_counts", "beahiv_geo_lookups", "beahiv_lookups")
     assert pipeline.nodes["beahiv_descriptions"].dependency_ids == ("beahiv_lookups", "beahiv_geogs")
 
 
@@ -83,7 +85,13 @@ def test_grids_narrow_the_pipeline_to_those_families():
     con = duckdb.connect()
 
     beahiv_only = build_pipeline(STEPS, con, grids=[Grid.BEAHIV])
-    assert set(beahiv_only.nodes) == {"beahiv_counts", "beahiv_lookups", "beahiv_geogs", "beahiv_descriptions"}
+    assert set(beahiv_only.nodes) == {
+        "beahiv_counts",
+        "beahiv_geo_lookups",
+        "beahiv_lookups",
+        "beahiv_geogs",
+        "beahiv_descriptions",
+    }
     assert beahiv_only.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
 
     two = build_pipeline(STEPS, con, grids=[Grid.H3, Grid.HO])
@@ -861,12 +869,13 @@ def test_population_counts_hotspots_allocates_only_the_hexes_share():
 def test_hotspot_lookups_and_geogs_describe_each_hex():
     """The hotspot lookups + geogs are the H3 ones on a different set of cells: each hex maps to the ONS
     code it overlaps most, and hotspots_geogs carries that code plus the hex's own polygon area."""
-    from safer_streets_tooling.transform import hotspot_geogs, hotspot_lookups
+    from safer_streets_tooling.transform import hotspot_geo_lookups, hotspot_geogs, hotspot_lookups
 
     con = _connect()
     _boundary_tables(con)
     _hotspot_table(con, cities=("leeds", "manchester"))
 
+    hotspot_geo_lookups.build(con, True)
     hotspot_lookups.build(con, True)
     hotspot_geogs.build(con, True)
 
@@ -879,18 +888,19 @@ def test_hotspot_lookups_and_geogs_describe_each_hex():
     for area in rows.values():
         assert float(area) == pytest.approx(3.14e6, rel=0.01)  # the 1km-radius fixture polygon, in m²
     # the geography lookups are built but not published — hotspots_geogs carries their codes
+    assert hotspot_geo_lookups.outputs(con) == []
     assert not set(hotspot_lookups.outputs(con)) & {f"hotspots_{key}_lookup" for key in GEOGRAPHY_MAPPINGS}
     assert hotspot_geogs.outputs(con) == ["hotspots_geogs"]
 
 
 def test_hotspot_steps_are_noops_without_the_hotspots_table():
     """Every hotspot step is a clean no-op (no relation, no output) when the optional extract is absent."""
-    from safer_streets_tooling.transform import hotspot_counts, hotspot_geogs, hotspot_lookups
+    from safer_streets_tooling.transform import hotspot_counts, hotspot_geo_lookups, hotspot_geogs, hotspot_lookups
 
     con = _connect()
     _crime_data(con)  # a source layer is present; only the hexes are missing
 
-    for step in (hotspot_counts, hotspot_lookups, hotspot_geogs):
+    for step in (hotspot_counts, hotspot_geo_lookups, hotspot_lookups, hotspot_geogs):
         step.build(con, True)  # must not raise
         assert step.outputs(con) == []
 

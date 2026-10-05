@@ -7,6 +7,39 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## BEAHIV / hotspot geography lookups as steps of their own (cache fix)
+
+**Why** — `data transform --grid beahiv` failed with `Table with name beahiv202_lad24cd_lookup does not
+exist`. The geography lookups (`{unit}_{key}_lookup`) are deliberately in memory only, and on the BEAHIV
+and hotspot grids they were built inside `beahiv_lookups` / `hotspot_lookups`. Those steps also publish the
+overlap lookups, so when those parquet were fresh the step was served from the cache and `build` never
+ran. When `*_geogs` then had to rebuild (here because `beahiv202_geogs.parquet` was missing), the tables
+it reads didn't exist. This had been the case since the grids were added. H3 never hit it, because its
+`geo_lookups` is its own step with no outputs.
+
+**What** — new `beahiv_geo_lookups` and `hotspot_geo_lookups` steps, each with no outputs, built from
+`geo_lookups.build_unit`. `beahiv_lookups` / `hotspot_lookups` now build only the overlap lookups, and
+`*_geogs` depend on both. A regression test runs the BEAHIV chain twice against one cache dir, deleting
+`beahiv202_geogs.parquet` in between.
+
+**Design decisions**
+
+- **Mirror H3, with one step and no outputs per grid.** A step with no outputs is never treated as cached
+  (`TransformNode._run` only checks freshness when there are outputs), so it always builds. The structure is
+  now the same on all three grids. The cost is that the BEAHIV / hotspot max-overlap joins run on every
+  transform, even when `*_geogs` is cached, as the H3 ones already do. Rejected: having `*_geogs` build the
+  geography lookups itself. That is cheaper (the joins run only when geogs rebuilds), but it hides a
+  dependency inside a build function and differs from H3.
+- **`beahiv_lookups` / `hotspot_lookups` lose the boundary tables from `extract_inputs`.** The overlap lookups
+  don't read them, so a refreshed boundary layer no longer forces the overlap lookups to rebuild. `*_geogs`
+  still list the boundaries themselves, as before.
+
+**Follow-ups**
+
+- The general hazard remains: any in-memory relation built inside a cacheable step will be missing on a
+  cache hit. The AGENTS.md rule on outputs omitted from `outputs` covers staleness, not this. Worth a line
+  there, or a check in `TransformNode`, at the next design review.
+
 ## Retail centre distance made opt-in and deprecated (`TransformStep.default`)
 
 **Why** — `retail_centre_distance` is NULL beyond the 2 km search radius, which is 31% of H3 res-9 cells, so

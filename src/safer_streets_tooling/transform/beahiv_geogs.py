@@ -32,6 +32,6 @@ STEP = TransformStep(
     description="One row per BEAHIV cell: ONS codes, overlap id lists + measures, cell_area.",
     # beahiv_counts and the boundary layers are read through the geography lookups, which publish no
     # parquet, so this step needs their mtimes itself to notice a refreshed input (see :mod:`.geogs`)
-    depends_on=("beahiv_counts", "beahiv_lookups", "beahiv_retail_centre_lookups"),
+    depends_on=("beahiv_counts", "beahiv_geo_lookups", "beahiv_lookups", "beahiv_retail_centre_lookups"),
     extract_inputs=geo_lookups.STEP.extract_inputs,
 )

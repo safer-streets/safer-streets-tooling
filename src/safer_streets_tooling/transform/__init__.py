@@ -19,6 +19,7 @@ any subset of the grids: ``data transform --grid beahiv``.
 from safer_streets_tooling.transform import (
     beahiv_counts,
     beahiv_descriptions,
+    beahiv_geo_lookups,
     beahiv_geogs,
     beahiv_lookups,
     beahiv_retail_centre_lookups,
@@ -29,6 +30,7 @@ from safer_streets_tooling.transform import (
     geogs,
     hotspot_counts,
     hotspot_descriptions,
+    hotspot_geo_lookups,
     hotspot_geogs,
     hotspot_lookups,
     hotspot_retail_centre_lookups,
@@ -52,14 +54,16 @@ STEPS: tuple[TransformStep, ...] = (
     retail_centre_lookups.STEP,  # depends on crime_counts; deprecated, default=False
     geogs.STEP,  # depends on the three lookups
     hotspot_counts.STEP,  # independent: the same counts on the hotspot hexes (their own grid)
-    hotspot_lookups.STEP,  # independent: the geography + overlap lookups on the hotspot hexes
+    hotspot_geo_lookups.STEP,  # independent: the geography lookups on the hotspot hexes (never cached)
+    hotspot_lookups.STEP,  # independent: the overlap lookups on the hotspot hexes
     hotspot_retail_centre_lookups.STEP,  # independent; deprecated, default=False
-    hotspot_geogs.STEP,  # depends on hotspot_lookups (+ hotspot_retail_centre_lookups)
+    hotspot_geogs.STEP,  # depends on hotspot_geo_lookups + hotspot_lookups (+ hotspot_retail_centre_lookups)
     hotspot_descriptions.STEP,  # depends on hotspot_geogs + hotspot_lookups: names for every hex
     beahiv_counts.STEP,  # independent: the same crime counts on the BEAHIV hex grid
-    beahiv_lookups.STEP,  # depends on beahiv_counts: the geography + overlap lookups on the BEAHIV cells
+    beahiv_geo_lookups.STEP,  # depends on beahiv_counts: the geography lookups on the BEAHIV cells (never cached)
+    beahiv_lookups.STEP,  # depends on beahiv_counts: the overlap lookups on the BEAHIV cells
     beahiv_retail_centre_lookups.STEP,  # depends on beahiv_counts; deprecated, default=False
-    beahiv_geogs.STEP,  # depends on beahiv_lookups (+ beahiv_retail_centre_lookups)
+    beahiv_geogs.STEP,  # depends on beahiv_geo_lookups + beahiv_lookups (+ beahiv_retail_centre_lookups)
     beahiv_descriptions.STEP,  # depends on beahiv_geogs + beahiv_lookups: names for every cell
 )
 

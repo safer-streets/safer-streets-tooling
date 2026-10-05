@@ -28,7 +28,7 @@ STEP = TransformStep(
     outputs=outputs,
     grid=Grid.HO,
     description="One row per hotspot hex: ONS codes, overlap id lists + measures, cell_area.",
-    depends_on=("hotspot_lookups", "hotspot_retail_centre_lookups"),
+    depends_on=("hotspot_geo_lookups", "hotspot_lookups", "hotspot_retail_centre_lookups"),
     # the hexes and the boundary layers are read through the geography lookups, which publish no
     # parquet, so this step needs their mtimes itself to notice a refreshed input (see :mod:`.geogs`)
     extract_inputs=("hotspots", *geo_lookups.STEP.extract_inputs),
