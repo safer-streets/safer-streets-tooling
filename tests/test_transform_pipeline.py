@@ -81,6 +81,69 @@ def test_grids_narrow_the_pipeline_to_those_families():
     assert not any(name.startswith("beahiv") for name in two.nodes)
 
 
+def _noop(con, replace):
+    pass
+
+
+def _opt_in_steps():
+    return [
+        _step("counts", _noop),
+        TransformStep(
+            name="extra", build=_noop, outputs=lambda con: [], grid=Grid.H3, depends_on=("counts",), default=False
+        ),
+        _step("geogs", _noop, depends_on=("counts", "extra")),
+    ]
+
+
+def test_a_non_default_step_is_left_out_and_its_edge_dropped():
+    """default=False keeps a step out of the build; its dependent still builds, without the edge."""
+    pipeline = build_pipeline(_opt_in_steps(), duckdb.connect())
+
+    assert set(pipeline.nodes) == {"counts", "geogs"}
+    assert pipeline.nodes["geogs"].dependency_ids == ("counts",)
+
+
+def test_build_all_runs_without_the_left_out_step():
+    """The dropped edge is not awaited: the dependent runs, and the left-out step's build never does."""
+    built: list[str] = []
+    steps = [
+        _step("counts", lambda con, replace: built.append("counts")),
+        TransformStep(
+            name="extra",
+            build=lambda con, replace: built.append("extra"),
+            outputs=lambda con: [],
+            grid=Grid.H3,
+            depends_on=("counts",),
+            default=False,
+        ),
+        _step("geogs", lambda con, replace: built.append("geogs"), depends_on=("counts", "extra")),
+    ]
+
+    build_all(steps, duckdb.connect())
+
+    assert built == ["counts", "geogs"]
+
+
+def test_include_opts_a_non_default_step_back_in():
+    pipeline = build_pipeline(_opt_in_steps(), duckdb.connect(), include={"extra"})
+
+    assert set(pipeline.nodes) == {"counts", "extra", "geogs"}
+    assert pipeline.nodes["geogs"].dependency_ids == ("counts", "extra")
+
+
+def test_include_still_respects_grids():
+    """include opts a step in, not its grid: a step on an unselected grid stays out."""
+    pipeline = build_pipeline(_opt_in_steps(), duckdb.connect(), grids=[Grid.BEAHIV], include={"extra"})
+
+    assert set(pipeline.nodes) == set()
+
+
+def test_include_rejects_an_unknown_step_name():
+    """A typo would otherwise silently build nothing extra."""
+    with pytest.raises(ValueError, match="no transform step: extar"):
+        build_pipeline(_opt_in_steps(), duckdb.connect(), include={"extar"})
+
+
 def test_registry_rejects_a_cross_grid_dependency():
     """A dependency across families would break a --grid subset (the upstream step is simply absent), so
     the registry refuses one at import time rather than failing mid-build."""

@@ -13,7 +13,7 @@ entries, with each (blocking) step run in a worker thread.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 
 import duckdb
@@ -63,7 +63,9 @@ class TransformNode(AsyncNode[None, None]):
         self._tdir = tdir
         self._replace = replace
         self._rebuild = rebuild
-        super().__init__(*step.depends_on)
+        # the edges are the upstream steps actually in the pipeline, not every declared depends_on: one left
+        # out (by --grid or default=False) would otherwise be awaited as a node that never runs
+        super().__init__(*(dep.name for dep in upstream))
 
     async def execute(self, **deps: Result[None]) -> Result[None]:
         await asyncio.to_thread(self._run)
@@ -115,6 +117,7 @@ def build_pipeline(
     edir: Path | None = None,
     tdir: Path | None = None,
     verbose: bool = False,
+    include: Collection[str] = (),
 ) -> AsyncPipeline:
     """Wire ``steps`` into an :class:`AsyncPipeline`; ``depends_on`` become the graph edges.
 
@@ -123,11 +126,18 @@ def build_pipeline(
     crosses between them — and an edge to a step outside the set is dropped anyway, as with an
     ``--only`` subset in the extract phase.
 
+    A step with ``default=False`` takes part only when its name is in ``include`` (and its grid is
+    selected); its dependents then lose that edge, as above, and build without it. A name in ``include``
+    that matches no step is an error rather than a silent no-op.
+
     When ``tdir`` is given, each node caches its outputs there and reuses them only while they are newer
     than the step's inputs (``extract_inputs`` parquet under ``edir`` + the upstream steps' outputs under
     ``tdir``); a stale or missing output is rebuilt, unless ``rebuild`` forces every step. With
     ``tdir=None`` the relations are built in ``con`` only (no caching)."""
-    selected = [step for step in steps if step.grid in grids]
+    unknown = set(include) - {step.name for step in steps}
+    if unknown:
+        raise ValueError(f"include names no transform step: {', '.join(sorted(unknown))}")
+    selected = [step for step in steps if step.grid in grids and (step.default or step.name in include)]
     by_name = {step.name: step for step in selected}
     pipeline = AsyncPipeline(verbose=verbose)
     for step in selected:
@@ -149,10 +159,12 @@ def build_all(
     edir: Path | None = None,
     tdir: Path | None = None,
     verbose: bool = False,
+    include: Collection[str] = (),
 ) -> None:
     """Run all ``steps`` as an :class:`AsyncPipeline` over the shared connection ``con``.
 
-    ``grids`` narrows the run to those grid families (default: all three; see :func:`build_pipeline`).
+    ``grids`` narrows the run to those grid families (default: all three; see :func:`build_pipeline`), and
+    ``include`` opts in the named ``default=False`` steps.
     The independent lookup steps run concurrently (each on its own ``con.cursor()``); ``geogs`` waits for
     them. As in ``extract.run_extract``, ``AsyncNode.__call__`` captures any exception as ``Err`` so the
     pipeline never aborts mid-flight; each node's result is then unwrapped here, re-raising the first
@@ -162,7 +174,15 @@ def build_all(
     (``CREATE ... IF NOT EXISTS``) rather than rebuilt (``CREATE OR REPLACE``).
     """
     pipeline = build_pipeline(
-        steps, con, grids=grids, replace=replace, rebuild=rebuild, edir=edir, tdir=tdir, verbose=verbose
+        steps,
+        con,
+        grids=grids,
+        replace=replace,
+        rebuild=rebuild,
+        edir=edir,
+        tdir=tdir,
+        verbose=verbose,
+        include=include,
     )
     asyncio.run(pipeline())
     for node_id in pipeline.nodes:
