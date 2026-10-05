@@ -9,10 +9,12 @@ from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # Overture Maps places (POI), streamed from S3 via the overturemaps reader (no API key). The bounding
 # box (England & Wales, WGS-84 xmin/ymin/xmax/ymax) and the kept categories live in
-# config/data_sources.json under the "poi" key.
+# config/data_sources.json under the "poi" key. The shop categories are listed apart so that "is this a shop"
+# has one definition, which the descriptions' shop count reads.
 _POI = data_source("poi")
 POI_BBOX = tuple(_POI["bbox"])
-POI_CATEGORIES = tuple(_POI["categories"])
+SHOP_CATEGORIES = tuple(_POI["shop_categories"])
+POI_CATEGORIES = (*_POI["categories"], *SHOP_CATEGORIES)
 
 
 def extract(ctx: ExtractContext) -> None:

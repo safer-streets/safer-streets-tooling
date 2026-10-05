@@ -20,7 +20,9 @@
       "lounge",
       "parking",
       "police_station",
-      "restaurant",
+      "restaurant"
+    ],
+    "shop_categories": [
       "animal_and_pet_store",
       "arts_crafts_and_hobby_store",
       "books_music_and_video_store",
@@ -49,7 +51,7 @@
       "vehicle_parts_store",
       "warehouse_club_store"
     ],
-    "note": "Overture Maps places (POI), streamed from S3 via the overturemaps reader (no API key). bbox is England & Wales in WGS-84 (xmin, ymin, xmax, ymax). The categories after 'restaurant' are shops: every *_store basic category, plus shopping, shopping_mall, superstore, market, farmers_market and kiosk (not coffee_shop, which is catering)."
+    "note": "Overture Maps places (POI), streamed from S3 via the overturemaps reader (no API key). bbox is England & Wales in WGS-84 (xmin, ymin, xmax, ymax). shop_categories are extracted too and count as shops (poi.SHOP_CATEGORIES): every *_store basic category, plus shopping, shopping_mall, superstore, market, farmers_market and kiosk (not coffee_shop, which is catering)."
   },
   "boundaries": {
     "base_url": "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services",

@@ -4,12 +4,14 @@ geogs and their lookups.
 The contract: every cell of ``beahiv202_geogs`` gets exactly one row with a non-empty ``short_location``
 ("main road / second road, own LAD", else the LSOA name) and ``description``; names are resolved from the
 lookups, a missing name source drops its clause instead of failing the build, and retail centres are not
-described even when the geogs carry the (deprecated, opt-in) nearest-centre columns. Synthetic tables only —
+described even when the geogs carry the (deprecated, opt-in) nearest-centre columns: shops in the cell are
+counted instead. Synthetic tables only —
 offline-safe.
 """
 
 import duckdb
 import pytest
+from safer_streets_core.database import duckdb_connector
 
 from safer_streets_tooling.beahiv_grid import KEY
 from safer_streets_tooling.transform import STEPS, beahiv, beahiv_descriptions, hotspot_descriptions, hotspots
@@ -59,6 +61,11 @@ def con() -> duckdb.DuckDBPyConnection:
         CREATE TABLE retail_centres AS SELECT * FROM (VALUES
             (7, 'Union Street; Broadmead; Bristol (South West; England) - 1', 'Regional Centre')
         ) t(rc_id, rc_name, classification);
+        -- two shops and a bar in the busy cell, one shop in the park, none in the empty cell
+        CREATE TABLE poi AS SELECT * FROM (VALUES
+            ({BUSY}::BIGINT, 'convenience_store'), ({BUSY}, 'fashion_and_apparel_store'), ({BUSY}, 'bar'),
+            ({PARK}, 'kiosk')
+        ) t({KEY}_id, basic_category);
     """)
     beahiv_descriptions.build_unit(con, beahiv.BEAHIV_UNIT, replace=True)
     return con
@@ -89,7 +96,8 @@ def test_description_names_every_component(con):
     row = _row(con, BUSY)
     assert row["character"] == "Urban"
     assert row["school"] == "Big Academy"  # the larger of the two schools sited in the cell
-    assert row["description"] == "Urban, on High Street (A4), near Big Academy. Bristol 008."
+    assert row["n_shops"] == 2  # the bar is not a shop
+    assert row["description"] == "Urban, on High Street (A4), near Big Academy; 2 shops. Bristol 008."
 
 
 def test_unnamed_greenspace_is_ignored_and_small_named_one_is_not_mentioned(con):
@@ -105,13 +113,14 @@ def test_park_is_open_space_and_its_split_sites_are_summed(con):
     assert row["greenspace_share"] == pytest.approx(0.7)
     assert row["character"] == "Open space"
     assert row["road_pair"] == "B3000"  # a numbered road with no name still counts
-    assert row["description"] == "Open space, on B3000, in Castle Park. Bristol 008."
+    assert row["description"] == "Open space, on B3000, in Castle Park; 1 shop. Bristol 008."
     assert row["short_location"] == "B3000, City of Bristol"
 
 
 def test_cell_without_named_roads_falls_back_to_lsoa(con):
     row = _row(con, EMPTY)
     assert row["character"] == "Rural"
+    assert row["n_shops"] == 0  # no shop in the cell: a known zero, and no clause
     assert row["short_location"] == "Wiltshire 005B"
     assert row["description"] == "Rural. Wiltshire 005."
 
@@ -140,8 +149,33 @@ def test_missing_name_sources_drop_their_clauses():
     beahiv_descriptions.build_unit(con, beahiv.BEAHIV_UNIT, replace=True)
     row = _row(con, 1)
     assert row["character"] is None  # unknown without land cover, not "Rural"
+    assert row["n_shops"] is None  # unknown without the poi extract, not zero
     assert row["short_location"] == "Leeds 045A"
     assert row["description"] == "Leeds 045."
+
+
+def test_hotspot_hexes_count_their_shops_by_point_in_polygon():
+    """Places carry no hotspot-hex id, so a hex's shops are the shop places inside its polygon."""
+    try:
+        con = duckdb_connector(writeable=True)
+    except duckdb.HTTPException as e:  # extension download unavailable
+        pytest.skip(f"extension download unavailable: {e}")
+    con.execute("""
+        CREATE TABLE hotspots AS SELECT 'hexA' AS spatial_id, ST_Buffer(ST_Point(1000, 1000), 100) AS geom;
+        CREATE TABLE hotspots_geogs AS SELECT 'hexA' AS spatial_id, 1.0 AS cell_area,
+            'L' AS lad24cd, 'M' AS msoa21cd, 'S' AS lsoa21cd;
+        CREATE TABLE local_authority_districts AS SELECT 'L' AS spatial_id, 'Leeds' AS lad24nm;
+        CREATE TABLE msoa_2021 AS SELECT 'M' AS spatial_id, 'Leeds 045' AS msoa21nm;
+        CREATE TABLE lsoa_2021 AS SELECT 'S' AS spatial_id, 'Leeds 045A' AS lsoa21nm;
+        -- two shops and a bar inside the hex, one shop outside it
+        CREATE TABLE poi AS SELECT category AS basic_category, ST_Point(x, 1000) AS geom FROM (VALUES
+            ('convenience_store', 990), ('bar', 1000), ('kiosk', 1010), ('market', 5000)
+        ) t(category, x);
+    """)
+    beahiv_descriptions.build_unit(con, hotspots.HOTSPOT_UNIT, replace=True)
+    row = con.execute("SELECT n_shops, description FROM hotspots_descriptions").df().iloc[0]
+    assert row["n_shops"] == 2
+    assert row["description"] == "2 shops. Leeds 045."
 
 
 def test_step_gated_on_the_beahiv_grid_and_registered_after_geogs():

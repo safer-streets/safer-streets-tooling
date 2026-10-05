@@ -7,6 +7,38 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Shops replace the retail centre in the descriptions
+
+**Why** — dropping the retail-centre clause from `*_descriptions` lost the one hint of how commercial a cell
+is. The `poi` extract now carries shops, so the descriptions can say that from the cell itself, instead of
+from the distance to a centre that is NULL beyond 2 km.
+
+**What**
+
+- `config/data_sources.json`: the 27 shop categories move from the end of `poi.categories` into their own
+  `poi.shop_categories`, and `extract/poi.py` exposes them as `SHOP_CATEGORIES`. The extract still keeps
+  both lists, so `poi.parquet` is unchanged.
+- `*_descriptions` gain `n_shops` (shop places in the cell) and a clause: "…near Big Academy; 2 shops.
+  Bristol 008." It is left out at zero. `n_shops` is 0 when the cell has none and NULL when there is no
+  `poi` table at all, the same known-zero versus unknown split as land cover.
+
+**Design decisions**
+
+- **A separate `shop_categories` key**, not "everything after `restaurant`" as the previous note said. It is
+  now the single definition of a shop in this repo, and appending a non-shop category can't make it a shop
+  by accident. peer-hex-explorer and safer-streets-eda keep copies of the list, because they deliberately
+  don't depend on tooling.
+- **BEAHIV counts by `beahiv202_id`, hotspots by point-in-polygon.** Every place is tagged with its BEAHIV
+  (and H3) cell at extract, so BEAHIV needs only a `GROUP BY`. Places have no hotspot-hex tag. Unlike the
+  school clause (dropped on hotspots because the only hex-level school data is a walking catchment), a shop
+  is a point, so `ST_Within` against the hex is exact.
+- **A count, not a density or a threshold.** BEAHIV cells are equal-area, so the count already compares
+  across cells; hotspot hexes are near enough equal. "1 shop" in a rural cell is a fact worth saying.
+
+**Follow-ups**
+
+- Rebuild the descriptions (`data transform --grid beahiv --grid ho`) after the POI re-extract.
+
 ## Lock the on-demand shared tables (`ons_hierarchy`, `crime_locations`)
 
 **Why** — `data transform --all` failed with `Catalog write-write conflict on create with ... ons_hierarchy`.
