@@ -7,6 +7,60 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Retail centre distance made opt-in and deprecated (`TransformStep.default`)
+
+**Why** — `retail_centre_distance` is NULL beyond the 2 km search radius, which is 31% of H3 res-9 cells, so
+consumers have to treat a third of the column as missing. peer-hex-explorer is replacing it with per-cell shop
+counts from the `poi` extract (see the POI shops entry). The lookup should stop being built by default without
+being thrown away yet.
+
+**What**
+
+- `TransformStep` gains `default: bool = True`. `build_pipeline` / `build_all` leave out a `default=False`
+  step unless its name is in the new `include` argument. A name in `include` that matches no step is an error.
+- The nearest-retail-centre lookup is now its own `default=False` step on every grid: `retail_centre_lookups`
+  (H3, already a step), plus the new `hotspot_retail_centre_lookups` and `beahiv_retail_centre_lookups`, split
+  out of `hotspot_lookups` / `beahiv_lookups`. Each `*_geogs` step lists its grid's one in `depends_on` and adds
+  `retail_centre_id` / `retail_centre_distance` only when the `{unit}_retail_centre_lookup` view exists.
+- The `*_descriptions` tables no longer describe retail centres: the clause "300 m from …", the retail locality
+  in `short_location`, and the `retail_centre`, `retail_locality`, `retail_class` and `retail_centre_distance`
+  columns are gone.
+- Fixed `TransformNode`: it registered its graph edges from `step.depends_on` rather than from the upstream
+  steps actually in the pipeline. A left-out dependency was awaited as a node that never runs. `--grid` never
+  hit this, because cross-grid dependencies are rejected at import.
+
+**Design decisions**
+
+- **A generic `default` field, not special-casing retail.** "Registry, not control flow": the pipeline knows
+  nothing about retail, and the next deprecated or experimental step uses the same field. Rejected: deleting
+  the steps outright (no way back short of a revert while consumers migrate), and a separate `deprecated`
+  field with a warning (the maintainer preferred the single field; the deprecation is stated in each step's
+  `description`, so the `index.parquet` catalogue shows it).
+- **No CLI flag.** The `data` commands never build a `default=False` step. Opting in is a code path
+  (`build_all(..., include=...)`), which is what the tests use. A CLI flag can be added if anyone actually
+  needs the columns back.
+- **One step per grid.** On BEAHIV and HO the retail lookup was part of the combined `*_lookups` step, and a
+  step-level flag can't switch off part of a step. Splitting it out follows the existing one-module-per-step
+  pattern. The cost is three names to include rather than one.
+- **`geogs` checks for the lookup view, not the `retail_centres` table.** The extract is still loaded when the
+  lookup is left out, so checking the table would join a view that doesn't exist.
+- **Descriptions drop retail completely, rather than using it only when included.** The descriptions read the
+  lookup through the geogs columns, so keeping the clause would have made a description's wording depend on
+  whether an opt-in step ran. Rejected: giving the descriptions their own nearest-centre query within 800 m,
+  which would have kept the labels unchanged (e.g. "Broadmead" in `short_location`) but kept a second copy of
+  the logic being deprecated. Kept: the `retail_centres` extract (optional, default), which the opt-in steps
+  still need.
+
+**Follow-ups**
+
+- **Run `data transform --all` once after merging.** Staleness is checked by file timestamp, and none of the
+  inputs changed, so cached `*_geogs` / `*_descriptions` parquet keep their retail columns until rebuilt.
+- The old `*_retail_centre_lookup` parquet stay in the transform dir, and so in `index` and `sync`, until they
+  are deleted by hand.
+- `*_descriptions` lost four columns, and `*_geogs` two. Check consumers (peer-hex-explorer, the EDA
+  notebooks) before syncing.
+- Delete the three steps, and possibly `default`, once nothing opts in.
+
 ## Shops in the POI extract
 
 **Why** — peer-hex-explorer wants a count of shops per cell, to replace `retail_centre_distance` (NULL beyond 2km

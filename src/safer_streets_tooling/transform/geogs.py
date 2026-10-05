@@ -1,10 +1,10 @@
-"""``{unit}_geogs`` — one row per cell: ONS codes + overlap id lists + nearest retail centre.
+"""``{unit}_geogs`` — one row per cell: ONS codes + overlap id lists (+ nearest retail centre, opt-in).
 
 Scope: a ``*_geogs`` table holds only values that are specific to the *(cell, feature)* pair — i.e.
 things that genuinely vary per cell and can't be recovered from a geography code alone: the ONS codes
 the cell maps to, the cell's overlap with each feature layer (``{prefix}_ids`` +
-``{prefix}_overlap_area`` / ``road_overlap_length``), its ``cell_area``, and its nearest retail centre
-(id + distance).
+``{prefix}_overlap_area`` / ``road_overlap_length``), its ``cell_area``, and — only when the deprecated,
+opt-in retail lookup was built — its nearest retail centre (id + distance).
 
 It deliberately does **not** carry attributes that are a property of a geography the cell already
 references — e.g. IMD scores, which are an LSOA-level attribute. Those stay in their own table and a
@@ -27,7 +27,6 @@ from safer_streets_tooling.transform.base import (
 )
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 from safer_streets_tooling.transform.overlap_lookups import OVERLAP_FEATURES
-from safer_streets_tooling.transform.retail_centre_lookups import RETAIL_CENTRES_TABLE
 
 # the dataset half of this step's relation names: `{grid}_geogs` on every unit it is built for
 DATASET = "geogs"
@@ -56,13 +55,15 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
     list of overlapping features is added along with an aggregate overlap measure: ``{prefix}_overlap_area``
     (m²) is the *largest* single overlap for the polygon layers (greenspace, and the ``urban`` /
     ``suburban`` land-cover splits) — overlapping polygons of different types would double-count if summed —
-    while ``road_overlap_length`` (m) is the *total* road length within the cell. When retail centres are
-    present, the nearest centre's ``retail_centre_id`` and ``retail_centre_distance`` are added.
+    while ``road_overlap_length`` (m) is the *total* road length within the cell. When the unit's deprecated,
+    opt-in retail centre lookup was built (see :mod:`.retail_centre_lookups`), the nearest centre's
+    ``retail_centre_id`` and ``retail_centre_distance`` are added.
     """
     base = _BASE_KEY
     others = [key for key in GEOGRAPHY_MAPPINGS if key != base]
     present = [f for f in OVERLAP_FEATURES if table_exists(con, f.table)]
-    has_retail = table_exists(con, RETAIL_CENTRES_TABLE)
+    # the lookup, not the retail_centres extract: the extract is still loaded when the lookup step is left out
+    has_retail = table_exists(con, f"{unit.key}_retail_centre_lookup")
 
     select_cols = ", ".join([f"base.{base}", *(f"{key}.{key}" for key in others)])
     joins = "\n".join(f"LEFT JOIN {unit.key}_{key}_lookup {key} USING (spatial_id)" for key in others)
@@ -117,7 +118,7 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.H3,
-    description="One row per H3 cell: ONS codes, overlap id lists + measures, cell_area, nearest retail centre.",
+    description="One row per H3 cell: ONS codes, overlap id lists + measures, cell_area.",
     # crime_counts and the boundary tables are listed even though geo_lookups sits between: that step
     # publishes no parquet (its lookups are in-memory), so it carries no mtime for the staleness check
     # and a refreshed cell set or boundary layer would otherwise leave this cached output in place.

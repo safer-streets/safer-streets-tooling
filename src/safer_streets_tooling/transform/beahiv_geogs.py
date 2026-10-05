@@ -1,4 +1,4 @@
-"""``beahiv202_geogs`` — one row per BEAHIV cell: ONS codes + overlap id lists + nearest retail centre.
+"""``beahiv202_geogs`` — one row per BEAHIV cell: ONS codes + overlap id lists (+ nearest retail centre, opt-in).
 
 The BEAHIV counterpart of ``h3r{res}_geogs``: same columns, same scope (see
 :mod:`safer_streets_tooling.transform.geogs`), built by the same query over the BEAHIV lookups — which
@@ -29,9 +29,9 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.BEAHIV,
-    description="One row per BEAHIV cell: ONS codes, overlap id lists + measures, cell_area, nearest retail centre.",
+    description="One row per BEAHIV cell: ONS codes, overlap id lists + measures, cell_area.",
     # beahiv_counts and the boundary layers are read through the geography lookups, which publish no
     # parquet, so this step needs their mtimes itself to notice a refreshed input (see :mod:`.geogs`)
-    depends_on=("beahiv_counts", "beahiv_lookups"),
+    depends_on=("beahiv_counts", "beahiv_lookups", "beahiv_retail_centre_lookups"),
     extract_inputs=geo_lookups.STEP.extract_inputs,
 )

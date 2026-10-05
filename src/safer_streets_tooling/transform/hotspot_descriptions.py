@@ -33,13 +33,12 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.HO,
-    description="One row per hotspot hex: a human-readable short_location and description, plus the named roads, greenspace and retail centre they are built from.",
+    description="One row per hotspot hex: a human-readable short_location and description, plus the named roads and greenspace they are built from.",
     depends_on=("hotspot_lookups", "hotspot_geogs"),
     # no schools: nothing places a school site in a hotspot hex (see the module docstring)
     extract_inputs=(
         "open_roads",
         "open_greenspace",
-        "retail_centres",
         *(GEOGRAPHY_MAPPINGS[k] for k in ("lad24cd", "msoa21cd", "lsoa21cd")),
     ),
 )

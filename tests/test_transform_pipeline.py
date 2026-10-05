@@ -34,8 +34,11 @@ def _step(name, build, *, outputs=lambda con: [], grid=Grid.H3, depends_on=(), e
     )
 
 
+RETAIL_STEPS = {"retail_centre_lookups", "hotspot_retail_centre_lookups", "beahiv_retail_centre_lookups"}
+
+
 def test_pipeline_wires_data_dependencies():
-    """crime_counts has no deps; the three lookups depend on it; geogs waits for all three."""
+    """crime_counts has no deps; the lookups depend on it; geogs waits for them."""
     con = duckdb.connect()
     pipeline = build_pipeline(STEPS, con)
 
@@ -44,15 +47,9 @@ def test_pipeline_wires_data_dependencies():
     assert pipeline.nodes["population_counts"].dependency_ids == ()  # independent of crime_counts
     assert pipeline.nodes["geo_lookups"].dependency_ids == ("crime_counts",)
     assert pipeline.nodes["overlap_lookups"].dependency_ids == ("crime_counts",)
-    assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
     # geogs also waits on crime_counts directly: geo_lookups between them publishes no parquet, so it
     # carries no mtime the staleness check could use
-    assert pipeline.nodes["geogs"].dependency_ids == (
-        "crime_counts",
-        "geo_lookups",
-        "overlap_lookups",
-        "retail_centre_lookups",
-    )
+    assert pipeline.nodes["geogs"].dependency_ids == ("crime_counts", "geo_lookups", "overlap_lookups")
 
     # the hotspot hexes are their own grid (cells come from the extract, not from crime_counts), so
     # only hotspot_geogs waits on anything
@@ -66,6 +63,19 @@ def test_pipeline_wires_data_dependencies():
     assert pipeline.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
     assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_counts", "beahiv_lookups")
     assert pipeline.nodes["beahiv_descriptions"].dependency_ids == ("beahiv_lookups", "beahiv_geogs")
+
+
+def test_retail_centre_lookups_are_opt_in_on_every_grid():
+    """Deprecated: left out of a default build, and each geogs waits on its grid's one only when included."""
+    con = duckdb.connect()
+    assert not RETAIL_STEPS & set(build_pipeline(STEPS, con).nodes)
+
+    pipeline = build_pipeline(STEPS, con, include=RETAIL_STEPS)
+    assert pipeline.nodes["retail_centre_lookups"].dependency_ids == ("crime_counts",)
+    assert pipeline.nodes["geogs"].dependency_ids[-1] == "retail_centre_lookups"
+    assert pipeline.nodes["hotspot_geogs"].dependency_ids[-1] == "hotspot_retail_centre_lookups"
+    assert pipeline.nodes["beahiv_retail_centre_lookups"].dependency_ids == ("beahiv_counts",)
+    assert pipeline.nodes["beahiv_geogs"].dependency_ids[-1] == "beahiv_retail_centre_lookups"
 
 
 def test_grids_narrow_the_pipeline_to_those_families():

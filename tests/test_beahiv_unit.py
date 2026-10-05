@@ -21,6 +21,7 @@ from safer_streets_tooling.transform import (
     beahiv_counts,
     beahiv_geogs,
     beahiv_lookups,
+    beahiv_retail_centre_lookups,
     crime_counts,
     geo_lookups,
     geogs,
@@ -140,25 +141,51 @@ def test_steps_are_a_noop_without_the_counts():
     assert beahiv_geogs.outputs(con) == []
 
 
-def test_lookup_and_geogs_steps_build_the_beahiv_relations():
-    """The per-cell lookups and geogs exist for the BEAHIV grid, named by its key."""
-    con = _connect()
-    _crime_counts(con)
+def _retail_centres(con) -> None:
     con.execute("""
         CREATE TABLE retail_centres AS SELECT 'rc1' AS rc_id,
             ST_Buffer(ST_Transform(ST_Point(-1.501, 53.801), 'EPSG:4326', 'EPSG:27700', always_xy := true), 50) AS geom
     """)
+
+
+def _columns(con, table) -> list[str]:
+    return [name for (name,) in con.execute(f"SELECT column_name FROM (DESCRIBE {table})").fetchall()]
+
+
+def test_lookup_and_geogs_steps_build_the_beahiv_relations():
+    """The per-cell lookups and geogs exist for the BEAHIV grid, named by its key. The retail centres are
+    loaded but their lookup is opt-in, so without it geogs has no retail columns."""
+    con = _connect()
+    _crime_counts(con)
+    _retail_centres(con)
 
     beahiv_lookups.build(con, True)
     beahiv_geogs.build(con, True)
 
     # the geography lookups are built (geogs reads them) but not published: their codes are columns of
     # beahiv202_geogs over the same cells, so a parquet each would be the same data twice
-    assert beahiv_lookups.outputs(con) == [f"{KEY}_retail_centre_lookup"]
+    assert beahiv_lookups.outputs(con) == []
     for key in GEOGRAPHY_MAPPINGS:
         assert con.execute(f"SELECT COUNT(*) FROM {KEY}_{key}_lookup").fetchone()[0] > 0
     assert beahiv_geogs.outputs(con) == [f"{KEY}_geogs"]
     assert con.execute(f"SELECT COUNT(*) FROM {KEY}_geogs").fetchone()[0] > 0
+    assert not [c for c in _columns(con, f"{KEY}_geogs") if c.startswith("retail")]
+
+
+def test_opted_in_retail_lookup_adds_the_retail_columns_to_geogs():
+    """The deprecated retail step, when a caller includes it, still yields the nearest centre per cell."""
+    con = _connect()
+    _crime_counts(con)
+    _retail_centres(con)
+
+    beahiv_lookups.build(con, True)
+    beahiv_retail_centre_lookups.build(con, True)
+    beahiv_geogs.build(con, True)
+
+    assert beahiv_retail_centre_lookups.outputs(con) == [f"{KEY}_retail_centre_lookup"]
+    assert _columns(con, f"{KEY}_geogs")[-2:] == ["retail_centre_id", "retail_centre_distance"]
+    assert con.execute(f"SELECT COUNT(retail_centre_id) FROM {KEY}_geogs").fetchone()[0] > 0
+    assert not beahiv_retail_centre_lookups.STEP.default
 
 
 def test_geogs_schema_matches_h3_apart_from_the_id_type():
@@ -220,7 +247,8 @@ def test_steps_registered_in_dependency_order():
     assert beahiv_lookups.STEP.depends_on == ("beahiv_counts",)
     # geogs also lists beahiv_counts directly: the geography lookups between them publish no parquet,
     # so they carry no mtime for the staleness check
-    assert beahiv_geogs.STEP.depends_on == ("beahiv_counts", "beahiv_lookups")
+    assert beahiv_geogs.STEP.depends_on == ("beahiv_counts", "beahiv_lookups", "beahiv_retail_centre_lookups")
+    assert names.index("beahiv_counts") < names.index("beahiv_retail_centre_lookups") < names.index("beahiv_geogs")
 
 
 def test_extract_cell_id_columns_tag_the_cell_containing_the_feature():

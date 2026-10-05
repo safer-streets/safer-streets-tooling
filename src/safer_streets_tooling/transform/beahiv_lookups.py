@@ -1,6 +1,6 @@
 """``beahiv202_*_lookup`` — the per-cell lookups, built on the BEAHIV 202m hex grid.
 
-The three lookup families (ONS geography code, overlapping feature layers, nearest retail centre) are
+The two lookup families (ONS geography code, overlapping feature layers) are
 the H3 ones with a different set of cells, so this step just calls each module's ``build_unit`` with
 :data:`~safer_streets_tooling.transform.beahiv.BEAHIV_UNIT`. Like the H3 units and unlike the hotspot
 hexes, the cells come from the crime counts, so this waits on ``beahiv_counts``.
@@ -8,10 +8,10 @@ hexes, the cells come from the crime counts, so this waits on ``beahiv_counts``.
 
 import duckdb
 
-from safer_streets_tooling.transform import beahiv, geo_lookups, overlap_lookups, retail_centre_lookups
+from safer_streets_tooling.transform import beahiv, geo_lookups, overlap_lookups
 from safer_streets_tooling.transform.base import Grid, TransformStep
 
-_MODULES = (geo_lookups, overlap_lookups, retail_centre_lookups)
+_MODULES = (geo_lookups, overlap_lookups)
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
@@ -28,10 +28,7 @@ def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
         return []
     # the geography lookups are deliberately absent: they are in-memory intermediates folded into
     # beahiv202_geogs, which carries every code over the same cells (see :mod:`.geo_lookups`)
-    return [
-        *overlap_lookups.unit_outputs(con, beahiv.BEAHIV_UNIT),
-        *retail_centre_lookups.unit_outputs(con, beahiv.BEAHIV_UNIT),
-    ]
+    return overlap_lookups.unit_outputs(con, beahiv.BEAHIV_UNIT)
 
 
 STEP = TransformStep(
@@ -39,11 +36,10 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.BEAHIV,
-    description="Per-cell lookups on the BEAHIV grid: its ONS geography codes (max-overlap), every overlapping feature, and its nearest retail centre.",
+    description="Per-cell lookups on the BEAHIV grid: its ONS geography codes (max-overlap) and every overlapping feature.",
     depends_on=("beahiv_counts",),
     extract_inputs=(
         *geo_lookups.STEP.extract_inputs,
         *overlap_lookups.STEP.extract_inputs,
-        *retail_centre_lookups.STEP.extract_inputs,
     ),
 )

@@ -2,8 +2,8 @@
 :class:`AsyncPipeline`.
 
 Every :class:`~safer_streets_tooling.transform.base.TransformStep` becomes a node keyed by its name;
-``depends_on`` becomes graph edges, so the independent per-cell lookups (geographies, overlap layers,
-nearest retail centre) run concurrently off ``crime_counts`` while ``geogs`` waits for all three. Each
+``depends_on`` becomes graph edges, so the independent per-cell lookups (geographies, overlap layers)
+run concurrently off ``crime_counts`` while ``geogs`` waits for them. Each
 step runs on its own ``con.cursor()`` so concurrent steps don't collide on the single in-memory
 connection. ``AsyncNode.__call__`` turns any exception into an ``Err``, so the pipeline never aborts
 mid-flight; ``build_all`` inspects the results afterwards and re-raises the first failure.

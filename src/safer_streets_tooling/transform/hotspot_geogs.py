@@ -1,4 +1,4 @@
-"""``hotspots_geogs`` — one row per Home Office hotspot hex: ONS codes + overlap id lists + nearest retail centre.
+"""``hotspots_geogs`` — one row per Home Office hotspot hex: ONS codes + overlap id lists (+ nearest retail centre, opt-in).
 
 The hotspot counterpart of ``h3r{res}_geogs``: same columns, same scope (see
 :mod:`safer_streets_tooling.transform.geogs`), built by the same query over the hotspot lookups. Its
@@ -27,8 +27,8 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.HO,
-    description="One row per hotspot hex: ONS codes, overlap id lists + measures, cell_area, nearest retail centre.",
-    depends_on=("hotspot_lookups",),
+    description="One row per hotspot hex: ONS codes, overlap id lists + measures, cell_area.",
+    depends_on=("hotspot_lookups", "hotspot_retail_centre_lookups"),
     # the hexes and the boundary layers are read through the geography lookups, which publish no
     # parquet, so this step needs their mtimes itself to notice a refreshed input (see :mod:`.geogs`)
     extract_inputs=("hotspots", *geo_lookups.STEP.extract_inputs),
