@@ -7,6 +7,34 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Lock the on-demand shared tables (`ons_hierarchy`, `crime_locations`)
+
+**Why** — `data transform --all` failed with `Catalog write-write conflict on create with ... ons_hierarchy`.
+`ons_hierarchy.ensure` checks whether the table exists and creates it if not. It's called by every step that
+needs it (`geography_counts` and the geography lookups on each grid), and those steps run concurrently, in
+threads, on cursors of one connection. Two could both find it absent and both create it. The race was
+always there, but splitting out `beahiv_geo_lookups` / `hotspot_geo_lookups`, which always build, made it
+far more likely.
+
+**What** — `ons_hierarchy.ensure` and `crime_locations.ensure` hold a module-level `threading.Lock` around
+the check and the create. The caller that waits then finds the table built. A test calls `ensure` from four
+threads with a slowed create, and fails with this exact conflict when the lock is removed.
+
+**Design decisions**
+
+- **A lock, not a step.** The textbook fix is a step that builds the table, with the others depending on it.
+  But every grid needs `ons_hierarchy`, and steps can't depend across grids (that rule is what keeps
+  `--grid` safe), so it would take one step per grid all building the same table. A lock keeps "build it on
+  demand, whoever needs it first" without a new edge. It works because every step runs in this one process;
+  it would not protect against two processes, which can't share an in-memory DuckDB anyway.
+- **`crime_locations` too**, though `geography_counts` is its only caller today. It has the same
+  check-then-create shape, and the next caller would bring the bug back.
+
+**Follow-ups**
+
+- Add to the AGENTS.md transform concurrency notes: a shared table built on demand by several steps must
+  be created under a lock.
+
 ## BEAHIV / hotspot geography lookups as steps of their own (cache fix)
 
 **Why** — `data transform --grid beahiv` failed with `Table with name beahiv202_lad24cd_lookup does not

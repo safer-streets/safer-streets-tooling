@@ -866,6 +866,46 @@ def test_population_counts_hotspots_allocates_only_the_hexes_share():
     assert population_counts.hotspot_outputs(con) == ["hotspots_population_counts"]
 
 
+def test_ons_hierarchy_ensure_is_safe_from_concurrent_steps(monkeypatch):
+    """Steps that need ons_hierarchy (the geography lookups on every grid, geography_counts) build it on
+    demand and run concurrently on cursors of one connection. Unlocked, two callers both found it absent
+    and both created it: a DuckDB write-write conflict on `--all`. The create is slowed so the calls
+    certainly overlap; exactly one must build it and every caller must succeed."""
+    import threading
+    import time
+
+    from safer_streets_tooling.transform import ons_hierarchy
+
+    con = _connect()
+    _boundary_tables(con)
+    created: list[int] = []
+    real_create = ons_hierarchy._create
+
+    def slow_create(cur):
+        created.append(1)
+        time.sleep(0.2)
+        real_create(cur)
+
+    monkeypatch.setattr(ons_hierarchy, "_create", slow_create)
+    errors: list[Exception] = []
+
+    def call():
+        try:
+            ons_hierarchy.ensure(con.cursor())
+        except Exception as e:  # a conflict surfaces here, in the losing thread
+            errors.append(e)
+
+    threads = [threading.Thread(target=call) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert created == [1]
+    assert con.execute(f"SELECT COUNT(*) FROM {ons_hierarchy.TABLE}").fetchone()[0] == len(_CITIES)
+
+
 def test_hotspot_lookups_and_geogs_describe_each_hex():
     """The hotspot lookups + geogs are the H3 ones on a different set of cells: each hex maps to the ONS
     code it overlaps most, and hotspots_geogs carries that code plus the hex's own polygon area."""
