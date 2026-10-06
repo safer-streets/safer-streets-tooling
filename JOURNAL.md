@@ -16,7 +16,7 @@ and which one, is the information a reader needs.
 **What**
 
 - `*_descriptions` drop `n_shops` and the shop clause. They gain `retail_centre` (the cleaned centre name)
-  and `retail_class`, with a clause: "…near Big Academy; in Briggate, Leeds (major town centre). Leeds 045."
+  and `retail_class`, with a clause: "…near Big Academy; retail: Briggate, Leeds (major town centre). Leeds 045."
   A cell overlapping no centre, or a build without `retail_centres`, has NULLs and no clause.
 - The steps' `extract_inputs` swap `poi` for `retail_centres`. `poi.shop_categories` / `SHOP_CATEGORIES`
   stay: `poi.parquet` is unchanged and it is still the one definition of a shop.
@@ -33,6 +33,9 @@ and which one, is the information a reader needs.
   them is arbitrary. Doing it in the step needs no new step or DAG edge.
 - **"in" for any overlap, no minimum.** Centres are mostly far smaller than a cell (a small local centre's
   median is ~0.016 km², a hotspot hex ~0.105 km²), so a share-of-cell threshold would drop most of them.
+- **"retail: " prefix, not "in".** "in The Street, Ashtead (small local centre)" doesn't say it is a
+  retail centre — "small local centre" could be any kind of centre. The label names the dimension; "in" is
+  dropped because "in retail: …" reads awkwardly, and overlap is already the rule.
 - **Name cleaning restored from the pre-deprecation clause**: region, inner qualifiers and the " - 1"
   duplicate suffix stripped, repeated parts dropped. `short_location` stays roads plus LAD; the old
   locality in it is not restored.

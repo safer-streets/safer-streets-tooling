@@ -7,7 +7,7 @@ schools, ONS area names) and assembles two labels per cell:
   ``Old Steine / East Street, Brighton and Hove``. A cell with no named road falls back to its LSOA name
   (``Wiltshire 005B``).
 * ``description`` — a sentence: character, main road, greenspace, school, retail centre and MSOA, e.g.
-  ``Suburban, on Epsom Road (A24), by Ashtead Park; in The Street, Ashtead (small local centre). Mole Valley
+  ``Suburban, on Epsom Road (A24), by Ashtead Park; retail: The Street, Ashtead (small local centre). Mole Valley
   001.`` Clauses whose part is missing are dropped.
 
 The retail centre is the CDRC centre the cell *overlaps* — the one with the largest overlap where it touches
@@ -196,7 +196,7 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
                     CASE WHEN greenspace_share >= {GREENSPACE_IN_SHARE} THEN 'in ' || greenspace
                          WHEN greenspace_share >= {GREENSPACE_MIN_SHARE} THEN 'by ' || greenspace END,
                     'near ' || school) AS head,
-                'in ' || retail_centre || ' (' || lower(retail_class) || ')' AS retail_clause
+                'retail: ' || retail_centre || ' (' || lower(retail_class) || ')' AS retail_clause
             FROM parts
         )
         SELECT spatial_id, lad24nm, msoa21nm, lsoa21nm, prop_urban, prop_suburban, greenspace_share, character,

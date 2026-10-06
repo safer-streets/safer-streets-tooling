@@ -87,7 +87,7 @@ other grid; see [Spatial units](#spatial-units) for why the grid is there at all
 The BEAHIV family ends with `beahiv_descriptions`, which resolves the ids in `beahiv202_geogs` and its
 lookups to names and gives every cell a human-readable `short_location` (*"Old Steine / East Street, Brighton
 and Hove"*, or the LSOA name where no road is named) and a sentence-long `description` (*"Suburban, on Epsom
-Road (A24), by Ashtead Park; in The Street, Ashtead (small local centre). Mole Valley 001."*). The retail
+Road (A24), by Ashtead Park; retail: The Street, Ashtead (small local centre). Mole Valley 001."*). The retail
 centre (`retail_centre`, `retail_class`) is the one the cell overlaps, by the largest overlap where it touches
 several, found by intersecting the cell with `retail_centres`; a cell overlapping none has no retail clause.
 `hotspot_descriptions` runs the same query over `hotspots_geogs` to give `hotspots_descriptions` — without

@@ -183,7 +183,11 @@ def test_retail_centre_is_the_one_the_cell_overlaps_most():
             "SELECT spatial_id, retail_centre, retail_class, description FROM hotspots_descriptions"
         ).fetchall()
     }
-    assert rows["two"] == ("Briggate, Leeds", "Major Town Centre", "in Briggate, Leeds (major town centre). Leeds 045.")
+    assert rows["two"] == (
+        "Briggate, Leeds",
+        "Major Town Centre",
+        "retail: Briggate, Leeds (major town centre). Leeds 045.",
+    )
     assert rows["one"][0] == "The Lanes, Brighton and Hove"
     assert rows["tie"][0] == "Vicar Lane, Leeds"
     assert rows["none"] == (None, None, "Leeds 045.")
