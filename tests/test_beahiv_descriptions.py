@@ -3,10 +3,9 @@ geogs and their lookups.
 
 The contract: every cell of ``beahiv202_geogs`` gets exactly one row with a non-empty ``short_location``
 ("main road / second road, own LAD", else the LSOA name) and ``description``; names are resolved from the
-lookups, a missing name source drops its clause instead of failing the build, and retail centres are not
-described even when the geogs carry the (deprecated, opt-in) nearest-centre columns: shops in the cell are
-counted instead. Synthetic tables only —
-offline-safe.
+lookups, a missing name source drops its clause instead of failing the build, and the retail centre named is
+the one the cell overlaps most — not the (deprecated, opt-in) nearest centre the geogs may carry. Synthetic
+tables only — offline-safe.
 """
 
 import duckdb
@@ -58,14 +57,6 @@ def con() -> duckdb.DuckDBPyConnection:
         CREATE TABLE schools AS SELECT * FROM (VALUES
             ({BUSY}::BIGINT, 'Little Infants', 90), ({BUSY}, 'Big Academy', 900)
         ) t({KEY}_id, establishmentname, schoolcapacity);
-        CREATE TABLE retail_centres AS SELECT * FROM (VALUES
-            (7, 'Union Street; Broadmead; Bristol (South West; England) - 1', 'Regional Centre')
-        ) t(rc_id, rc_name, classification);
-        -- two shops and a bar in the busy cell, one shop in the park, none in the empty cell
-        CREATE TABLE poi AS SELECT * FROM (VALUES
-            ({BUSY}::BIGINT, 'convenience_store'), ({BUSY}, 'fashion_and_apparel_store'), ({BUSY}, 'bar'),
-            ({PARK}, 'kiosk')
-        ) t({KEY}_id, basic_category);
     """)
     beahiv_descriptions.build_unit(con, beahiv.BEAHIV_UNIT, replace=True)
     return con
@@ -96,8 +87,7 @@ def test_description_names_every_component(con):
     row = _row(con, BUSY)
     assert row["character"] == "Urban"
     assert row["school"] == "Big Academy"  # the larger of the two schools sited in the cell
-    assert row["n_shops"] == 2  # the bar is not a shop
-    assert row["description"] == "Urban, on High Street (A4), near Big Academy; 2 shops. Bristol 008."
+    assert row["description"] == "Urban, on High Street (A4), near Big Academy. Bristol 008."
 
 
 def test_unnamed_greenspace_is_ignored_and_small_named_one_is_not_mentioned(con):
@@ -113,26 +103,24 @@ def test_park_is_open_space_and_its_split_sites_are_summed(con):
     assert row["greenspace_share"] == pytest.approx(0.7)
     assert row["character"] == "Open space"
     assert row["road_pair"] == "B3000"  # a numbered road with no name still counts
-    assert row["description"] == "Open space, on B3000, in Castle Park; 1 shop. Bristol 008."
+    assert row["description"] == "Open space, on B3000, in Castle Park. Bristol 008."
     assert row["short_location"] == "B3000, City of Bristol"
 
 
 def test_cell_without_named_roads_falls_back_to_lsoa(con):
     row = _row(con, EMPTY)
     assert row["character"] == "Rural"
-    assert row["n_shops"] == 0  # no shop in the cell: a known zero, and no clause
     assert row["short_location"] == "Wiltshire 005B"
     assert row["description"] == "Rural. Wiltshire 005."
 
 
-def test_retail_centres_are_not_described(con):
-    """The fixture's geogs carry retail_centre_id / retail_centre_distance and a retail_centres table, as an
-    opt-in build would: neither reaches the labels or the columns."""
-    columns = {name for (name,) in con.execute(f"SELECT column_name FROM (DESCRIBE {KEY}_descriptions)").fetchall()}
-    assert not {c for c in columns if "retail" in c}
-    for cell in (BUSY, PARK):  # both within the old 800 m description radius of Broadmead
+def test_nearest_centre_columns_are_not_read(con):
+    """The fixture's geogs carry the deprecated retail_centre_id / retail_centre_distance, as an opt-in build
+    would, but no retail_centres table: with nothing to intersect, no centre is named."""
+    for cell in (BUSY, PARK):
         row = _row(con, cell)
-        assert "Broadmead" not in row["description"] + row["short_location"]
+        assert row["retail_centre"] is None
+        assert row["retail_class"] is None
 
 
 def test_missing_name_sources_drop_their_clauses():
@@ -149,33 +137,56 @@ def test_missing_name_sources_drop_their_clauses():
     beahiv_descriptions.build_unit(con, beahiv.BEAHIV_UNIT, replace=True)
     row = _row(con, 1)
     assert row["character"] is None  # unknown without land cover, not "Rural"
-    assert row["n_shops"] is None  # unknown without the poi extract, not zero
+    assert row["retail_centre"] is None
     assert row["short_location"] == "Leeds 045A"
     assert row["description"] == "Leeds 045."
 
 
-def test_hotspot_hexes_count_their_shops_by_point_in_polygon():
-    """Places carry no hotspot-hex id, so a hex's shops are the shop places inside its polygon."""
+def test_retail_centre_is_the_one_the_cell_overlaps_most():
+    """A cell names the centre covering most of it, by intersecting the cell polygon (so it works on the
+    hotspot hexes, which carry no tag); a centre only near the cell is not named. Its name loses the region,
+    any qualifier and duplicate suffix, and repeated parts."""
     try:
         con = duckdb_connector(writeable=True)
     except duckdb.HTTPException as e:  # extension download unavailable
         pytest.skip(f"extension download unavailable: {e}")
     con.execute("""
-        CREATE TABLE hotspots AS SELECT 'hexA' AS spatial_id, ST_Buffer(ST_Point(1000, 1000), 100) AS geom;
-        CREATE TABLE hotspots_geogs AS SELECT 'hexA' AS spatial_id, 1.0 AS cell_area,
-            'L' AS lad24cd, 'M' AS msoa21cd, 'S' AS lsoa21cd;
+        CREATE TABLE hotspots AS SELECT * FROM (VALUES
+            ('two', ST_MakeEnvelope(0, 0, 100, 100)),
+            ('one', ST_MakeEnvelope(200, 0, 300, 100)),
+            ('tie', ST_MakeEnvelope(400, 0, 500, 100)),
+            ('none', ST_MakeEnvelope(600, 0, 700, 100))
+        ) t(spatial_id, geom);
+        CREATE TABLE hotspots_geogs AS SELECT spatial_id, 1.0 AS cell_area,
+            'L' AS lad24cd, 'M' AS msoa21cd, 'S' AS lsoa21cd FROM hotspots;
         CREATE TABLE local_authority_districts AS SELECT 'L' AS spatial_id, 'Leeds' AS lad24nm;
         CREATE TABLE msoa_2021 AS SELECT 'M' AS spatial_id, 'Leeds 045' AS msoa21nm;
         CREATE TABLE lsoa_2021 AS SELECT 'S' AS spatial_id, 'Leeds 045A' AS lsoa21nm;
-        -- two shops and a bar inside the hex, one shop outside it
-        CREATE TABLE poi AS SELECT category AS basic_category, ST_Point(x, 1000) AS geom FROM (VALUES
-            ('convenience_store', 990), ('bar', 1000), ('kiosk', 1010), ('market', 5000)
-        ) t(category, x);
+        CREATE TABLE retail_centres AS SELECT rc_id, rc_name, classification, ST_MakeEnvelope(x0, 0, x1, 100) AS geom
+        FROM (VALUES
+            -- 'two': the larger centre covers 30% of it, the smaller-overlapping regional centre 20%
+            (1, 'Union Street; Broadmead; Bristol (South West; England) - 1', 'Regional Centre', -50, 20),
+            (2, 'Briggate; Leeds; Leeds (Yorkshire and The Humber; England)', 'Major Town Centre', 70, 150),
+            (3, 'The Lanes (Brighton and Hove City Centre); Brighton and Hove (South East; England) - 1',
+                'Local Centre', 240, 260),
+            -- 'tie': equal overlaps, so the lower rc_id
+            (5, 'Kirkgate; Leeds (Yorkshire and The Humber; England)', 'Small Local Centre', 450, 460),
+            (4, 'Vicar Lane; Leeds (Yorkshire and The Humber; England)', 'Small Local Centre', 420, 430),
+            -- 50 m from 'none', but not overlapping it
+            (6, 'Boar Lane; Leeds (Yorkshire and The Humber; England)', 'Small Local Centre', 750, 800)
+        ) t(rc_id, rc_name, classification, x0, x1);
     """)
     beahiv_descriptions.build_unit(con, hotspots.HOTSPOT_UNIT, replace=True)
-    row = con.execute("SELECT n_shops, description FROM hotspots_descriptions").df().iloc[0]
-    assert row["n_shops"] == 2
-    assert row["description"] == "2 shops. Leeds 045."
+    rows = {
+        r[0]: r[1:]
+        for r in con.execute(
+            "SELECT spatial_id, retail_centre, retail_class, description FROM hotspots_descriptions"
+        ).fetchall()
+    }
+    assert rows["two"] == ("Briggate, Leeds", "Major Town Centre", "in Briggate, Leeds (major town centre). Leeds 045.")
+    assert rows["one"][0] == "The Lanes, Brighton and Hove"
+    assert rows["tie"][0] == "Vicar Lane, Leeds"
+    assert rows["none"] == (None, None, "Leeds 045.")
 
 
 def test_step_gated_on_the_beahiv_grid_and_registered_after_geogs():
