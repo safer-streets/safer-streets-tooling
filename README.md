@@ -52,7 +52,8 @@ all draw their cell set from `h3rN_crime_counts`.)
 
 The nearest-retail-centre lookups (`retail_centre_lookups` and their hotspot / BEAHIV twins, dotted in the
 diagram) are **deprecated and not built by default** (`TransformStep.default=False`): the distance is NULL
-beyond 2 km, about a third of H3 cells, and the POI shop counts replace it. Without them the `*_geogs`
+beyond 2 km, about a third of H3 cells, and the descriptions intersect the centres directly instead (see
+below). Without them the `*_geogs`
 have no `retail_centre_id` / `retail_centre_distance` columns. Code can still opt in with
 `build_all(..., include={...})`; the `data` CLI never does.
 
@@ -86,9 +87,10 @@ other grid; see [Spatial units](#spatial-units) for why the grid is there at all
 The BEAHIV family ends with `beahiv_descriptions`, which resolves the ids in `beahiv202_geogs` and its
 lookups to names and gives every cell a human-readable `short_location` (*"Old Steine / East Street, Brighton
 and Hove"*, or the LSOA name where no road is named) and a sentence-long `description` (*"Suburban, on Epsom
-Road (A24), by Ashtead Park; 12 shops. Mole Valley 001."*). The shop count, `n_shops`, is the `poi` places in a
-shop category (the POI config's `shop_categories`) within the cell; it replaces the old nearest-retail-centre
-clause. `hotspot_descriptions` runs the same query over `hotspots_geogs` to give `hotspots_descriptions` — without
+Road (A24), by Ashtead Park; retail: The Street, Ashtead (small local centre). Mole Valley 001."*). The retail
+centre (`retail_centre`, `retail_class`) is the one the cell overlaps, by the largest overlap where it touches
+several, found by intersecting the cell with `retail_centres`; a cell overlapping none has no retail clause.
+`hotspot_descriptions` runs the same query over `hotspots_geogs` to give `hotspots_descriptions` — without
 the school clause, since schools carry no hotspot-hex tag — which, like every hotspot table, never syncs.
 
 ```mermaid
@@ -213,7 +215,7 @@ flowchart LR
     hotspot_lookups --> hotspots_descriptions
     open_roads --> hotspots_descriptions
     open_greenspace --> hotspots_descriptions
-    poi --> hotspots_descriptions
+    retail_centres --> hotspots_descriptions
     local_authority_districts --> hotspots_descriptions
     msoa_2021 --> hotspots_descriptions
     lsoa_2021 --> hotspots_descriptions
@@ -245,7 +247,7 @@ flowchart LR
     beahiv_lookups --> beahiv202_descriptions
     open_roads --> beahiv202_descriptions
     open_greenspace --> beahiv202_descriptions
-    poi --> beahiv202_descriptions
+    retail_centres --> beahiv202_descriptions
     schools --> beahiv202_descriptions
     local_authority_districts --> beahiv202_descriptions
     msoa_2021 --> beahiv202_descriptions
@@ -413,7 +415,7 @@ each exposing a `STEP`. Each step writes the relations it produces out as parque
 | `beahiv_lookups` | [beahiv_lookups.py](src/safer_streets_tooling/transform/beahiv_lookups.py) | `beahiv` | `beahiv202_{name}_lookup` | `beahiv_counts` |
 | `beahiv_retail_centre_lookups` *(deprecated, opt-in)* | [beahiv_retail_centre_lookups.py](src/safer_streets_tooling/transform/beahiv_retail_centre_lookups.py) | `beahiv` | `beahiv202_retail_centre_lookup` | `beahiv_counts` |
 | `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `beahiv202_geogs` | `beahiv_counts`, `beahiv_geo_lookups`, `beahiv_lookups`, `beahiv_retail_centre_lookups` |
-| `beahiv_descriptions` | [beahiv_descriptions.py](src/safer_streets_tooling/transform/beahiv_descriptions.py) | `beahiv` | `beahiv202_descriptions` (`short_location`, `description` + the named components and `n_shops`) | `beahiv_lookups`, `beahiv_geogs` |
+| `beahiv_descriptions` | [beahiv_descriptions.py](src/safer_streets_tooling/transform/beahiv_descriptions.py) | `beahiv` | `beahiv202_descriptions` (`short_location`, `description` + the named components, including `retail_centre`) | `beahiv_lookups`, `beahiv_geogs` |
 
 ### Spatial units
 

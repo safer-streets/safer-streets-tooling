@@ -7,6 +7,46 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Descriptions name the overlapping retail centre, not a shop count
+
+**Why** — "; 12 shops" is too precise for a location label: the exact count reads as a measured fact, and
+it depends on how complete Overture's places are. Whether the cell is part of a recognised retail centre,
+and which one, is the information a reader needs.
+
+**What**
+
+- `*_descriptions` drop `n_shops` and the shop clause. They gain `retail_centre` (the cleaned centre name)
+  and `retail_class`, with a clause: "…near Big Academy; retail: Briggate, Leeds (major town centre). Leeds 045."
+  A cell overlapping no centre, or a build without `retail_centres`, has NULLs and no clause.
+- The steps' `extract_inputs` swap `poi` for `retail_centres`. `poi.shop_categories` / `SHOP_CATEGORIES`
+  stay: `poi.parquet` is unchanged and it is still the one definition of a shop.
+
+**Design decisions**
+
+- **Overlap, not distance.** On the hotspot hexes, 76% overlap a centre, and 836 of the 3,387 that do
+  touch two to five. The centre with the largest overlap area is named (ties to the lower `rc_id`), the same
+  rule as the max-overlap geography lookups. Rejected: preferring the higher-tier centre (Town Centre over
+  Small Local Centre). It says more about how commercial the cell is, but can name a centre that only clips
+  the cell.
+- **Intersected inside the descriptions step**, not read from the deprecated `*_retail_centre_lookup`. That
+  lookup is opt-in and keeps the *nearest* centre; every overlapping centre is 0 m away, so its pick among
+  them is arbitrary. Doing it in the step needs no new step or DAG edge.
+- **"in" for any overlap, no minimum.** Centres are mostly far smaller than a cell (a small local centre's
+  median is ~0.016 km², a hotspot hex ~0.105 km²), so a share-of-cell threshold would drop most of them.
+- **"retail: " prefix, not "in".** "in The Street, Ashtead (small local centre)" doesn't say it is a
+  retail centre — "small local centre" could be any kind of centre. The label names the dimension; "in" is
+  dropped because "in retail: …" reads awkwardly, and overlap is already the rule.
+- **Name cleaning restored from the pre-deprecation clause**: region, inner qualifiers and the " - 1"
+  duplicate suffix stripped, repeated parts dropped. `short_location` stays roads plus LAD; the old
+  locality in it is not restored.
+
+**Follow-ups**
+
+- Rebuild: delete `beahiv202_descriptions.parquet` and `hotspots_descriptions.parquet`, then
+  `data transform --grid beahiv --grid ho`. The step cache doesn't see code changes, and `retail_centres`
+  is older than the current outputs.
+- If slivers turn out to read badly, add a minimum share of the *centre* covered by the cell.
+
 ## Shops replace the retail centre in the descriptions
 
 **Why** — dropping the retail-centre clause from `*_descriptions` lost the one hint of how commercial a cell

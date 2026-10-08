@@ -6,13 +6,14 @@ schools, ONS area names) and assembles two labels per cell:
 * ``short_location`` — street-level: the two main roads and the cell's LAD, e.g.
   ``Old Steine / East Street, Brighton and Hove``. A cell with no named road falls back to its LSOA name
   (``Wiltshire 005B``).
-* ``description`` — a sentence: character, main road, greenspace, school, shops and MSOA, e.g.
-  ``Suburban, on Epsom Road (A24), by Ashtead Park; 12 shops. Mole Valley 001.`` Clauses whose part is
-  missing are dropped.
+* ``description`` — a sentence: character, main road, greenspace, school, retail centre and MSOA, e.g.
+  ``Suburban, on Epsom Road (A24), by Ashtead Park; retail: The Street, Ashtead (small local centre). Mole Valley
+  001.`` Clauses whose part is missing are dropped.
 
-Shops are the ``poi`` places in a shop category (:data:`~safer_streets_tooling.extract.poi.SHOP_CATEGORIES`)
-within the cell, counted in ``n_shops``. They replace the nearest retail centre, whose lookup is deprecated
-and not built by default (see :mod:`.retail_centre_lookups`).
+The retail centre is the CDRC centre the cell *overlaps* — the one with the largest overlap where it touches
+several — found here by intersecting the cell with ``retail_centres``. Not the deprecated nearest-centre
+lookup (see :mod:`.retail_centre_lookups`): it is opt-in, and every overlapping centre is 0 m from the cell,
+so which it returns among them is arbitrary.
 
 The components are kept as columns, so a consumer can reassemble or filter them; ``roads`` lists the four
 longest named roads.
@@ -27,7 +28,6 @@ by a cell-id column only the BEAHIV and H3 grids carry).
 
 import duckdb
 
-from safer_streets_tooling.extract.poi import SHOP_CATEGORIES
 from safer_streets_tooling.transform import beahiv
 from safer_streets_tooling.transform.base import (
     Grid,
@@ -98,20 +98,27 @@ def _schools(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, geogs: str) -> s
     """
 
 
-def _shops(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, geogs: str) -> str:
-    # by the cell id tagged on each place at extract where there is one (BEAHIV, H3); the hotspot hexes
-    # have no tag, so their places are found by point-in-polygon instead
-    if not column_exists(con, "poi", "basic_category"):
-        return _empty(geogs, "NULL::BIGINT AS n_shops")
-    shops = "basic_category IN (" + ", ".join(f"'{c}'" for c in SHOP_CATEGORIES) + ")"
-    cell_col = f"{unit.key}_id"
-    if column_exists(con, "poi", cell_col):
-        return f"SELECT {cell_col} AS spatial_id, count(*) AS n_shops FROM poi WHERE {shops} GROUP BY 1"
-    return f"""
-        SELECT c.spatial_id, count(*) AS n_shops
-        FROM ({unit.cells}) c JOIN poi p ON ST_Within(p.geom, c.cell_geom)
-        WHERE p.{shops}
-        GROUP BY 1
+def _retail(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, geogs: str) -> str:
+    # A centre is usually much smaller than a cell (a small local centre is ~0.02 km², a cell ~0.1 km²) and
+    # a quarter of the cells that touch one touch several, so the largest overlap names the centre the cell
+    # is most part of; ties go to the lower rc_id so the pick is stable.
+    # rc_name reads narrowest first — "Sangley Road; Catford; Lewisham (London; England)", sometimes with an
+    # inner qualifier ("The Lanes (Brighton and Hove City Centre); ...") or a " - 1" duplicate suffix.
+    # Strip the region and qualifiers, split into parts and drop repeats ("London; London") keeping order.
+    if not column_exists(con, "retail_centres", "geom"):
+        return _empty(geogs, "NULL::VARCHAR AS retail_centre, NULL::VARCHAR AS retail_class")
+    return rf"""
+        SELECT spatial_id, array_to_string(list_filter(p, (x, i) -> list_position(p, x) = i), ', ') AS retail_centre,
+               retail_class
+        FROM (
+            SELECT c.spatial_id, rc.classification AS retail_class,
+                   string_split(regexp_replace(regexp_replace(rc.rc_name, ' \([^()]*\)( - \d+)?$', ''),
+                                               ' \([^()]*\)', '', 'g'), '; ') AS p
+            FROM ({unit.cells}) c JOIN retail_centres rc ON ST_Intersects(c.cell_geom, rc.geom)
+            QUALIFY row_number() OVER (
+                PARTITION BY c.spatial_id ORDER BY ST_Area(ST_Intersection(c.cell_geom, rc.geom)) DESC, rc.rc_id
+            ) = 1
+        )
     """
 
 
@@ -157,7 +164,7 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
             FROM green GROUP BY 1
         ),
         school AS ({_schools(con, unit, geogs)}),
-        shops AS ({_shops(con, unit, geogs)}),
+        retail AS ({_retail(con, unit, geogs)}),
         parts AS (
             SELECT h.spatial_id, lad24cd.lad24nm, msoa21cd.msoa21nm, lsoa21cd.lsoa21nm,
                    {_prop(con, geogs, "urban_overlap_area")} AS prop_urban,
@@ -170,9 +177,7 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
                         -- a park inside a town is not "rural", though it has no built-up land cover
                         WHEN greenspace_share >= {GREENSPACE_IN_SHARE} THEN 'Open space'
                         ELSE 'Rural' END AS character,
-                   mr.road, rl.road_pair, rl.roads, mg.greenspace, s.school,
-                   -- no place in a cell is zero shops; no poi table at all is unknown
-                   {"coalesce(sh.n_shops, 0)" if table_exists(con, "poi") else "NULL::BIGINT"} AS n_shops,
+                   mr.road, rl.road_pair, rl.roads, mg.greenspace, s.school, rc.retail_centre, rc.retail_class,
                    -- ONS writes some LADs "Bristol, City of", which reads oddly at the end of a location
                    regexp_replace(lad24cd.lad24nm, '^(.*), City of$', 'City of \\1') AS lad_name
             FROM {geogs} h
@@ -183,7 +188,7 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
             LEFT JOIN road_lists rl ON h.spatial_id = rl.spatial_id
             LEFT JOIN main_green mg ON h.spatial_id = mg.spatial_id
             LEFT JOIN school s ON h.spatial_id = s.spatial_id
-            LEFT JOIN shops sh ON h.spatial_id = sh.spatial_id
+            LEFT JOIN retail rc ON h.spatial_id = rc.spatial_id
         ),
         labelled AS (
             SELECT *,
@@ -191,13 +196,12 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
                     CASE WHEN greenspace_share >= {GREENSPACE_IN_SHARE} THEN 'in ' || greenspace
                          WHEN greenspace_share >= {GREENSPACE_MIN_SHARE} THEN 'by ' || greenspace END,
                     'near ' || school) AS head,
-                CASE WHEN n_shops > 0 THEN n_shops || CASE WHEN n_shops = 1 THEN ' shop' ELSE ' shops' END
-                END AS shops_clause
+                'retail: ' || retail_centre || ' (' || lower(retail_class) || ')' AS retail_clause
             FROM parts
         )
         SELECT spatial_id, lad24nm, msoa21nm, lsoa21nm, prop_urban, prop_suburban, greenspace_share, character,
-               road, road_pair, roads, greenspace, school, n_shops,
-               concat_ws('. ', nullif(concat_ws('; ', nullif(head, ''), shops_clause), ''),
+               road, road_pair, roads, greenspace, school, retail_centre, retail_class,
+               concat_ws('. ', nullif(concat_ws('; ', nullif(head, ''), retail_clause), ''),
                          coalesce(msoa21nm, lad24nm)) || '.' AS description,
                CASE WHEN road_pair IS NULL THEN coalesce(lsoa21nm, lad24nm)
                     ELSE concat_ws(', ', road_pair, lad_name) END AS short_location
@@ -223,13 +227,13 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.BEAHIV,
-    description="One row per BEAHIV cell: a human-readable short_location and description, plus the named roads, greenspace, school and shop count they are built from.",
+    description="One row per BEAHIV cell: a human-readable short_location and description, plus the named roads, greenspace, school and retail centre they are built from.",
     depends_on=("beahiv_lookups", "beahiv_geogs"),
     extract_inputs=(
         "open_roads",
         "open_greenspace",
         "schools",
-        "poi",
+        "retail_centres",
         *(GEOGRAPHY_MAPPINGS[k] for k in ("lad24cd", "msoa21cd", "lsoa21cd")),
     ),
 )
