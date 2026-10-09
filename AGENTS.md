@@ -8,7 +8,7 @@ usage), see [README.md](README.md); don't duplicate that material here.
 In one line: `safer-streets-tooling` builds the production GeoParquet outputs (consumers query them
 directly) via a two-phase `extract → transform` pipeline, depending on
 [`safer-streets-core`](../safer-streets-core) (editable path dependency) for the DuckDB helpers, the H3
-transforms, the data-source catalogue, and the ONS boundary downloader.
+transforms, and the data-source catalogue.
 
 ## Collaboration & Ownership
 
@@ -110,7 +110,8 @@ Overture S3 is unreachable, mirroring the existing tests.
   goes for any other secret store — `~/.aws/credentials`, `~/.ssh/`, `*.pem`, `secrets.*`. If a
   secret does end up exposed, say so plainly and recommend rotating it.
 - **Core stays as-is.** This repo must not require changes to `safer-streets-core`. Import what you
-  need from `safer_streets_core.*` and from core's `scripts.ons_boundaries`. If you find yourself
+  need from `safer_streets_core.*` — never from core's `scripts` package, which is CLI code, not library
+  API (core has already removed scripts this repo used to import). If you find yourself
   needing to edit core, stop and raise it — that crosses a repo boundary.
 - **Geometry is British National Grid (EPSG:27700) everywhere.** Coordinates are the contract; CRS
   metadata is not. Sources in another CRS (e.g. retail centres in WGS-84) are reprojected to BNG

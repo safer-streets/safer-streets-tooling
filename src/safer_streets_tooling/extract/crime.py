@@ -203,7 +203,7 @@ DATASETS: tuple[Dataset, ...] = (
         name="crime_data",
         table="crime_data",
         extract=extract,
-        description="police.uk street-level crimes (date, type, lat/lon, reporting force).",
+        description="police.uk street-level crimes (date, type, lon/lat, reporting force).",
         optional=False,
     ),
     Dataset(

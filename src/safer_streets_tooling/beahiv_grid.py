@@ -49,17 +49,17 @@ def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
     declares (beahiv returns the ids as ``uint64``, and every one of them fits — beahiv reserves its
     top three bits, which puts every id below 2**61).
 
-    It takes projected coordinates rather than lat/lon, for two reasons in order of importance:
+    It takes projected coordinates rather than lon/lat, for two reasons in order of importance:
 
-    1. ``latlon_to_cell`` reprojects with pyproj, and calling pyproj from DuckDB's worker threads
+    1. ``lonlat_to_cell`` reprojects with pyproj, and calling pyproj from DuckDB's worker threads
        **segfaults the process** (reproducible on the full crime extract; survives only at
        ``threads = 1``, and neither a lock nor a thread-local ``Transformer`` avoids it). The
        transform phase runs with ``threads = 4``, so that path is unusable here.
     2. every layer that needs a cell id already holds a BNG geometry — projected once in the
-       extractor — so going via lat/lon would reproject coordinates we already have, at roughly
+       extractor — so going via lon/lat would reproject coordinates we already have, at roughly
        double the cost.
 
-    Verified equivalent: identical cell ids to ``latlon_to_cell`` on 2M rows of the extract.
+    Verified equivalent: identical cell ids to ``lonlat_to_cell`` on 2M rows of the extract.
     """
     return bng_to_cell(x, y, SIDE_LENGTH, ORIENTATION).cast(pa.int64())
 

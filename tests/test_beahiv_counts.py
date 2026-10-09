@@ -7,7 +7,7 @@ Synthetic fixtures only — offline-safe, mirroring test_transform_pipeline.
 
 import duckdb
 import pytest
-from beahiv import Orientation, bng_to_cell, decode, latlon_to_cell
+from beahiv import Orientation, bng_to_cell, decode, lonlat_to_cell
 from duckdb.sqltypes import BIGINT, DOUBLE
 from safer_streets_core.database import duckdb_connector
 
@@ -17,9 +17,9 @@ from safer_streets_tooling.transform import beahiv, beahiv_counts
 TABLE = beahiv.COUNTS_TABLE
 
 # two coordinates ~20 m apart (same cell at a 202 m side) plus two far-apart cities
-_LEEDS = (53.80, -1.50)
-_LEEDS_NEARBY = (53.8001, -1.50005)
-_MANCHESTER = (53.40, -2.50)
+_LEEDS = (-1.50, 53.80)
+_LEEDS_NEARBY = (-1.50005, 53.8001)
+_MANCHESTER = (-2.50, 53.40)
 
 
 def _connect():
@@ -32,7 +32,7 @@ def _connect():
 
 def _crime_data(con):
     """Five crime_data rows: three countable, one BTP and one un-geolocated (both excluded), with the
-    BNG point ``geom`` the extractor adds (the step reads its coordinates, not lat/lon)."""
+    BNG point ``geom`` the extractor adds (the step reads its coordinates, not lon/lat)."""
     con.execute(f"""
         CREATE OR REPLACE TABLE crime_data AS SELECT *,
             CASE WHEN latitude IS NULL THEN NULL
@@ -44,13 +44,13 @@ def _crime_data(con):
             ({_MANCHESTER[0]}, {_MANCHESTER[1]}, 'Bicycle theft', '2024-02', 'Greater Manchester Police'),
             ({_LEEDS[0]}, {_LEEDS[1]}, 'Robbery', '2024-01', 'British Transport Police'),
             (NULL, NULL, 'Public order', '2024-03', 'West Yorkshire Police')
-        ) t(latitude, longitude, crime_type, _month, falls_within)
+        ) t(longitude, latitude, crime_type, _month, falls_within)
     """)
 
 
-def _spatial_id(lat: float, lon: float) -> int:
+def _spatial_id(lon: float, lat: float) -> int:
     """The spatial_id the step should emit for a point, via beahiv's scalar encoder."""
-    return latlon_to_cell(lat, lon, SIDE_LENGTH, ORIENTATION)
+    return lonlat_to_cell(lon, lat, SIDE_LENGTH, ORIENTATION)
 
 
 def test_counts_conserve_filtered_input():

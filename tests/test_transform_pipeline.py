@@ -215,7 +215,7 @@ def test_steps_run_respecting_dependency_order():
 
 
 # the distinct crime locations in _crime_data, reused to build the boundary fixtures around them
-_CITIES = {"leeds": (53.80, -1.50), "manchester": (53.40, -2.50), "london": (51.50, -0.12)}
+_CITIES = {"leeds": (-1.50, 53.80), "manchester": (-2.50, 53.40), "london": (-0.12, 51.50)}
 
 
 def _crime_data(con):
@@ -227,33 +227,33 @@ def _crime_data(con):
                  ELSE ST_Transform(ST_Point(longitude, latitude), 'EPSG:4326', 'EPSG:27700', always_xy := true)
             END AS geom
         FROM (VALUES
-            (53.80, -1.50, 'Burglary',      '2024-01', 'West Yorkshire Police'),
-            (53.80, -1.50, 'Burglary',      '2024-01', 'West Yorkshire Police'),
-            (53.40, -2.50, 'Bicycle theft', '2024-02', 'Greater Manchester Police'),
-            (51.50, -0.12, 'Other theft',   '2024-01', 'Metropolitan Police Service'),
-            (53.80, -1.50, 'Robbery',       '2024-01', 'British Transport Police'),
+            (-1.50, 53.80, 'Burglary',      '2024-01', 'West Yorkshire Police'),
+            (-1.50, 53.80, 'Burglary',      '2024-01', 'West Yorkshire Police'),
+            (-2.50, 53.40, 'Bicycle theft', '2024-02', 'Greater Manchester Police'),
+            (-0.12, 51.50, 'Other theft',   '2024-01', 'Metropolitan Police Service'),
+            (-1.50, 53.80, 'Robbery',       '2024-01', 'British Transport Police'),
             (NULL,  NULL,  'Public order',  '2024-03', 'West Yorkshire Police')
-        ) t(latitude, longitude, crime_type, _month, falls_within)
+        ) t(longitude, latitude, crime_type, _month, falls_within)
     """)
 
 
 def _boundary_tables(con, cities=tuple(_CITIES)):
     """Every ONS boundary table gets one 1 km polygon per city, keyed by the city name, so each
     geolocated crime falls in exactly one polygon (omit a city to leave its crimes uncovered)."""
-    values = ", ".join(f"('{city}', {lat}, {lon})" for city, (lat, lon) in _CITIES.items() if city in cities)
+    values = ", ".join(f"('{city}', {lon}, {lat})" for city, (lon, lat) in _CITIES.items() if city in cities)
     for table in GEOGRAPHY_MAPPINGS.values():
         con.execute(f"""
             CREATE OR REPLACE TABLE "{table}" AS
             SELECT city AS spatial_id,
                 ST_Buffer(ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000) AS geom
-            FROM (VALUES {values}) t(city, lat, lon)
+            FROM (VALUES {values}) t(city, lon, lat)
         """)
 
 
 def _hotspot_table(con, cities=("leeds",), radius=1000):
     """A hotspots table with one polygon per named city, standing in for the 350m hex grid: a partial
     grid (only some cities) is the realistic case — the hexes cover only the flagged parts of the map."""
-    values = ", ".join(f"('{city}', {lat}, {lon})" for city, (lat, lon) in _CITIES.items() if city in cities)
+    values = ", ".join(f"('{city}', {lon}, {lat})" for city, (lon, lat) in _CITIES.items() if city in cities)
     con.execute(f"""
         CREATE OR REPLACE TABLE hotspots AS
         SELECT
@@ -261,7 +261,7 @@ def _hotspot_table(con, cities=("leeds",), radius=1000):
             'Test Constabulary' AS pfa,
             'VRSK' AS hits,
             ST_Buffer(ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true), {radius}) AS geom
-        FROM (VALUES {values}) t(city, lat, lon)
+        FROM (VALUES {values}) t(city, lon, lat)
     """)
 
 
@@ -354,7 +354,7 @@ def test_geography_counts_raise_when_output_areas_overlap():
     con = _connect()
     _crime_data(con)
     _boundary_tables(con)
-    lat, lon = _CITIES["leeds"]
+    lon, lat = _CITIES["leeds"]
     con.execute(f"""
         INSERT INTO output_areas_2021
         SELECT 'leeds_overlap',
@@ -373,7 +373,7 @@ def test_geography_counts_raise_when_the_layers_do_not_nest():
     con = _connect()
     _crime_data(con)
     _boundary_tables(con)
-    lat, lon = _CITIES["leeds"]
+    lon, lat = _CITIES["leeds"]
     con.execute(f"""
         INSERT INTO police_force_areas
         SELECT 'leeds_second_force',
@@ -776,7 +776,7 @@ def test_crime_counts_hotspots_raises_when_hexes_overlap():
     con = _connect()
     _crime_data(con)
     _hotspot_table(con, cities=tuple(_CITIES))
-    lat, lon = _CITIES["leeds"]
+    lon, lat = _CITIES["leeds"]
     con.execute(f"""
         INSERT INTO hotspots
         SELECT 'leeds_overlap', 'Test Constabulary', 'V',
@@ -798,8 +798,8 @@ def test_point_layer_counts_per_hex():
     con.execute(f"""
         CREATE TABLE streetlights AS SELECT
             ST_Transform(pt, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom, 'x' AS h3r9_id
-        FROM (VALUES (ST_Point({leeds[1]}, {leeds[0]})), (ST_Point({leeds[1]}, {leeds[0]})),
-                     (ST_Point({london[1]}, {london[0]}))) t(pt)
+        FROM (VALUES (ST_Point({leeds[0]}, {leeds[1]})), (ST_Point({leeds[0]}, {leeds[1]})),
+                     (ST_Point({london[0]}, {london[1]}))) t(pt)
     """)
     con.execute("CREATE TABLE road_intersections AS SELECT geom FROM streetlights")
     # footprints: a 50m buffer round each point, so the centroid is what decides the hex
@@ -831,9 +831,9 @@ def _hotspot_population_inputs(con):
             oa21cd, map_simple_use, premise_area, gross_area, 'x' AS h3r9_id,
             ST_Transform(pt, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
         FROM (VALUES
-            ('OA1', 'Residential', 100.0, 100.0, ST_Point({leeds[1]}, {leeds[0]})),
-            ('OA1', 'Residential', 100.0, 100.0, ST_Point({leeds[1]}, {leeds[0]})),
-            ('OA1', 'Residential', 100.0, 100.0, ST_Point({london[1]}, {london[0]}))
+            ('OA1', 'Residential', 100.0, 100.0, ST_Point({leeds[0]}, {leeds[1]})),
+            ('OA1', 'Residential', 100.0, 100.0, ST_Point({leeds[0]}, {leeds[1]})),
+            ('OA1', 'Residential', 100.0, 100.0, ST_Point({london[0]}, {london[1]}))
         ) t(oa21cd, map_simple_use, premise_area, gross_area, pt)
     """)
     con.execute("CREATE TABLE workplace_population AS SELECT 'OA1' AS spatial_id, 60 AS workplace_population")

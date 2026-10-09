@@ -32,8 +32,8 @@ from safer_streets_tooling.transform import (
 )
 from safer_streets_tooling.transform.geo_lookups import GEOGRAPHY_MAPPINGS
 
-_LEEDS = (53.80, -1.50)
-_MANCHESTER = (53.40, -2.50)
+_LEEDS = (-1.50, 53.80)
+_MANCHESTER = (-2.50, 53.40)
 _CITIES = {"leeds": _LEEDS, "manchester": _MANCHESTER}
 
 
@@ -47,18 +47,18 @@ def _connect():
 
 def _crime_counts(con, beahiv_too=True):
     """crime_data for the two cities, aggregated onto the H3 grid and (optionally) the BEAHIV one."""
-    values = ", ".join(f"({lat}, {lon}, 'Burglary', '2024-01', 'Police')" for lat, lon in _CITIES.values())
+    values = ", ".join(f"({lon}, {lat}, 'Burglary', '2024-01', 'Police')" for lon, lat in _CITIES.values())
     con.execute(f"""
         CREATE OR REPLACE TABLE crime_data AS SELECT *,
             ST_Transform(ST_Point(longitude, latitude), 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
-        FROM (VALUES {values}) t(latitude, longitude, crime_type, _month, falls_within)
+        FROM (VALUES {values}) t(longitude, latitude, crime_type, _month, falls_within)
     """)
     for table in GEOGRAPHY_MAPPINGS.values():
         con.execute(f"""
             CREATE OR REPLACE TABLE "{table}" AS
             SELECT city AS spatial_id,
                 ST_Buffer(ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true), 1000) AS geom
-            FROM (VALUES {", ".join(f"('{c}', {lat}, {lon})" for c, (lat, lon) in _CITIES.items())}) t(city, lat, lon)
+            FROM (VALUES {", ".join(f"('{c}', {lon}, {lat})" for c, (lon, lat) in _CITIES.items())}) t(city, lon, lat)
         """)
     crime_counts.build(con, True)
     if beahiv_too:
@@ -231,7 +231,7 @@ def test_cells_land_in_the_right_geography():
     """Each BEAHIV cell resolves to the ONS code of the city its crimes came from.
 
     The cells come from beahiv in BNG with no reprojection; if that were wrong (e.g. treating the
-    coordinates as lat/lon) they would fall outside every boundary and the codes would be NULL.
+    coordinates as lon/lat) they would fall outside every boundary and the codes would be NULL.
     """
     con = _connect()
     _crime_counts(con)
@@ -313,12 +313,12 @@ def test_extract_cell_id_columns_tag_the_cell_containing_the_feature():
     con = _connect()
     con.execute(f"""
         CREATE TABLE features AS
-        SELECT city, lat, lon,
+        SELECT city, lon, lat,
                ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
-        FROM (VALUES {", ".join(f"('{c}', {lat}, {lon})" for c, (lat, lon) in _CITIES.items())}) t(city, lat, lon)
+        FROM (VALUES {", ".join(f"('{c}', {lon}, {lat})" for c, (lon, lat) in _CITIES.items())}) t(city, lon, lat)
     """)
     rows = con.execute(f"""
-        SELECT city, ST_X(geom), ST_Y(geom), {cell_id_columns(con, "lat", "lon", "geom")}
+        SELECT city, ST_X(geom), ST_Y(geom), {cell_id_columns(con, "lon", "lat", "geom")}
         FROM features ORDER BY city
     """).fetchall()
     assert [r[0] for r in rows] == sorted(_CITIES)

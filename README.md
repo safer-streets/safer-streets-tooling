@@ -4,7 +4,7 @@ Data-build tooling for the safer-streets project. Builds the production GeoParqu
 (crime + ONS boundaries + supplementary layers + per-cell aggregations) as modular, per-dataset
 files — consumers query these directly (in-memory DuckDB, locally or from Azure Blob). Depends on
 [`safer-streets-core`](../safer-streets-core) for the database
-helpers, H3 transforms, the data-source catalogue, and the ONS boundary downloader.
+helpers, H3 transforms, and the data-source catalogue.
 
 ## Pipeline
 

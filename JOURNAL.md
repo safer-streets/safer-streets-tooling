@@ -7,6 +7,57 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Longitude before latitude everywhere
+
+**Why**: beahiv 0.0.3 replaced `latlon_to_cell` with `lonlat_to_cell`. Coordinates were ordered
+inconsistently across tooling: `ST_Point(lon, lat)` in SQL, but `cell_id_columns(con, lat, lon, …)` and
+`(lat, lon)` test fixtures. Mixed conventions make a silent swap easy.
+
+**What**
+
+- `cell_id_columns(con, lon, lat, bng_geom)`, with all seven extractor call sites updated.
+- Test fixtures (`_CITIES`, `_LEEDS`, the inline `crime_data` / boundary `VALUES`) are `(lon, lat)`,
+  and `crime_data` fixtures are `(longitude, latitude, …)`, matching the police.uk CSV column order.
+- Prose (docstrings, the `crime_data` catalogue description) says "lon/lat".
+
+**Design decisions**
+
+- **x-first is the convention** because it matches `ST_Point(x, y)`, GeoJSON, `always_xy`, and beahiv.
+- **`h3_latlng_to_cell` stays latitude-first.** It's the H3 extension's fixed signature, so it is the one
+  place lat comes first, with a comment in `cell_id_columns`.
+
+## Reinstate the ONS boundary downloader in tooling
+
+**Why**: Core PR #20 deleted `scripts/ons_boundaries.py`, saying tooling now handles it. But
+`extract/boundaries.py` still did `from scripts import ons_boundaries`, so importing the extract
+registry failed, and with it every `extract` / `transform` / `build`.
+
+**What**
+
+- The ArcGIS paging and the GeoPackage cache writer move into `extract/boundaries.py` as `sources`,
+  `fetch_all_features` and `write_geopackage`, plus private `_query` / `_fetch_page`. Layer metadata still
+  comes from core's `data_source("boundaries")`.
+- Offline tests cover paging, the retry on an ArcGIS error body, and the extract end to end: cached
+  GeoPackage, `spatial_id` rename, BNG coordinates untouched, and no network on a cached rerun.
+- AGENTS.md no longer allows importing from core's `scripts`, and README/AGENTS no longer list the
+  downloader as a core dependency.
+
+**Design decisions**
+
+- **Port into this repo instead of restoring it in core.** Core's removal was deliberate, and `scripts`
+  is a top-level CLI package, not library API, so importing it was fragile (as this breakage shows).
+- **Only what the extractor uses.** About 80 of the original 544 lines. Dropped: the typer CLI, the
+  GeoJSON/shapefile/DuckDB writers, and the WGS-84 option. The extractor only ever asked for BNG, so
+  `outSR=27700` is fixed.
+- **Inline in `boundaries.py`, not a shared `_ons.py`.** It is the only consumer.
+- **Same cache filename (`{filename}_bng.gpkg`) and the same column lower-casing**, so existing caches
+  are still reused and `id_field` still matches.
+
+**Follow-ups**
+
+- geopandas is only there to turn GeoJSON into GPKG with lower-cased columns. DuckDB could `ST_Read`
+  the GeoJSON directly and lower-case in SQL, which would drop that dependency from the extract path.
+
 ## Descriptions name the overlapping retail centre, not a shop count
 
 **Why** — "; 12 shops" is too precise for a location label: the exact count reads as a measured fact, and

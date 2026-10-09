@@ -113,7 +113,7 @@ def extract(ctx: ExtractContext) -> None:
             SELECT
                 b.* EXCLUDE (geom, centroid, centroid_ll),
                 oa.spatial_id AS oa21cd,
-                {cell_id_columns(con, "ST_Y(b.centroid_ll)", "ST_X(b.centroid_ll)", "b.centroid")},
+                {cell_id_columns(con, "ST_X(b.centroid_ll)", "ST_Y(b.centroid_ll)", "b.centroid")},
                 b.geom
             FROM located b
             LEFT JOIN read_parquet('{oa_pq}') oa
