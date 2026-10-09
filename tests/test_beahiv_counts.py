@@ -7,7 +7,7 @@ Synthetic fixtures only — offline-safe, mirroring test_transform_pipeline.
 
 import duckdb
 import pytest
-from beahiv import Orientation, bng_to_cell, decode, latlon_to_cell
+from beahiv import Orientation, bng_to_cell, decode, lonlat_to_cell
 from duckdb.sqltypes import BIGINT, DOUBLE
 from safer_streets_core.database import duckdb_connector
 
@@ -50,7 +50,7 @@ def _crime_data(con):
 
 def _spatial_id(lat: float, lon: float) -> int:
     """The spatial_id the step should emit for a point, via beahiv's scalar encoder."""
-    return latlon_to_cell(lat, lon, SIDE_LENGTH, ORIENTATION)
+    return lonlat_to_cell(lon, lat, SIDE_LENGTH, ORIENTATION)
 
 
 def test_counts_conserve_filtered_input():
