@@ -39,7 +39,7 @@ def extract(ctx: ExtractContext) -> None:
             CREATE TABLE poi AS SELECT
                 id AS poi_id,
                 ST_Transform(geometry, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom,
-                {cell_id_columns(con, "ST_Y(geometry)", "ST_X(geometry)", "geom")},
+                {cell_id_columns(con, "ST_X(geometry)", "ST_Y(geometry)", "geom")},
                 names.primary AS name,
                 addresses[1].postcode AS postcode,
                 basic_category,

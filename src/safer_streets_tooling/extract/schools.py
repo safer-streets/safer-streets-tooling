@@ -87,7 +87,7 @@ def extract(ctx: ExtractContext) -> None:
     Write the ``schools`` parquet from the GIAS export, with a 10-minute walk isochrone per school.
 
     Open schools with valid coordinates are parsed into a point ``geom`` (BNG) plus ``h3_{8..11}_id``
-    cell ids (the GIAS export has no lat/lon, so these are derived by transforming geom back to
+    cell ids (the GIAS export has no lon/lat, so these are derived by transforming geom back to
     WGS-84); a walk catchment ``isochrone`` polygon is then computed over the open_roads network, so
     this requires the ``open_roads`` parquet (extract roads first). The GIAS export is downloaded
     automatically (cached unless force_download).
@@ -123,7 +123,7 @@ def extract(ctx: ExtractContext) -> None:
             )
             SELECT
                 * EXCLUDE pt,
-                {cell_id_columns(con, "ST_Y(pt)", "ST_X(pt)", "geom")},
+                {cell_id_columns(con, "ST_X(pt)", "ST_Y(pt)", "geom")},
             FROM pts;
         """)
 

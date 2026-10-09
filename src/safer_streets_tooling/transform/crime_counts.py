@@ -1,6 +1,6 @@
 """``h3r{res}_crime_counts`` / ``hotspots_crime_counts`` — crimes counted per cell / crime type / month.
 
-The H3 table indexes each crime's lat/lon straight to a cell — arithmetic on the coordinates, no join.
+The H3 table indexes each crime's lon/lat straight to a cell — arithmetic on the coordinates, no join.
 The Home Office hotspot hexes are a polygon layer, so those counts assign each crime point-in-polygon to
 a hex, keyed by the same ``spatial_id`` / ``crime_type`` / ``month`` / ``count`` schema.
 
@@ -64,7 +64,7 @@ def _count_in_polygons(con: duckdb.DuckDBPyConnection, key: str, table: str, exp
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``h3r{res}_crime_counts`` counting crimes per H3 cell / crime type / month.
 
-    The cell is taken straight from the crime's lat/lon with ``h3_latlng_to_cell`` — no geometry, no
+    The cell is taken straight from the crime's lon/lat with ``h3_latlng_to_cell`` — no geometry, no
     join. British Transport Police records (``falls_within``) are excluded: their crimes are reported
     against the rail network rather than the place they occurred, so they would distort the counts.
 

@@ -45,7 +45,7 @@ def extract(ctx: ExtractContext) -> None:
             CREATE TABLE streetlights AS SELECT
                 id AS streetlight_id,
                 ST_Transform(geometry, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom,
-                {cell_id_columns(con, "ST_Y(geometry)", "ST_X(geometry)", "geom")}
+                {cell_id_columns(con, "ST_X(geometry)", "ST_Y(geometry)", "geom")}
             FROM reader
             WHERE subtype = ? AND class = ?
             """,

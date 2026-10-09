@@ -7,6 +7,25 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Longitude before latitude everywhere
+
+**Why**: beahiv 0.0.3 replaced `latlon_to_cell` with `lonlat_to_cell`. Coordinates were ordered
+inconsistently across tooling: `ST_Point(lon, lat)` in SQL, but `cell_id_columns(con, lat, lon, …)` and
+`(lat, lon)` test fixtures. Mixed conventions make a silent swap easy.
+
+**What**
+
+- `cell_id_columns(con, lon, lat, bng_geom)`, with all seven extractor call sites updated.
+- Test fixtures (`_CITIES`, `_LEEDS`, the inline `crime_data` / boundary `VALUES`) are `(lon, lat)`,
+  and `crime_data` fixtures are `(longitude, latitude, …)`, matching the police.uk CSV column order.
+- Prose (docstrings, the `crime_data` catalogue description) says "lon/lat".
+
+**Design decisions**
+
+- **x-first is the convention** because it matches `ST_Point(x, y)`, GeoJSON, `always_xy`, and beahiv.
+- **`h3_latlng_to_cell` stays latitude-first.** It's the H3 extension's fixed signature, so it is the one
+  place lat comes first, with a comment in `cell_id_columns`.
+
 ## Reinstate the ONS boundary downloader in tooling
 
 **Why**: Core PR #20 deleted `scripts/ons_boundaries.py`, saying tooling now handles it. But

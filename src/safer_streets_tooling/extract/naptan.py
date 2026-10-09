@@ -79,7 +79,7 @@ def extract(ctx: ExtractContext) -> None:
             CREATE TABLE naptan AS
             SELECT
                 * EXCLUDE pt,
-                {cell_id_columns(con, "ST_Y(pt)", "ST_X(pt)", "geom")}
+                {cell_id_columns(con, "ST_X(pt)", "ST_Y(pt)", "geom")}
             FROM (
                 SELECT *, ST_Transform(geom, 'EPSG:27700', 'EPSG:4326', always_xy := true) AS pt
                 FROM (

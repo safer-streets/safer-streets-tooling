@@ -64,7 +64,7 @@ def extract(ctx: ExtractContext) -> None:
             CREATE TABLE cctv AS SELECT
                 cctv_id,
                 ST_Transform(ST_Point(lon, lat), 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom,
-                {cell_id_columns(con, "lat", "lon", "geom")}
+                {cell_id_columns(con, "lon", "lat", "geom")}
             FROM _cctv
             """
         )

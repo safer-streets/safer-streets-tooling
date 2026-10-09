@@ -64,7 +64,7 @@ def extract(ctx: ExtractContext) -> None:
                     ST_Point(CAST(Longitude AS DOUBLE), CAST(Latitude AS DOUBLE)),
                     'EPSG:4326', 'EPSG:27700', always_xy := true
                 ) AS geom,
-                {cell_id_columns(con, "CAST(Latitude AS DOUBLE)", "CAST(Longitude AS DOUBLE)", "geom")}
+                {cell_id_columns(con, "CAST(Longitude AS DOUBLE)", "CAST(Latitude AS DOUBLE)", "geom")}
             FROM read_csv_auto('{csv_path}', all_varchar=true)
             WHERE BusinessTypeID IN ({business_type_ids})
               AND SchemeType = 'FHRS'                                   -- England, Wales, NI (not Scotland's FHIS)
