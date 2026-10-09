@@ -10,11 +10,13 @@ import duckdb
 import pandas as pd
 import pytest
 import requests
+import shapely
 
 from safer_streets_tooling import data_pipeline
 from safer_streets_tooling.async_node import AsyncNode
 from safer_streets_tooling.async_pipeline import AsyncPipeline
 from safer_streets_tooling.extract import (
+    boundaries,
     build_pipeline,
     crime,
     residential_population,
@@ -346,6 +348,84 @@ def test_crime_coverage_without_the_force_list_writes_nothing(tmp_path, monkeypa
     with pytest.raises(requests.ConnectionError):
         crime.extract_coverage(_ctx(tmp_path))
     assert not (tmp_path / "crime_coverage.parquet").exists()
+
+
+_BOUNDARY_SOURCES = {
+    "base_url": "https://ons.example/",
+    "layers": {"oa": {"endpoint": "oa/query", "filename": "oa", "table": "output_areas_2021", "id_field": "oa21cd"}},
+}
+
+
+def _arcgis_session(features, fail_first_page=False):
+    """A fake requests session serving an ArcGIS feature service: a count query, then paged GeoJSON. Records
+    each page request's params; optionally returns an ArcGIS error body (HTTP 200) for the first page request."""
+    pages = []
+
+    def get(endpoint, params, timeout):
+        assert endpoint == "https://ons.example/oa/query"
+        if params.get("returnCountOnly"):
+            body = {"count": len(features)}
+        elif fail_first_page and not pages:
+            pages.append(None)
+            body = {"error": {"code": 500}}
+        else:
+            pages.append(params)
+            start = params["resultOffset"]
+            body = {"features": features[start : start + params["resultRecordCount"]]}
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: body)
+
+    return SimpleNamespace(headers={}, get=get), pages
+
+
+def _oa_feature(code, x):
+    ring = [[x, 400000], [x + 100, 400000], [x + 100, 400100], [x, 400100], [x, 400000]]
+    return {"type": "Feature", "properties": {"OA21CD": code}, "geometry": {"type": "Polygon", "coordinates": [ring]}}
+
+
+def test_boundaries_pages_through_the_feature_service_in_bng(monkeypatch):
+    """Features are fetched in PAGE_SIZE pages until the reported count is reached, each requested in BNG."""
+    features = [_oa_feature(f"E0000000{i}", 400000 + 1000 * i) for i in range(5)]
+    session, pages = _arcgis_session(features)
+    monkeypatch.setattr(boundaries, "sources", lambda: _BOUNDARY_SOURCES)
+    monkeypatch.setattr(boundaries, "PAGE_SIZE", 2)
+
+    assert boundaries.fetch_all_features("oa", session) == features
+    assert [(p["resultOffset"], p["resultRecordCount"]) for p in pages] == [(0, 2), (2, 2), (4, 1)]
+    assert {p["outSR"] for p in pages} == {"27700"}
+
+
+def test_boundaries_retries_an_arcgis_error_body(monkeypatch):
+    """ArcGIS reports errors in a 200 response; that page is retried rather than read as empty."""
+    features = [_oa_feature("E00000001", 400000)]
+    session, pages = _arcgis_session(features, fail_first_page=True)
+    monkeypatch.setattr(boundaries, "sources", lambda: _BOUNDARY_SOURCES)
+    monkeypatch.setattr(boundaries.time, "sleep", lambda s: None)
+
+    assert boundaries.fetch_all_features("oa", session) == features
+    assert len(pages) == 2
+
+
+def test_boundaries_extract_writes_bng_layer_keyed_by_spatial_id(tmp_path, monkeypatch):
+    """The downloaded layer is cached as a GeoPackage and written to parquet with its id field renamed to
+    spatial_id and its BNG coordinates untouched; a second run reuses the cache without the network."""
+    session, _ = _arcgis_session([_oa_feature("E00000001", 400000), _oa_feature("E00000002", 401000)])
+    monkeypatch.setattr(boundaries, "sources", lambda: _BOUNDARY_SOURCES)
+    monkeypatch.setattr(boundaries, "raw_dir", lambda: tmp_path)
+    monkeypatch.setattr(boundaries.requests, "Session", lambda: session)
+    extract = boundaries._make_extract("oa", "output_areas_2021")
+
+    try:
+        extract(_ctx(tmp_path))
+    except duckdb.HTTPException as e:  # extension download unavailable
+        pytest.skip(f"extension download unavailable: {e}")
+
+    assert (tmp_path / "oa_bng.gpkg").exists()
+    df = pd.read_parquet(tmp_path / "output_areas_2021.parquet")
+    assert list(df["spatial_id"]) == ["E00000001", "E00000002"]
+    assert shapely.from_wkb(df["geom"].iloc[0]).bounds == (400000, 400000, 400100, 400100)
+
+    monkeypatch.setattr(boundaries.requests, "Session", _unreachable)
+    extract(_ctx(tmp_path))
 
 
 def test_run_extract_exposed_on_data_pipeline():
