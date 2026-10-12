@@ -12,8 +12,8 @@ Two phases (extract → transform), driven by a dataset registry
 (`safer_streets_tooling.extract.DATASETS`) and a transform-step registry
 (`safer_streets_tooling.transform.STEPS`):
 
-Every point layer the extract produces (buildings by centroid, schools, poi, naptan, food_outlets,
-streetlights, cctv) carries a cell id **per grid** — `h3r9_id` and `beahiv202_id` — minted in one place
+Every point layer the extract produces (buildings by centroid, schools, poi, naptan, station_usage,
+food_outlets, streetlights, cctv) carries a cell id **per grid** — `h3r9_id` and `beahiv202_id` — minted in one place
 ([`_common.cell_id_columns`](src/safer_streets_tooling/extract/_common.py)), so the transform can group
 by a column instead of joining on geometry, and a consumer can join a feature straight to either grid's
 `*_geogs`.
@@ -109,6 +109,7 @@ flowchart LR
    open_roads
    poi
    naptan
+   station_usage
    food_outlets
    streetlights
    cctv
@@ -257,7 +258,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
-    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv202,hotspots extract;
+    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,beahiv202,hotspots extract;
     class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,beahiv202_crime_counts,beahiv_geo_lookups,beahiv_lookups,beahiv202_geogs,beahiv202_descriptions transform;
     class h3_retail_centres_lookup,hotspots_retail_centre_lookup,beahiv202_retail_centre_lookup deprecated;
 ```
@@ -342,6 +343,7 @@ absence). Registry order respects `depends_on`:
 | `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |
 | `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | — |
 | `naptan` | [naptan.py](src/safer_streets_tooling/extract/naptan.py) | no | — |
+| `station_usage` | [station_usage.py](src/safer_streets_tooling/extract/station_usage.py) | no | — (ORR Table 1410 has no coordinates; stations are located by CRS code against NaPTAN's rail XML, fetched by the extractor itself rather than read from the `naptan` parquet) |
 | `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |
 | `streetlights` | [streetlights.py](src/safer_streets_tooling/extract/streetlights.py) | no | — |
 | `cctv` | [cctv.py](src/safer_streets_tooling/extract/cctv.py) | no | — |

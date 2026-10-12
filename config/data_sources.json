@@ -146,6 +146,19 @@
     "glob": "naptan*.csv",
     "note": "NAPTAN national public-transport access nodes (DfT, open data, no API key). The national CSV is published at a fixed URL (https://beta-naptan.dft.gov.uk/download/national); the loader downloads it and caches it under the data directory's raw folder. Coordinates supplied in BNG (Easting/Northing, EPSG:27700)."
   },
+  "station_usage": {
+    "url": "https://dataportal.orr.gov.uk/media/1909/table-1410-passenger-entries-and-exits-and-interchanges-by-station.csv",
+    "csv": "orr_table_1410_2024-25.csv",
+    "naptan_rail_url": "https://naptan.api.dft.gov.uk/v1/access-nodes?dataFormat=xml&atcoAreaCodes=910",
+    "naptan_rail_xml": "naptan_rail.xml",
+    "crs_overrides": {
+      "HXX": "HTRWAPT",
+      "OXP": "OXFPWAY",
+      "PNC": "PENYCHN",
+      "ZLW": "WCHAPEL"
+    },
+    "note": "ORR estimates of station usage, Table 1410 (passenger entries/exits and interchanges by station, one financial year; open data, https://dataportal.orr.gov.uk/statistics/usage/estimates-of-station-usage). The /media/<id>/ URL changes with every annual release (each November/December), so update url and csv together. The table has no coordinates: stations are located by their Three Letter Code (CRS) against the NaPTAN national rail area (ATCO area 910) XML, which carries each station's CRS and TIPLOC; positions are the StopPoint's BNG Easting/Northing. crs_overrides maps an ORR TLC that NaPTAN lists under a different CRS to the NaPTAN TIPLOC to use instead."
+  },
   "food_outlets": {
     "url": "https://safhrsprodstorage.blob.core.windows.net/opendatafileblobstorage/FHRS_All_en-GB.csv",
     "csv": "fhrs_all_en-GB.csv",

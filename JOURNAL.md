@@ -7,6 +7,62 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Add `station_usage`: ORR passenger entries/exits per rail station
+
+**Why**: Station footfall is a strong driver of street crime nearby. NaPTAN tells us where stations
+are, but not how busy they are. ORR's annual *estimates of station usage* give passenger counts for
+every GB mainline station.
+
+**What**
+
+- A new optional dataset `station_usage` ([station_usage.py](src/safer_streets_tooling/extract/station_usage.py)),
+  built from ORR Table 1410 (2024-25, 2,589 stations). It holds entries and exits by ticket type,
+  total, rank, interchanges, the main origin/destination station, ORR's quality and closure notes,
+  NLC, CRS, region and facility owner, plus a BNG point and `h3r9_id` / `beahiv202_id`.
+- A `station_usage` catalogue entry holding the ORR CSV URL, the NaPTAN rail-area XML URL and
+  `crs_overrides`.
+- Offline tests: [test_station_usage.py](tests/test_station_usage.py).
+
+**Design decisions**
+
+- **Located by CRS against NaPTAN's rail XML (ATCO area 910), not by name against the `naptan`
+  parquet.** Table 1410 has no coordinates, in its CSV or its ODS. The national NaPTAN CSV keys rail
+  stops by TIPLOC and has no CRS, so joining to it would mean fuzzy name matching across about 2,600
+  stations. The area-910 XML (27 MB, no API key) cross-references CRS and TIPLOC, so the join is on a
+  code. With the 2024-25 data, 2,585 of 2,589 stations match directly.
+  - This costs a second NaPTAN download, and `station_usage` doesn't `depends_on` `naptan`.
+- **`crs_overrides` (ORR TLC → NaPTAN TIPLOC) for the other 4.** These are Heathrow T2&3 (HXX),
+  Oxford Parkway (OXP), Penychain (PNC) and Whitechapel (ZLW), which NaPTAN files under different CRS
+  codes. Whitechapel and Heathrow are busy enough that dropping them would matter.
+  - The map is catalogue data, not code, so a future mismatch is a JSON edit. Any station still
+    unmatched is printed by name and dropped.
+- **Picking one candidate per station.** 28 CRS codes have more than one NaPTAN rail StopPoint.
+  Mostly they're duplicates metres apart, but NaPTAN also files Newbury Park (Underground) under
+  Newbury Racecourse's NRC, 99 km away. Averaging the candidates would put that point in the
+  Chilterns. Instead the order is: active first, then the best `jaro_winkler_similarity` between the
+  ORR name and NaPTAN's station name, then the lowest ATCO code for determinism.
+- **Position from the StopPoint's `Place/Location`, not `AnnotatedRailRef/Location`.** The latter is
+  missing for six Elizabeth-line stations (Bond Street, Canary Wharf, …). `Place/Location` is always
+  present.
+- **CSV read with the stdlib `csv` module, columns matched by header name.** The header cells contain
+  quoted line breaks, which makes DuckDB's line-based `skip=` awkward. Matching by name with
+  whitespace collapsed means a reordered release still parses, and a renamed or dropped column raises
+  instead of shifting data.
+- **The year (`period`) is parsed from the table title, not stored in the catalogue,** so it can't
+  drift when the URL is bumped. `[z]` becomes NULL and `[note N]` markers are stripped from names.
+  - The three stations closed all year (e.g. Teesside Airport) are kept, with NULL counts and the
+    reason in `additional_information`.
+
+**Follow-ups**
+
+- ORR's `/media/<id>/` URL changes with each annual release (next due November 2026). Update `url` and
+  `csv` together in `config/data_sources.json`.
+- Extract only. Rolling `entries_exits` up to H3/BEAHIV/hotspot cells (e.g. a station-footfall
+  column on `*_geogs`) is a separate transform step.
+- Only the latest year is extracted. Table 1415 (the time series, ODS only) would give trends.
+- AGENTS.md still says new URLs go in *core's* `data_sources.json`, but the extractors read this
+  repo's `config/data_sources.json`. That doc fix is left for its own change.
+
 ## Longitude before latitude everywhere
 
 **Why**: beahiv 0.0.3 replaced `latlon_to_cell` with `lonlat_to_cell`. Coordinates were ordered

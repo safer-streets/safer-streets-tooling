@@ -26,6 +26,7 @@ from safer_streets_tooling.extract import (
     road_intersections,
     roads,
     schools,
+    station_usage,
     streetlights,
     workplace_population,
 )
@@ -42,6 +43,7 @@ DATASETS: tuple[Dataset, ...] = (
     road_intersections.DATASET,  # reuses the open_roads geopackage: intersection (junction/roundabout) nodes
     poi.DATASET,
     naptan.DATASET,
+    station_usage.DATASET,  # located by CRS against NaPTAN's rail XML, not the naptan parquet
     food_outlets.DATASET,
     streetlights.DATASET,
     cctv.DATASET,
