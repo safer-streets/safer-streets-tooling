@@ -7,6 +7,32 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Make `station_usage` a required dataset
+
+**Why**: Once `naptan` drops rail stop types (entry below), `station_usage` is the only place rail
+stations appear. As an optional dataset, a failed ORR or NaPTAN-XML download would be skipped with a
+warning, and the build would carry on with no rail stations at all.
+
+**What**: `station_usage` is now `optional=False`. A failed extract aborts `data extract`, and a
+missing `station_usage.parquet` aborts the transform's import, the same as crime and boundaries.
+README's dataset table and AGENTS.md's list of required datasets are updated.
+
+**Design decisions**
+
+- **Required rather than a fallback to NaPTAN rail.** The alternative was to keep it optional and
+  have `naptan` keep its rail rows whenever `station_usage` is absent. That couples the two
+  extractors, and the meaning of `n_stops` would change from build to build. Failing loudly keeps
+  the output consistent.
+- **The trade-off is that the build now depends on two more remote sources** (the ORR CSV and the NaPTAN
+  area-910 XML). Both are cached under `raw/` after the first download, so only a fresh data
+  directory or `--force-download` is exposed. Stations that aren't matched are still dropped with a
+  warning rather than aborting, because a few missing stations shouldn't block a build.
+
+**Follow-ups**
+
+- When ORR's annual URL changes and the old one is withdrawn, a fresh build will fail until
+  `config/data_sources.json` is updated. Previously it would have skipped quietly.
+
 ## Drop national rail from `naptan`
 
 **Why**: Issue #28, point 2. Now that `station_usage` gives each mainline station a point and its

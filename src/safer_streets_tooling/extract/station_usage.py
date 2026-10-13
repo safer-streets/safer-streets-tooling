@@ -205,5 +205,6 @@ DATASET = Dataset(
     name="station_usage",
     table="station_usage",
     extract=extract,
+    optional=False,  # naptan drops rail stop types, so skipping this would silently remove rail stations entirely
     description="ORR estimated annual passenger entries/exits and interchanges per GB rail station, located via NaPTAN.",
 )
