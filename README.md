@@ -342,7 +342,7 @@ absence). Registry order respects `depends_on`:
 | `retail_centres` | [retail_centres.py](src/safer_streets_tooling/extract/retail_centres.py) | no | — |
 | `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |
 | `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | — |
-| `naptan` | [naptan.py](src/safer_streets_tooling/extract/naptan.py) | no | — |
+| `naptan` | [naptan.py](src/safer_streets_tooling/extract/naptan.py) | no | — (national rail stop types `RLY`/`RPL`/`RSE` are dropped; rail is represented by `station_usage`) |
 | `station_usage` | [station_usage.py](src/safer_streets_tooling/extract/station_usage.py) | no | — (ORR Table 1410 has no coordinates; stations are located by CRS code against NaPTAN's rail XML, fetched by the extractor itself rather than read from the `naptan` parquet) |
 | `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |
 | `streetlights` | [streetlights.py](src/safer_streets_tooling/extract/streetlights.py) | no | — |

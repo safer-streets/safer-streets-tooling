@@ -7,6 +7,39 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Drop national rail from `naptan`
+
+**Why**: Issue #28, point 2. Now that `station_usage` gives each mainline station a point and its
+footfall, NaPTAN's rail rows double-count stations. Consumers derive `n_stops` from
+`COUNT(*) … GROUP BY` cell on `naptan.parquet`. A large station has many `RSE` entrance rows, which
+inflate the stop count in exactly the cells where `station_usage` already measures footfall. In the
+2026 extract, rail was 6,418 of ~388k rows (2,672 `RLY`, 3,743 `RSE`, 3 `RPL`).
+
+**What**
+
+- The `naptan` extractor drops StopTypes `RLY` / `RPL` / `RSE` (`RAIL_STOP_TYPES`). The `rail`
+  `stop_category` no longer appears.
+- The test fixture now includes all three rail types and asserts they're dropped. The README dataset
+  table, docstrings and `description` are updated to match.
+
+**Design decisions**
+
+- **Filter in the extractor, not in each consumer.** The alternative was to keep rail in the parquet
+  and add `WHERE stop_category <> 'rail'` to every consumer's count (peer-hex-explorer and the
+  safer-streets-eda notebooks and `generate_hotspots.py`). That keeps the data complete, but it spreads
+  edits across repos and every future consumer has to remember the filter. Dropping rail at source
+  fixes every existing count on the next extract. Nothing is lost, because `station_usage` holds the
+  station locations.
+- **Tram / metro / Underground stay.** ORR Table 1410 covers mainline stations only, so
+  `MET` / `PLT` / `TMU` remain NaPTAN's job. Interchanges that are both (e.g. Whitechapel) show up in
+  both datasets. That's accepted, because one is a stop count and the other is footfall.
+
+**Follow-ups**
+
+- Re-run `data extract --only naptan` so consumers pick up the rail-free counts.
+- A transform step rolling `station_usage.entries_exits` onto the grids is still deferred. Consumers
+  can `SUM(entries_exits) GROUP BY h3r9_id` / `beahiv202_id` directly.
+
 ## Add `station_usage`: ORR passenger entries/exits per rail station
 
 **Why**: Station footfall is a strong driver of street crime nearby. NaPTAN tells us where stations
