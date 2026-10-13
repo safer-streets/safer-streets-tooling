@@ -156,7 +156,7 @@ Overture S3 is unreachable, mirroring the existing tests.
   declared `outputs` as parquet and, when they all exist (and not `--all`), reloads them instead of
   rebuilding — so a downstream step can still read an upstream step's relations from the catalog.
   `build_all` unwraps each result, re-raising the first failure.
-- **Required vs optional datasets.** `optional=False` (crime, boundaries) aborts the build if it can't
+- **Required vs optional datasets.** `optional=False` (crime, boundaries, station_usage) aborts the build if it can't
   be produced; everything else is best-effort and skipped. The H3 transforms already tolerate absent
   optional tables, so a skipped dataset is simply omitted from the output.
 - **Type annotations required.** Full signatures; `ty` must pass. A few rules are relaxed in

@@ -1,10 +1,11 @@
-"""NAPTAN public-transport access nodes (bus stops, rail/metro/tram, ferry, taxi…) → ``naptan.parquet``.
+"""NAPTAN public-transport access nodes (bus stops, metro/tram, ferry, taxi…) → ``naptan.parquet``.
 
 The DfT NAPTAN national export is a single national CSV of every public-transport access node in Great
 Britain, keyed by ATCO code. Only *active* stops with valid coordinates are kept; the supplied
 Easting/Northing (already BNG, EPSG:27700) become the point ``geom``, and the NAPTAN ``StopType`` is
-folded into a coarse ``stop_category`` (bus / rail / tram_metro / ferry / taxi / air / other) for easy
-filtering.
+folded into a coarse ``stop_category`` (bus / tram_metro / ferry / taxi / air / other) for easy
+filtering. National rail stops are excluded: mainline stations are covered by ``station_usage``, one
+point per station with its passenger footfall.
 """
 
 from pathlib import Path
@@ -24,9 +25,6 @@ STOP_CATEGORY = {
     "BCE": "bus",  # bus / coach station entrance
     "BST": "bus",  # bus / coach trolley station
     "MKD": "bus",  # marked (point) bus stop
-    "RLY": "rail",  # rail station access area (platform)
-    "RPL": "rail",  # rail platform
-    "RSE": "rail",  # rail station entrance
     "MET": "tram_metro",  # tram / metro / underground access area
     "PLT": "tram_metro",  # tram / metro / underground platform
     "TMU": "tram_metro",  # tram / metro / underground station entrance
@@ -38,6 +36,11 @@ STOP_CATEGORY = {
     "AIR": "air",  # airport entrance
     "GAT": "air",  # airport interchange area
 }
+
+# National rail StopTypes, dropped because station_usage represents each mainline station once, with its
+# footfall. Left in, a station's many entrance (RSE) rows would inflate a per-cell stop count in exactly
+# the cells where station_usage already measures footfall.
+RAIL_STOP_TYPES = ("RLY", "RPL", "RSE")  # rail station access area, platform, entrance
 
 
 def _download_naptan(*, force_download: bool = False) -> Path:
@@ -60,8 +63,9 @@ def extract(ctx: ExtractContext) -> None:
     """
     Write the ``naptan`` parquet from the DfT NAPTAN national CSV (public-transport access nodes).
 
-    Only active stops with a valid Easting/Northing are kept; the supplied BNG coordinates become a
-    point ``geom`` (EPSG:27700) and the raw ``StopType`` is mapped to a coarse ``stop_category``. A
+    Only active, non-rail stops with a valid Easting/Northing are kept (rail is ``station_usage``'s); the
+    supplied BNG coordinates become a point ``geom`` (EPSG:27700) and the raw ``StopType`` is mapped to a
+    coarse ``stop_category``. A
     resolution-9 H3 cell id (``h3r9_id``, lowercase hex) is derived from ``geom`` (transformed to
     WGS-84) for joining to the H3 grid — using ``geom`` rather than the CSV's own Longitude/Latitude,
     which are blank for ~8% of otherwise-valid stops. The CSV is downloaded automatically (cached unless
@@ -71,6 +75,7 @@ def extract(ctx: ExtractContext) -> None:
 
     # SQL CASE mapping StopType -> stop_category, built from STOP_CATEGORY.
     category_case = "\n".join(f"                    WHEN '{code}' THEN '{cat}'" for code, cat in STOP_CATEGORY.items())
+    rail_types = ", ".join(f"'{code}'" for code in RAIL_STOP_TYPES)
 
     con = duckdb_connector(writeable=True)
     try:
@@ -100,6 +105,7 @@ def extract(ctx: ExtractContext) -> None:
                         ST_Point(CAST(Easting AS DOUBLE), CAST(Northing AS DOUBLE)) AS geom
                     FROM read_csv_auto('{csv_path}', all_varchar=true)
                     WHERE Status = 'active'
+                      AND StopType NOT IN ({rail_types})
                       AND TRY_CAST(Easting AS DOUBLE) > 0
                       AND TRY_CAST(Northing AS DOUBLE) > 0
                 )
@@ -116,5 +122,5 @@ DATASET = Dataset(
     name="naptan",
     table="naptan",
     extract=extract,
-    description="NAPTAN public-transport access nodes (bus/rail/metro/tram/ferry/taxi stops).",
+    description="NAPTAN public-transport access nodes (bus/metro/tram/ferry/taxi stops; rail is in station_usage).",
 )

@@ -7,6 +7,121 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Make `station_usage` a required dataset
+
+**Why**: Once `naptan` drops rail stop types (entry below), `station_usage` is the only place rail
+stations appear. As an optional dataset, a failed ORR or NaPTAN-XML download would be skipped with a
+warning, and the build would carry on with no rail stations at all.
+
+**What**: `station_usage` is now `optional=False`. A failed extract aborts `data extract`, and a
+missing `station_usage.parquet` aborts the transform's import, the same as crime and boundaries.
+README's dataset table and AGENTS.md's list of required datasets are updated.
+
+**Design decisions**
+
+- **Required rather than a fallback to NaPTAN rail.** The alternative was to keep it optional and
+  have `naptan` keep its rail rows whenever `station_usage` is absent. That couples the two
+  extractors, and the meaning of `n_stops` would change from build to build. Failing loudly keeps
+  the output consistent.
+- **The trade-off is that the build now depends on two more remote sources** (the ORR CSV and the NaPTAN
+  area-910 XML). Both are cached under `raw/` after the first download, so only a fresh data
+  directory or `--force-download` is exposed. Stations that aren't matched are still dropped with a
+  warning rather than aborting, because a few missing stations shouldn't block a build.
+
+**Follow-ups**
+
+- When ORR's annual URL changes and the old one is withdrawn, a fresh build will fail until
+  `config/data_sources.json` is updated. Previously it would have skipped quietly.
+
+## Drop national rail from `naptan`
+
+**Why**: Issue #28, point 2. Now that `station_usage` gives each mainline station a point and its
+footfall, NaPTAN's rail rows double-count stations. Consumers derive `n_stops` from
+`COUNT(*) … GROUP BY` cell on `naptan.parquet`. A large station has many `RSE` entrance rows, which
+inflate the stop count in exactly the cells where `station_usage` already measures footfall. In the
+2026 extract, rail was 6,418 of ~388k rows (2,672 `RLY`, 3,743 `RSE`, 3 `RPL`).
+
+**What**
+
+- The `naptan` extractor drops StopTypes `RLY` / `RPL` / `RSE` (`RAIL_STOP_TYPES`). The `rail`
+  `stop_category` no longer appears.
+- The test fixture now includes all three rail types and asserts they're dropped. The README dataset
+  table, docstrings and `description` are updated to match.
+
+**Design decisions**
+
+- **Filter in the extractor, not in each consumer.** The alternative was to keep rail in the parquet
+  and add `WHERE stop_category <> 'rail'` to every consumer's count (peer-hex-explorer and the
+  safer-streets-eda notebooks and `generate_hotspots.py`). That keeps the data complete, but it spreads
+  edits across repos and every future consumer has to remember the filter. Dropping rail at source
+  fixes every existing count on the next extract. Nothing is lost, because `station_usage` holds the
+  station locations.
+- **Tram / metro / Underground stay.** ORR Table 1410 covers mainline stations only, so
+  `MET` / `PLT` / `TMU` remain NaPTAN's job. Interchanges that are both (e.g. Whitechapel) show up in
+  both datasets. That's accepted, because one is a stop count and the other is footfall.
+
+**Follow-ups**
+
+- Re-run `data extract --only naptan` so consumers pick up the rail-free counts.
+- A transform step rolling `station_usage.entries_exits` onto the grids is still deferred. Consumers
+  can `SUM(entries_exits) GROUP BY h3r9_id` / `beahiv202_id` directly.
+
+## Add `station_usage`: ORR passenger entries/exits per rail station
+
+**Why**: Station footfall is a strong driver of street crime nearby. NaPTAN tells us where stations
+are, but not how busy they are. ORR's annual *estimates of station usage* give passenger counts for
+every GB mainline station.
+
+**What**
+
+- A new optional dataset `station_usage` ([station_usage.py](src/safer_streets_tooling/extract/station_usage.py)),
+  built from ORR Table 1410 (2024-25, 2,589 stations). It holds entries and exits by ticket type,
+  total, rank, interchanges, the main origin/destination station, ORR's quality and closure notes,
+  NLC, CRS, region and facility owner, plus a BNG point and `h3r9_id` / `beahiv202_id`.
+- A `station_usage` catalogue entry holding the ORR CSV URL, the NaPTAN rail-area XML URL and
+  `crs_overrides`.
+- Offline tests: [test_station_usage.py](tests/test_station_usage.py).
+
+**Design decisions**
+
+- **Located by CRS against NaPTAN's rail XML (ATCO area 910), not by name against the `naptan`
+  parquet.** Table 1410 has no coordinates, in its CSV or its ODS. The national NaPTAN CSV keys rail
+  stops by TIPLOC and has no CRS, so joining to it would mean fuzzy name matching across about 2,600
+  stations. The area-910 XML (27 MB, no API key) cross-references CRS and TIPLOC, so the join is on a
+  code. With the 2024-25 data, 2,585 of 2,589 stations match directly.
+  - This costs a second NaPTAN download, and `station_usage` doesn't `depends_on` `naptan`.
+- **`crs_overrides` (ORR TLC → NaPTAN TIPLOC) for the other 4.** These are Heathrow T2&3 (HXX),
+  Oxford Parkway (OXP), Penychain (PNC) and Whitechapel (ZLW), which NaPTAN files under different CRS
+  codes. Whitechapel and Heathrow are busy enough that dropping them would matter.
+  - The map is catalogue data, not code, so a future mismatch is a JSON edit. Any station still
+    unmatched is printed by name and dropped.
+- **Picking one candidate per station.** 28 CRS codes have more than one NaPTAN rail StopPoint.
+  Mostly they're duplicates metres apart, but NaPTAN also files Newbury Park (Underground) under
+  Newbury Racecourse's NRC, 99 km away. Averaging the candidates would put that point in the
+  Chilterns. Instead the order is: active first, then the best `jaro_winkler_similarity` between the
+  ORR name and NaPTAN's station name, then the lowest ATCO code for determinism.
+- **Position from the StopPoint's `Place/Location`, not `AnnotatedRailRef/Location`.** The latter is
+  missing for six Elizabeth-line stations (Bond Street, Canary Wharf, …). `Place/Location` is always
+  present.
+- **CSV read with the stdlib `csv` module, columns matched by header name.** The header cells contain
+  quoted line breaks, which makes DuckDB's line-based `skip=` awkward. Matching by name with
+  whitespace collapsed means a reordered release still parses, and a renamed or dropped column raises
+  instead of shifting data.
+- **The year (`period`) is parsed from the table title, not stored in the catalogue,** so it can't
+  drift when the URL is bumped. `[z]` becomes NULL and `[note N]` markers are stripped from names.
+  - The three stations closed all year (e.g. Teesside Airport) are kept, with NULL counts and the
+    reason in `additional_information`.
+
+**Follow-ups**
+
+- ORR's `/media/<id>/` URL changes with each annual release (next due November 2026). Update `url` and
+  `csv` together in `config/data_sources.json`.
+- Extract only. Rolling `entries_exits` up to H3/BEAHIV/hotspot cells (e.g. a station-footfall
+  column on `*_geogs`) is a separate transform step.
+- Only the latest year is extracted. Table 1415 (the time series, ODS only) would give trends.
+- AGENTS.md still says new URLs go in *core's* `data_sources.json`, but the extractors read this
+  repo's `config/data_sources.json`. That doc fix is left for its own change.
+
 ## Longitude before latitude everywhere
 
 **Why**: beahiv 0.0.3 replaced `latlon_to_cell` with `lonlat_to_cell`. Coordinates were ordered

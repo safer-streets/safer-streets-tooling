@@ -369,14 +369,17 @@ _NAPTAN_HEADER = (
 
 def _write_naptan_csv(path: Path) -> None:
     rows = [
-        # active stops across categories; BCT→bus, RLY→rail, MET→tram_metro, ZZZ (unknown)→other
+        # active stops across categories; BCT→bus, MET→tram_metro, ZZZ (unknown)→other
         "0100A,bcode,Stop A,High St,o,N,Leeds,Leeds,BCT,active,430000,433000,-1.55,53.80",
-        "0100B,rcode,Leeds Rail,Station Rd,,N,Leeds,Leeds,RLY,active,430100,433100,-1.55,53.80",
         "0100C,mcode,Tram Stop,Tram Rd,,N,Leeds,Leeds,MET,active,430200,433200,-1.55,53.80",
         "0100D,xcode,Odd Stop,Odd Rd,,N,Leeds,Leeds,ZZZ,active,430300,433300,-1.55,53.80",
         # filtered out: inactive status, and a zero-coordinate (placeholder) stop
         "0100E,icode,Closed Stop,Old Rd,,N,Leeds,Leeds,BCT,inactive,430400,433400,-1.55,53.80",
         "0100F,ncode,No Coords,Nowhere,,N,Leeds,Leeds,BCT,active,0,0,0,0",
+        # filtered out: national rail (access area, platform, entrance) — station_usage covers rail
+        "0100B,rcode,Leeds Rail,Station Rd,,N,Leeds,Leeds,RLY,active,430100,433100,-1.55,53.80",
+        "0100G,pcode,Leeds Platform,Station Rd,,N,Leeds,Leeds,RPL,active,430110,433110,-1.55,53.80",
+        "0100H,ecode,Leeds Entrance,Station Rd,,N,Leeds,Leeds,RSE,active,430120,433120,-1.55,53.80",
     ]
     path.write_text("\n".join([_NAPTAN_HEADER, *rows]) + "\n")
 
@@ -391,11 +394,11 @@ def test_naptan_extracts_active_stops_and_categorises(tmp_path, monkeypatch):
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
     assert {"atco_code", "naptan_code", "name", "stop_type", "stop_category", "geom", "h3r9_id", "beahiv202_id"} <= cols
 
-    # only the four active stops with valid coordinates survive (inactive + zero-coord dropped)
-    assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 4
+    # only the three active, non-rail stops with valid coordinates survive
+    assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 3
 
     cats = dict(con.execute("SELECT stop_type, stop_category FROM t").fetchall())
-    assert cats == {"BCT": "bus", "RLY": "rail", "MET": "tram_metro", "ZZZ": "other"}
+    assert cats == {"BCT": "bus", "MET": "tram_metro", "ZZZ": "other"}
 
     # every row gets a lowercase-hex resolution-9 H3 cell id
     h3 = con.execute("SELECT h3r9_id FROM t WHERE atco_code = '0100A'").fetchone()[0]
