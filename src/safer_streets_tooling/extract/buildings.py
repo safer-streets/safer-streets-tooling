@@ -26,10 +26,6 @@ KEEP_COLS = (
     "map_simple_use",
 )
 
-# Resolution of the H3 cell (``h3r9_id``) tagged onto each building; matches the ``building_counts``
-# transform and the crime grid (``h3r9_crime_counts`` / ``h3r9_geogs``).
-H3_RESOLUTION = 9
-
 
 def extract(ctx: ExtractContext) -> None:
     """

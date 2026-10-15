@@ -613,13 +613,49 @@ def test_streetlight_counts_aggregates_per_res9_cell():
     assert streetlight_counts.outputs(con) == ["h3r9_streetlight_counts"]
 
 
+def test_building_counts_count_and_floor_area_per_cell_and_use():
+    """One row per cell × map_simple_use with both measures: the building count, and the total floor area
+    (gross_area, falling back to the premise_area footprint) with a Mixed Use building's halved. A
+    building with no cell is dropped."""
+    from safer_streets_tooling.transform import building_counts
+
+    con = duckdb.connect()  # plain SQL, no spatial/h3 extensions needed
+    con.execute("""
+        CREATE TABLE buildings AS SELECT * FROM (VALUES
+            ('aaa', 'Residential',     100.0, 200.0),
+            ('aaa', 'Residential',      50.0, 100.0),
+            ('aaa', 'Non Residential', 100.0, 300.0),
+            ('aaa', 'Non Residential', 100.0, NULL),
+            ('aaa', 'Mixed Use',       100.0, 400.0),
+            ('bbb', 'Non Residential', 100.0, 500.0),
+            (NULL,  'Non Residential', 100.0, 900.0)
+        ) t(h3r9_id, map_simple_use, premise_area, gross_area)
+    """)
+
+    building_counts.build(con, True)
+
+    rows = {
+        (r[0], r[1]): (r[2], r[3])
+        for r in con.execute(
+            "SELECT spatial_id, map_simple_use, building_count, floor_area FROM h3r9_building_counts"
+        ).fetchall()
+    }
+    assert rows == {
+        ("aaa", "Residential"): (2, pytest.approx(300.0)),
+        ("aaa", "Non Residential"): (2, pytest.approx(400.0)),  # 300 + the 100 footprint fallback
+        ("aaa", "Mixed Use"): (1, pytest.approx(200.0)),  # half of 400
+        ("bbb", "Non Residential"): (1, pytest.approx(500.0)),
+    }
+    assert building_counts.outputs(con) == ["h3r9_building_counts"]
+
+
 def _population_inputs(con):
     """Two-OA fixture: buildings spanning three cells plus both per-OA population extracts."""
     con.execute("""
         CREATE TABLE buildings AS SELECT * FROM (VALUES
             (1, 'OA1', 'aaa', 'Non Residential', 100.0, 300.0),
             (2, 'OA1', 'aaa', 'Mixed Use',       100.0, 200.0),
-            (3, 'OA1', 'bbb', 'Residential',     100.0, 200.0),
+            (3, 'OA1', 'bbb', 'Residential',     100.0, 400.0),
             (4, 'OA1', 'bbb', 'Non Residential', 100.0, NULL),
             (5, NULL,  'ccc', 'Non Residential', 100.0, 100.0),
             (6, 'OA2', 'ccc', 'Residential',     100.0, 400.0)
@@ -636,9 +672,10 @@ def _population_inputs(con):
 
 
 def test_population_counts_assigns_by_use_then_sums_per_cell():
-    """Each OA's populations are assigned to buildings pro rata to floor area × use weight (workplace →
-    Non Residential ×1 / Mixed ×0.5; residential → Residential ×1 / Mixed ×0.5), then summed per res-9
-    cell. Residential buildings take no workplace population and vice versa; OA-less buildings nothing."""
+    """Each OA's populations are assigned to buildings pro rata to use weight (workplace → Non
+    Residential ×1 / Mixed ×0.5, scaled by floor area; residential → Residential ×1 / Mixed ×0.5, size
+    ignored), then summed per res-9 cell. Residential buildings take no workplace population and vice
+    versa; OA-less buildings nothing."""
     from safer_streets_tooling.transform import population_counts
 
     con = duckdb.connect()  # plain SQL, no spatial/h3 extensions needed
@@ -653,7 +690,8 @@ def test_population_counts_assigns_by_use_then_sums_per_cell():
         ).fetchall()
     }
     # OA1 workplace 500 over work weights #1 300, #2 200×0.5=100, #4 premise-fallback 100 → 300/100/100
-    # OA1 residential 270+30=300 over res weights #2 100, #3 200 → 100/200
+    # OA1 residential 270+30=300 over res weights #2 0.5, #3 1.0 → 100/200 (#3's larger floor area is
+    # ignored; by area it would be 60/240)
     # OA2 workplace 50 has no eligible building → unassigned; OA2 residential 10 → #6; #5 has no OA
     assert rows.keys() == {"aaa", "bbb", "ccc"}
     assert rows["aaa"] == (pytest.approx(100.0), pytest.approx(400.0))  # res: #2; work: #1 + #2
@@ -805,7 +843,9 @@ def test_point_layer_counts_per_hex():
     # footprints: a 50m buffer round each point, so the centroid is what decides the hex
     con.execute("""
         CREATE TABLE buildings AS
-        SELECT ST_Buffer(geom, 50) AS geom, 'Residential' AS map_simple_use, 'x' AS h3r9_id FROM streetlights
+        SELECT ST_Buffer(geom, 50) AS geom, 'Residential' AS map_simple_use, 'x' AS h3r9_id,
+            100.0 AS premise_area, 200.0 AS gross_area
+        FROM streetlights
     """)
 
     streetlight_counts.build_hotspots(con, True)
@@ -819,8 +859,8 @@ def test_point_layer_counts_per_hex():
         con.execute("SELECT spatial_id, road_intersection_count FROM hotspots_road_intersection_counts").fetchall()
     ) == {"leeds": 2}
     assert con.execute(
-        "SELECT spatial_id, map_simple_use, building_count FROM hotspots_building_counts"
-    ).fetchall() == [("leeds", "Residential", 2)]
+        "SELECT spatial_id, map_simple_use, building_count, floor_area FROM hotspots_building_counts"
+    ).fetchall() == [("leeds", "Residential", 2, pytest.approx(400.0))]
 
 
 def _hotspot_population_inputs(con):

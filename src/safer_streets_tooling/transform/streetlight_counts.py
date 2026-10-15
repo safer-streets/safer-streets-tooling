@@ -2,13 +2,12 @@
 
 import duckdb
 
-from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
+from safer_streets_tooling.grids import BEAHIV_ID, H3_ID, H3_RESOLUTION
 from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
 
 STREETLIGHTS_TABLE = "streetlights"
 DATASET = "streetlight_counts"
-RESOLUTION = 9
 
 
 def _build_on(con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace: bool) -> None:
@@ -32,7 +31,7 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``h3r9_streetlight_counts``. No-op if the streetlights table is absent."""
     if not table_exists(con, STREETLIGHTS_TABLE):
         return
-    _build_on(con, h3_key(RESOLUTION), H3_ID, replace)
+    _build_on(con, h3_key(H3_RESOLUTION), H3_ID, replace)
 
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
@@ -51,7 +50,7 @@ def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not table_exists(con, STREETLIGHTS_TABLE):
         return []
-    return [relation(h3_key(RESOLUTION), DATASET)]
+    return [relation(h3_key(H3_RESOLUTION), DATASET)]
 
 
 def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:

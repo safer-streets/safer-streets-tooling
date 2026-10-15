@@ -281,8 +281,13 @@ e.g. `"1,2"`), `premise_area` (footprint area, m²) and `gross_area` (total floo
 floors where known).
 
 Likewise the `building_counts` transform step aggregates the `buildings` extract (Verisk UKBuildings
-footprints) into `h3r9_building_counts` — the count of buildings per resolution-9 cell **split by
-`map_simple_use`** (Residential / Non Residential / Mixed Use), keyed by `spatial_id`. Each building is
+footprints) into `h3r9_building_counts` — the `building_count` and `floor_area` per resolution-9 cell
+**split by `map_simple_use`** (Residential / Non Residential / Mixed Use), keyed by `spatial_id`.
+`floor_area` is the total floor area in m² (`gross_area`, falling back to the footprint `premise_area`
+where the floor count is unknown), with a Mixed Use building's halved — it is taken as 50-50 residential
+and non-residential, as in `population_counts`. The intended measures are the count for residential
+buildings and the floor area for non-residential ones, whose sizes vary too much for a count to say
+much. Each building is
 placed by its footprint centroid — the point its `h3r9_id` / `beahiv202_id` are derived from — and
 every cell holding a building is counted, on both grids alike (≈83% of footprints fall in a cell that
 also carries a crime, and the rest are counted too, with no `*_geogs` row to join to). The per-cell
@@ -301,11 +306,12 @@ less than 12 months.
 
 The `population_counts` transform step disaggregates both onto the crime grid as
 `h3r9_population_counts` (one row per res-9 cell: `spatial_id`, `residential_population`,
-`workplace_population`). Each OA's populations are first assigned to that OA's buildings pro rata to
-total floor area (`gross_area`, falling back to the footprint `premise_area` where the floor count is
-unknown) times a use weight — the workplace population to **Non Residential** (×1.0) and **Mixed Use**
-(×0.5) buildings, the residential population (households + communal establishments) to **Residential**
-(×1.0) and **Mixed Use** (×0.5), i.e. a mixed-use building sits 50-50 in both pools — then the
+`workplace_population`). Each OA's populations are first assigned to that OA's buildings pro rata to a
+use weight — the workplace population to **Non Residential** (×1.0) and **Mixed Use** (×0.5) buildings,
+further scaled by total floor area (`gross_area`, falling back to the footprint `premise_area` where the
+floor count is unknown); the residential population (households + communal establishments) to
+**Residential** (×1.0) and **Mixed Use** (×0.5) buildings irrespective of their size — one share per
+residential building, half a share per mixed-use one, which sits 50-50 in both pools — then the
 per-building assignments are grouped by the building's `h3r9_id` and summed. Both populations are
 conserved onto the grid except where they cannot be assigned (an OA with no building of the right
 type, or a building whose centroid falls in no OA); the step reports the allocated share of each
@@ -399,7 +405,7 @@ each exposing a `STEP`. Each step writes the relations it produces out as parque
 | ---- | ------ | -------- | ------- | ---------- |
 | `crime_counts` | [crime_counts.py](src/safer_streets_tooling/transform/crime_counts.py) | `h3` | `h3r{res}_crime_counts`, `{key}_crime_counts` (per ONS geography) | — |
 | `streetlight_counts` | [streetlight_counts.py](src/safer_streets_tooling/transform/streetlight_counts.py) | `h3` | `h3r9_streetlight_counts` | — |
-| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `h3` | `h3r9_building_counts` (by `map_simple_use`) | `crime_counts` |
+| `building_counts` | [building_counts.py](src/safer_streets_tooling/transform/building_counts.py) | `h3` | `h3r9_building_counts` (count + floor area by `map_simple_use`) | `crime_counts` |
 | `population_counts` | [population_counts.py](src/safer_streets_tooling/transform/population_counts.py) | `h3` | `h3r9_population_counts` | — |
 | `road_intersection_counts` | [road_intersection_counts.py](src/safer_streets_tooling/transform/road_intersection_counts.py) | `h3` | `h3r{res}_road_intersection_counts` | `crime_counts` |
 | `geo_lookups` | [geo_lookups.py](src/safer_streets_tooling/transform/geo_lookups.py) | `h3` | *(none — `h3r{res}_{key}_lookup` stays in memory, folded into `h3r{res}_geogs`)* | `crime_counts` |
