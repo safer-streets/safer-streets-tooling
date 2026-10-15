@@ -20,6 +20,11 @@ WALK_RADIUS_M = WALK_TRIP_MINUTES * WALK_SPEED_KMH * 1000 / 60  # reachable netw
 # at 11 and a few at 12, so this keeps every school with a secondary cohort, including all-through ones.
 MAX_PRIMARY_AGE = 12
 
+# GIAS has no ages for Welsh schools, so primaries and nurseries there are dropped by name instead (case-insensitive).
+# Welsh words mutate after "Ysgol" (Cynradd → Gynradd, Meithrin → Feithrin), hence the stems; "C.P." / "VCP" is
+# (voluntary controlled) county primary. Primaries named only for their place ("Ysgol Melyd") still get through.
+WELSH_PRIMARY_NAME_PATTERN = r"nursery|primary|ynradd|eithrin|infant|junior|babanod|\biau\b|\bv?\.?\s?c\.?\s?p\b|children.s centre|\b3\s?-\s?11\b"
+
 
 def _walk_isochrones(
     edges: pd.DataFrame,
@@ -91,8 +96,8 @@ def extract(ctx: ExtractContext) -> None:
     Write the ``schools`` parquet from the GIAS export, with a 10-minute walk isochrone per school.
 
     Open schools with valid coordinates whose ``statutoryhighage`` exceeds ``MAX_PRIMARY_AGE`` (some
-    pupils aged 13+) are kept. GIAS holds no age range for Welsh establishments, so every
-    school in Wales is kept. Each is parsed into a point ``geom`` (BNG) plus ``h3_{8..11}_id``
+    pupils aged 13+) are kept. GIAS holds no age range for Welsh establishments, so a school in Wales is
+    kept unless its name matches ``WELSH_PRIMARY_NAME_PATTERN``. Each is parsed into a point ``geom`` (BNG) plus ``h3_{8..11}_id``
     cell ids (the GIAS export has no lon/lat, so these are derived by transforming geom back to
     WGS-84); a walk catchment ``isochrone`` polygon is then computed over the open_roads network, so
     this requires the ``open_roads`` parquet (extract roads first). The GIAS export is downloaded
@@ -121,8 +126,11 @@ def extract(ctx: ExtractContext) -> None:
                 FROM read_csv_auto('{gias}', encoding='CP1252', normalize_names=true)
                 -- currently open: 1 Open, 3 Open but proposed to close (not 2 Closed, 4 Proposed to open)
                 WHERE establishmentstatus_code IN (1, 3) AND easting > 0 AND northing > 0
-                    -- GIAS has no ages for Welsh establishments (gor_code 'W'), so Wales can't be filtered
-                    AND (statutoryhighage > {MAX_PRIMARY_AGE} OR gor_code = 'W')
+                    -- GIAS has no ages for Welsh establishments (gor_code 'W'), so Wales is filtered by name
+                    AND (
+                        statutoryhighage > {MAX_PRIMARY_AGE}
+                        OR (gor_code = 'W' AND NOT regexp_matches(establishmentname, '{WELSH_PRIMARY_NAME_PATTERN}', 'i'))
+                    )
             ),
             pts AS (
                 SELECT
@@ -177,7 +185,8 @@ DATASET = Dataset(
     table="schools",
     extract=extract,
     description=(
-        "GIAS schools that take pupils aged 13+ (every school in Wales, which GIAS gives no ages for), "
+        "GIAS schools that take pupils aged 13+ (in Wales, which GIAS gives no ages for, those not named as a "
+        "primary or nursery), "
         "with a 10-minute walk-isochrone catchment geometry."
     ),
     depends_on=("open_roads",),

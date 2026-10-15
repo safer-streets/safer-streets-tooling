@@ -13,14 +13,16 @@ Write the entry as part of the change, not after the fact.
 every open GIAS establishment. Primaries, infant and nursery schools made up most of it.
 
 **What**: The schools extract now keeps a school only if it takes pupils aged 13 or over
-(`statutoryhighage > MAX_PRIMARY_AGE`, 12). All Welsh schools are still kept, because GIAS has no ages for
-them. On the 2026-09-04 export this cuts the table from 26,489 rows to 8,514. The 7,121 English schools
-are 3,172 secondaries, 289 sixth-form colleges, 160 all-through schools, 87 middle schools, and 3,413
-independent, special and alternative-provision schools; the other 1,393 are Welsh. The descriptions
-follow it: `near <school>` in `beahiv202_descriptions` now only names a school with a secondary cohort.
-The dataset `description`, docstrings and README (including a new data-quality caveat) are updated. The
-test fixture now has a primary (oldest pupils 11), an 8–12 middle school, an all-through school and a
-Welsh school.
+(`statutoryhighage > MAX_PRIMARY_AGE`, 12). GIAS has no ages for Welsh schools, so in Wales a school is
+dropped instead when its name marks it as a primary or nursery, in English or Welsh
+(`WELSH_PRIMARY_NAME_PATTERN`). On the 2026-09-04 export this cuts the table from 26,489 rows to 7,775.
+The 7,121 English schools are 3,172 secondaries, 289 sixth-form colleges, 160 all-through schools, 87
+middle schools, and 3,413 independent, special and alternative-provision schools; the other 654 are
+Welsh, down from 1,393. The descriptions follow it: `near <school>` in `beahiv202_descriptions` now only
+names a school with a secondary cohort. The dataset `description`, docstrings and README (including a
+new data-quality caveat) are updated. The test fixture now has a primary (oldest pupils 11), an 8–12
+middle school, an all-through school, and a Welsh primary and secondary. A parametrised test lists the
+names the Welsh pattern must and must not match.
 
 **Design decisions**
 
@@ -36,20 +38,33 @@ Welsh school.
 - **Age rather than `phaseofeducation_name`.** About 4,300 English independent, special and PRU
   establishments have phase "Not applicable", but every one has an age range. Filtering by phase would
   drop all of them, including independent secondaries.
+- **Welsh primaries are dropped by name.** The pattern matches Nursery and Primary, Infant(s), Junior(s),
+  "C.P."/"VCP" (county primary), "3-11" and children's centres. In Welsh it matches the stems of Cynradd
+  (primary) and Meithrin (nursery), since they mutate after "Ysgol" (Ysgol Gynradd, Ysgol Feithrin), plus
+  Babanod (infants) and Iau (juniors). Checked against the Welsh Government's sector labels, it drops
+  722 of the 1,071 Welsh primaries and nurseries and no secondary, middle or special school. Nursery and
+  Primary alone would have caught only 561. The alternatives considered:
+  - Keeping every Welsh school leaves Wales full of primaries, unlike England.
+  - Joining the Welsh Government's DataMap list would label every maintained school correctly, but it
+    adds a second download and a join. The name filter is a stopgap; the cross-reference is the proper
+    solution (see Follow-ups).
 - **Wales is identified by `gor_code = 'W'`.** This is GIAS's "Wales (pseudo)" region and covers all
   1,393 open Welsh schools. Matching the "Welsh establishment" type would miss one Welsh special post-16
   institution.
 - **Filtering happens in the extract.** Downstream steps only read the name, capacity, cell id and
   catchment, so nothing else changes. Dropping rows before the isochrones are built also cuts the
-  extract's slowest step (one bounded Dijkstra per school) by about 4×.
+  extract's slowest step (one bounded Dijkstra per school) by more than 3×.
 
 **Follow-ups**
 
-- **Filter Wales with the Welsh Government list.** The Welsh Government publishes its maintained schools
-  on DataMap Wales (WFS layer `geonode:maintained_schools_wg`, OGL). It has a `sector` (secondary 173,
-  middle 31, special 39, primary 1,192, nursery 5), BNG points and pupil numbers. It joins to GIAS on
-  `la_code * 10000 + establishmentnumber` (1,291 of 1,393 match). The 102 that don't match are mostly
-  independents and PRUs, for which no Welsh source gives a phase.
+- **The proper solution for Wales is to cross-reference the Welsh Government's schools data.** The name
+  filter is a stopgap: about 350 Welsh primaries are still kept because they are named only for their
+  place (e.g. "Ysgol Melyd"). The Welsh Government publishes its maintained schools on DataMap Wales (WFS layer
+  `geonode:maintained_schools_wg`, OGL), with a `sector` (secondary 173, middle 31, special 39, primary
+  1,192, nursery 5), BNG points and pupil numbers. It joins to GIAS on
+  `la_code * 10000 + establishmentnumber` (1,291 of 1,393 match), and filtering on its sector would close
+  the gap. The 102 that don't match are mostly independents and PRUs, for which no Welsh source gives a
+  phase, so the name filter would remain their fallback.
 - **GIAS drops Welsh schools with no coordinates.** 142 Welsh schools that GIAS marks as open have no
   easting/northing, so they're dropped today; 8 secondary, 8 middle and 7 special among them. The
   DataMap layer has coordinates for all of them.
