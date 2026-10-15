@@ -58,8 +58,10 @@ def _allocation_sql(buildings_sql: str) -> str:
     """The allocation query, over a ``buildings_sql`` yielding one row per building: its ``spatial_id``
     (the cell it sits in, NULL if none), ``oa21cd``, ``map_simple_use`` and the two size columns.
 
-    Each building's share of its OA is its total floor area (``gross_area``, falling back to the
-    footprint ``premise_area`` where the floor count is unknown) times its USE_WEIGHTS multiplier,
+    Each building's share of its OA's workplace population is its total floor area (``gross_area``,
+    falling back to the footprint ``premise_area`` where the floor count is unknown) times its
+    USE_WEIGHTS multiplier; its share of the residential population is the USE_WEIGHTS multiplier alone,
+    ignoring size (a Residential building takes one share, a Mixed Use one half a share). Both are
     normalised within the OA; the per-building assignments are then summed per cell.
 
     ``buildings_sql`` must cover *every* building in the OA, including those the grid doesn't reach —
@@ -73,7 +75,7 @@ def _allocation_sql(buildings_sql: str) -> str:
             SELECT
                 b.spatial_id, b.oa21cd,
                 COALESCE(b.gross_area, b.premise_area) * w.work_weight AS work_weight,
-                COALESCE(b.gross_area, b.premise_area) * w.res_weight AS res_weight
+                w.res_weight
             FROM ({buildings_sql}) b
             JOIN (VALUES {use_weights}) w(map_simple_use, work_weight, res_weight)
             ON b.map_simple_use = w.map_simple_use
@@ -119,13 +121,14 @@ def _report_allocated(con: duckdb.DuckDBPyConnection, table: str) -> None:
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create ``h3r9_population_counts``: the OA populations assigned to buildings, then summed per cell.
 
-    Each building's share of its OA (buildings carry ``oa21cd`` from the extract) is its total floor
-    area (``gross_area``, falling back to the footprint ``premise_area`` where the floor count is
-    unknown) times its USE_WEIGHTS multiplier, normalised within the OA — one weighting per population:
-    the workplace population goes to Non Residential (×1.0) and Mixed Use (×0.5) buildings, the
-    residential population (households + communal establishments) to Residential (×1.0) and Mixed Use
-    (×0.5). The per-building assignments are then grouped by the building's res-9 ``h3r9_id`` and
-    summed, keyed by ``spatial_id`` to match ``h3r9_crime_counts`` / ``h3r9_geogs``.
+    Each building's share of its OA (buildings carry ``oa21cd`` from the extract) is its USE_WEIGHTS
+    multiplier, normalised within the OA — one weighting per population: the workplace population goes
+    to Non Residential (×1.0) and Mixed Use (×0.5) buildings, further scaled by total floor area
+    (``gross_area``, falling back to the footprint ``premise_area`` where the floor count is unknown);
+    the residential population (households + communal establishments) goes to Residential (×1.0) and
+    Mixed Use (×0.5) buildings irrespective of size. The per-building assignments are then
+    grouped by the building's res-9 ``h3r9_id`` and summed, keyed by ``spatial_id`` to match
+    ``h3r9_crime_counts`` / ``h3r9_geogs``.
 
     Both populations are conserved onto the grid except where they cannot be assigned: an OA with no
     building of the right type (its population has nowhere to land), and buildings whose centroid falls
@@ -224,6 +227,6 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.H3,
-    description="Census 2021 residential (TS001) + workplace (WP001) population per res-9 cell, allocated via buildings by floor area × use weight.",
+    description="Census 2021 residential (TS001) + workplace (WP001) population per res-9 cell, allocated via buildings by use weight (× floor area for workplace).",
     extract_inputs=(BUILDINGS_TABLE, WORKPLACE_TABLE, RESIDENTIAL_TABLE),
 )

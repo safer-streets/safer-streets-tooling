@@ -7,6 +7,32 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Assign residential population per building, not by floor area
+
+**Why**: Weighting residents by floor area sent too much of an OA's population to a few large
+residential footprints and too little to ordinary houses. Floor area is a reasonable stand-in for
+workplace capacity, but a poor one for how many people live in a building.
+
+**What**: In `population_counts`, a building's share of its OA's residential population is now just its
+use weight: 1 for Residential, 0.5 for Mixed Use, normalised within the OA. The workplace allocation is
+unchanged (floor area × use weight). This applies to the H3, hotspot and BEAHIV tables, which all share
+`_allocation_sql`. The docstrings, the step `description` and the README are updated. The test fixture
+now gives a residential building a larger floor area, so the test fails under area weighting.
+
+**Design decisions**
+
+- **"Unit" means a Verisk premise (building).** The buildings extract has no dwelling or address count,
+  only a single `uprn` per premise, so a building is the finest unit available.
+- **Mixed Use keeps half a share.** It still sits 50-50 between the two pools, as before; only the area
+  factor was removed from the residential side.
+- **A residential building with no size data now gets a share.** Before, a missing `gross_area` and
+  `premise_area` made its weight NULL and excluded it.
+
+**Follow-ups**
+
+- A block of flats counts the same as a detached house. A per-building dwelling count (e.g. UPRNs
+  from AddressBase) would let residents be weighted per dwelling.
+
 ## Add floor area to the building counts
 
 **Why**: A count of non-residential buildings treats a kiosk and a shopping centre as equal. Floor

@@ -306,11 +306,12 @@ less than 12 months.
 
 The `population_counts` transform step disaggregates both onto the crime grid as
 `h3r9_population_counts` (one row per res-9 cell: `spatial_id`, `residential_population`,
-`workplace_population`). Each OA's populations are first assigned to that OA's buildings pro rata to
-total floor area (`gross_area`, falling back to the footprint `premise_area` where the floor count is
-unknown) times a use weight — the workplace population to **Non Residential** (×1.0) and **Mixed Use**
-(×0.5) buildings, the residential population (households + communal establishments) to **Residential**
-(×1.0) and **Mixed Use** (×0.5), i.e. a mixed-use building sits 50-50 in both pools — then the
+`workplace_population`). Each OA's populations are first assigned to that OA's buildings pro rata to a
+use weight — the workplace population to **Non Residential** (×1.0) and **Mixed Use** (×0.5) buildings,
+further scaled by total floor area (`gross_area`, falling back to the footprint `premise_area` where the
+floor count is unknown); the residential population (households + communal establishments) to
+**Residential** (×1.0) and **Mixed Use** (×0.5) buildings irrespective of their size — one share per
+residential building, half a share per mixed-use one, which sits 50-50 in both pools — then the
 per-building assignments are grouped by the building's `h3r9_id` and summed. Both populations are
 conserved onto the grid except where they cannot be assigned (an OA with no building of the right
 type, or a building whose centroid falls in no OA); the step reports the allocated share of each

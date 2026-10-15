@@ -655,7 +655,7 @@ def _population_inputs(con):
         CREATE TABLE buildings AS SELECT * FROM (VALUES
             (1, 'OA1', 'aaa', 'Non Residential', 100.0, 300.0),
             (2, 'OA1', 'aaa', 'Mixed Use',       100.0, 200.0),
-            (3, 'OA1', 'bbb', 'Residential',     100.0, 200.0),
+            (3, 'OA1', 'bbb', 'Residential',     100.0, 400.0),
             (4, 'OA1', 'bbb', 'Non Residential', 100.0, NULL),
             (5, NULL,  'ccc', 'Non Residential', 100.0, 100.0),
             (6, 'OA2', 'ccc', 'Residential',     100.0, 400.0)
@@ -672,9 +672,10 @@ def _population_inputs(con):
 
 
 def test_population_counts_assigns_by_use_then_sums_per_cell():
-    """Each OA's populations are assigned to buildings pro rata to floor area × use weight (workplace →
-    Non Residential ×1 / Mixed ×0.5; residential → Residential ×1 / Mixed ×0.5), then summed per res-9
-    cell. Residential buildings take no workplace population and vice versa; OA-less buildings nothing."""
+    """Each OA's populations are assigned to buildings pro rata to use weight (workplace → Non
+    Residential ×1 / Mixed ×0.5, scaled by floor area; residential → Residential ×1 / Mixed ×0.5, size
+    ignored), then summed per res-9 cell. Residential buildings take no workplace population and vice
+    versa; OA-less buildings nothing."""
     from safer_streets_tooling.transform import population_counts
 
     con = duckdb.connect()  # plain SQL, no spatial/h3 extensions needed
@@ -689,7 +690,8 @@ def test_population_counts_assigns_by_use_then_sums_per_cell():
         ).fetchall()
     }
     # OA1 workplace 500 over work weights #1 300, #2 200×0.5=100, #4 premise-fallback 100 → 300/100/100
-    # OA1 residential 270+30=300 over res weights #2 100, #3 200 → 100/200
+    # OA1 residential 270+30=300 over res weights #2 0.5, #3 1.0 → 100/200 (#3's larger floor area is
+    # ignored; by area it would be 60/240)
     # OA2 workplace 50 has no eligible building → unassigned; OA2 residential 10 → #6; #5 has no OA
     assert rows.keys() == {"aaa", "bbb", "ccc"}
     assert rows["aaa"] == (pytest.approx(100.0), pytest.approx(400.0))  # res: #2; work: #1 + #2
