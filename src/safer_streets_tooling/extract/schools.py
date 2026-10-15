@@ -119,6 +119,7 @@ def extract(ctx: ExtractContext) -> None:
                     urbanrural_code, districtadministrative_code, msoa_code, lsoa_code,
                     ST_Point(easting, northing) AS geom
                 FROM read_csv_auto('{gias}', encoding='CP1252', normalize_names=true)
+                -- currently open: 1 Open, 3 Open but proposed to close (not 2 Closed, 4 Proposed to open)
                 WHERE establishmentstatus_code IN (1, 3) AND easting > 0 AND northing > 0
                     -- GIAS has no ages for Welsh establishments (gor_code 'W'), so Wales can't be filtered
                     AND (statutoryhighage > {MAX_PRIMARY_AGE} OR gor_code = 'W')

@@ -622,10 +622,12 @@ _GIAS_HEADER = (
 def _write_gias_csv(path: Path) -> None:
     rows = [
         "1,1,School A,1,Community,1,4,Secondary,11,18,500,LS1 1AA,A1,E08000035,E02,E01,10,10,D",
-        "2,2,Closed School,1,Community,4,4,Secondary,11,18,500,LS1 1AB,A1,E08000035,E02,E01,50,50,D",  # status 4
+        "2,2,Closed School,1,Community,2,4,Secondary,11,18,500,LS1 1AB,A1,E08000035,E02,E01,50,50,D",  # status 2
+        "7,7,Proposed School,1,Community,4,4,Secondary,11,18,500,LS1 1AF,A1,E08000035,E02,E01,60,60,D",  # status 4
         "3,3,Primary School,1,Community,1,2,Primary,4,11,300,LS1 1AC,A1,E08000035,E02,E01,20,20,D",  # oldest 11
         "4,4,Middle School,1,Community,1,3,Middle deemed primary,8,12,400,LS1 1AE,A1,E08000035,E02,E01,25,25,D",  # 12
-        "5,5,All-through School,1,Community,1,7,All-through,4,18,900,LS1 1AD,A1,E08000035,E02,E01,30,30,D",
+        # status 3, open but proposed to close, is still open
+        "5,5,All-through School,1,Community,3,7,All-through,4,18,900,LS1 1AD,A1,E08000035,E02,E01,30,30,D",
         # a Welsh establishment has no phase or ages in GIAS, so it is kept even though it is a primary
         "6,6,Ysgol Gynradd,30,Welsh establishment,1,0,Not applicable,,,,CF10 1AA,A1,W06000015,W02,W01,40,40,W",
     ]
@@ -716,7 +718,7 @@ def test_schools_builds_isochrones(tmp_path, monkeypatch):
     # H3 cell ids (resolutions 8-11) derived from the school location
     assert {"h3r9_id", "beahiv202_id"} <= cols
     assert con.execute("SELECT COUNT(*) FROM t WHERE h3r9_id IS NULL").fetchone()[0] == 0
-    # the closed school and those with no pupil over 12 are dropped; an all-through school has a secondary
+    # schools not currently open and those with no pupil over 12 are dropped; an all-through school has a secondary
     # cohort so it stays, and the Welsh school is kept regardless
     names = {r[0] for r in con.execute("SELECT establishmentname FROM t").fetchall()}
     assert names == {"School A", "All-through School", "Ysgol Gynradd"}
