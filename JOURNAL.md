@@ -7,6 +7,44 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Add floor area to the building counts
+
+**Why**: A count of non-residential buildings treats a kiosk and a shopping centre as equal. Floor
+area is a better measure of how much commercial activity a cell holds. For residential buildings the
+count is still the measure we want.
+
+**What**: Every row of `{h3r9,beahiv202,hotspots}_building_counts` now has a `floor_area` column next to
+`building_count`. It sums `COALESCE(gross_area, premise_area)`, so total floor area falls back to the
+footprint where the floor count is unknown, and a Mixed Use building contributes half its area. A new
+H3 test pins down both measures, and the hotspot and BEAHIV tests check `floor_area` too. The README,
+docstrings and step `description` are updated.
+
+The PR also tidies one thing up. `building_counts`, `population_counts` and `streetlight_counts` each
+had their own `RESOLUTION = 9`; they now import `H3_RESOLUTION` from `grids`, the constant `H3_ID` is
+built from, so the `h3r9_*` table name and the id column it reads can't disagree. An unused duplicate in
+`extract/buildings.py` is removed.
+
+**Design decisions**
+
+- **A new column rather than replacing the count.** Putting area into `building_count` on Non
+  Residential rows would mix units in one column. Making the count NULL there would silently break
+  peer-hex-explorer, which sums `building_count` over Non Residential + Mixed Use rows. The extra
+  column costs one SUM and leaves consumers to pick a measure for each class.
+- **Mixed Use is halved.** This matches the 50-50 residential/non-residential split in
+  `population_counts`. It applies to the Mixed Use row's `floor_area` only; its `building_count` is
+  unchanged.
+- **The same floor-area rule as `population_counts`**: `gross_area`, falling back to `premise_area`.
+  Both are in the buildings extract since #13, so there is no guard for an older cached parquet. One
+  that lacks them makes the step fail, and the fix is to re-extract buildings.
+- **`map_simple_use` is still the classifier.** Whether `premise_use` would classify buildings better
+  is deferred.
+
+**Follow-ups**
+
+- peer-hex-explorer's `n_nonres_buildings` should move to `SUM(floor_area)` over Non Residential +
+  Mixed Use rows. That change belongs in its own repo.
+- Revisit `map_simple_use` vs `premise_use` (TODO.md).
+
 ## Make `station_usage` a required dataset
 
 **Why**: Once `naptan` drops rail stop types (entry below), `station_usage` is the only place rail

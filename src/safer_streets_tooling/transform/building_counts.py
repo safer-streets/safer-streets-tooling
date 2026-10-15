@@ -1,14 +1,23 @@
-"""``h3r9_building_counts`` / ``hotspots_building_counts`` — buildings counted per cell and ``map_simple_use``."""
+"""``h3r9_building_counts`` / ``hotspots_building_counts`` — buildings counted per cell and ``map_simple_use``.
+
+Each row carries both a ``building_count`` and a ``floor_area``: a count is the natural measure of
+residential buildings, but non-residential ones vary too much in size for a count to say much, so their
+consumers use the floor area instead.
+"""
 
 import duckdb
 
-from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
+from safer_streets_tooling.grids import BEAHIV_ID, H3_ID, H3_RESOLUTION
 from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
 
 BUILDINGS_TABLE = "buildings"
 DATASET = "building_counts"
-RESOLUTION = 9
+
+# Total floor area (m²), falling back to the footprint where the floor count is unknown. A Mixed Use
+# building is taken as half non-residential, so only half its area is counted — the same 50-50 split
+# population_counts applies.
+FLOOR_AREA = "SUM(COALESCE(gross_area, premise_area) * CASE map_simple_use WHEN 'Mixed Use' THEN 0.5 ELSE 1.0 END)"
 
 
 def _build_on(con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace: bool) -> None:
@@ -20,7 +29,8 @@ def _build_on(con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace:
     footprint *centroid* — the point both id columns are derived from.
 
     Keyed by ``spatial_id`` plus the ``map_simple_use`` class (Residential / Non Residential / Mixed
-    Use), so a consumer joins the per-class counts straight onto the unit's counts / geogs.
+    Use), so a consumer joins the per-class counts straight onto the unit's counts / geogs. Each row
+    holds the ``building_count`` and the ``floor_area`` (see :data:`FLOOR_AREA` — halved for Mixed Use).
 
     Every cell holding a building is counted, not only those carrying crimes: the cell comes from the
     feature's own coordinates, so there is nothing to bound and the two grids stay comparable by
@@ -29,7 +39,7 @@ def _build_on(con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace:
     """
     con.execute(f"""
         {create_clause("TABLE", relation(unit_key, DATASET), replace=replace)} AS
-        SELECT {cell} AS spatial_id, map_simple_use, COUNT(*) AS building_count
+        SELECT {cell} AS spatial_id, map_simple_use, COUNT(*) AS building_count, {FLOOR_AREA} AS floor_area
         FROM {BUILDINGS_TABLE}
         WHERE {cell} IS NOT NULL
         GROUP BY {cell}, map_simple_use;
@@ -41,7 +51,7 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     ever produced — the extract carries a single ``h3r9_id``."""
     if not table_exists(con, BUILDINGS_TABLE):
         return
-    _build_on(con, h3_key(RESOLUTION), H3_ID, replace)
+    _build_on(con, h3_key(H3_RESOLUTION), H3_ID, replace)
 
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
@@ -64,11 +74,11 @@ def beahiv_outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
     if not table_exists(con, BUILDINGS_TABLE):
         return []
-    return [relation(h3_key(RESOLUTION), DATASET)]
+    return [relation(h3_key(H3_RESOLUTION), DATASET)]
 
 
 def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``hotspots_building_counts`` counting buildings per hotspot hex / ``map_simple_use``.
+    """Create ``hotspots_building_counts``: buildings and floor area per hotspot hex / ``map_simple_use``.
 
     The hexes don't line up with the H3 grid, so each footprint is placed by its centroid (the point the
     extract's ``h3r9_id`` also comes from) rather than reusing that column. No restriction to the crime
@@ -76,10 +86,13 @@ def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """
     if not (table_exists(con, BUILDINGS_TABLE) and hotspots.available(con)):
         return
+    placed = hotspots.placed_points(
+        BUILDINGS_TABLE, "s.map_simple_use", "s.gross_area", "s.premise_area", point="ST_Centroid(s.geom)"
+    )
     con.execute(f"""
         {create_clause("TABLE", relation(hotspots.HOTSPOT_UNIT.key, DATASET), replace=replace)} AS
-        SELECT spatial_id, map_simple_use, COUNT(*) AS building_count
-        FROM ({hotspots.placed_points(BUILDINGS_TABLE, "s.map_simple_use", point="ST_Centroid(s.geom)")})
+        SELECT spatial_id, map_simple_use, COUNT(*) AS building_count, {FLOOR_AREA} AS floor_area
+        FROM ({placed})
         GROUP BY spatial_id, map_simple_use;
     """)
 
@@ -95,7 +108,7 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.H3,
-    description="Buildings counted per resolution-9 H3 cell and map_simple_use, keyed by spatial_id.",
+    description="Building count and floor area (Mixed Use halved) per resolution-9 H3 cell and map_simple_use, keyed by spatial_id.",
     depends_on=("crime_counts",),
     extract_inputs=(BUILDINGS_TABLE,),
 )

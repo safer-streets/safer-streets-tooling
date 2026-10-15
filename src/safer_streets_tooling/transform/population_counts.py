@@ -10,7 +10,7 @@ plausibly live and work.
 
 import duckdb
 
-from safer_streets_tooling.grids import BEAHIV_ID, H3_ID
+from safer_streets_tooling.grids import BEAHIV_ID, H3_ID, H3_RESOLUTION
 from safer_streets_tooling.transform import beahiv, hotspots
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, h3_key, relation, table_exists
 
@@ -18,7 +18,6 @@ BUILDINGS_TABLE = "buildings"
 DATASET = "population_counts"
 WORKPLACE_TABLE = "workplace_population"
 RESIDENTIAL_TABLE = "residential_population"
-RESOLUTION = 9
 
 # map_simple_use -> (workplace weight, residential weight) allocation multipliers: a purely commercial
 # building takes only workplace population, a purely residential one only residents, and a Mixed Use
@@ -49,7 +48,7 @@ def _ready(con: duckdb.DuckDBPyConnection) -> bool:
     if not _has_size_columns(con):
         print(
             f"  [population_counts] {BUILDINGS_TABLE} lacks the size columns (gross_area/premise_area); "
-            f"re-extract buildings to build h3r{RESOLUTION}_population_counts — skipping"
+            f"re-extract buildings to build h3r{H3_RESOLUTION}_population_counts — skipping"
         )
         return False
     return True
@@ -140,10 +139,10 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
         return
     buildings = f"SELECT {H3_ID} AS spatial_id, oa21cd, map_simple_use, gross_area, premise_area FROM {BUILDINGS_TABLE}"
     con.execute(f"""
-        {create_clause("TABLE", relation(h3_key(RESOLUTION), DATASET), replace=replace)} AS
+        {create_clause("TABLE", relation(h3_key(H3_RESOLUTION), DATASET), replace=replace)} AS
         {_allocation_sql(buildings)};
     """)
-    _report_allocated(con, relation(h3_key(RESOLUTION), DATASET))
+    _report_allocated(con, relation(h3_key(H3_RESOLUTION), DATASET))
 
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
@@ -180,7 +179,7 @@ def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
         and _has_size_columns(con)
     ):
         return []
-    return [relation(h3_key(RESOLUTION), DATASET)]
+    return [relation(h3_key(H3_RESOLUTION), DATASET)]
 
 
 def build_hotspots(con: duckdb.DuckDBPyConnection, replace: bool) -> None:

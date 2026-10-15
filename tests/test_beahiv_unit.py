@@ -336,10 +336,10 @@ def _buildings_on_cells(con, crime_cell, empty_cell):
     con.execute(f"""
         CREATE OR REPLACE TABLE buildings AS
         SELECT * FROM (VALUES
-            ({crime_cell}, 'Residential'),
-            ({crime_cell}, 'Residential'),
-            ({empty_cell}, 'Residential')
-        ) t(beahiv202_id, map_simple_use)
+            ({crime_cell}, 'Residential', 100.0, 200.0),
+            ({crime_cell}, 'Residential', 100.0, 200.0),
+            ({empty_cell}, 'Residential', 100.0, 200.0)
+        ) t(beahiv202_id, map_simple_use, premise_area, gross_area)
     """)
 
 
@@ -361,10 +361,16 @@ def test_beahiv_counts_cover_the_other_layers_on_every_cell():
 
     beahiv_counts.build(con, True)
 
-    counts = dict(
-        con.execute(f"SELECT spatial_id, SUM(building_count) FROM {KEY}_building_counts GROUP BY 1").fetchall()
-    )
-    assert counts == {crime_cell: 2, crime_cell + 1: 1}  # the crime-free cell is counted too
+    counts = {
+        r[0]: (r[1], r[2])
+        for r in con.execute(
+            f"SELECT spatial_id, SUM(building_count), SUM(floor_area) FROM {KEY}_building_counts GROUP BY 1"
+        ).fetchall()
+    }
+    assert counts == {  # the crime-free cell is counted too
+        crime_cell: (2, pytest.approx(400.0)),
+        crime_cell + 1: (1, pytest.approx(200.0)),
+    }
     assert f"{KEY}_building_counts" in beahiv_counts.outputs(con)
     assert building_counts.beahiv_outputs(con) == [f"{KEY}_building_counts"]
 
