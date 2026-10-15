@@ -353,7 +353,7 @@ absence). Registry order respects `depends_on`:
 | `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |
 | `streetlights` | [streetlights.py](src/safer_streets_tooling/extract/streetlights.py) | no | — |
 | `cctv` | [cctv.py](src/safer_streets_tooling/extract/cctv.py) | no | — |
-| `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network) |
+| `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network). Only schools that take pupils aged 13+ (GIAS `statutoryhighage > 12`) are kept, except in Wales — see [Welsh schools](#welsh-schools-are-unfiltered) |
 | `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
 | `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
@@ -392,6 +392,15 @@ and (b) that licence permits us to publish the aggregate `h3r9_streetlight_count
 (per-cell counts, not the raw point locations). Until then the OSM/Overture layer stands as an
 indicative placeholder. The same OS caveat applies to `cctv`, for which there is no comparable
 authoritative national feed — it remains indicative only.
+
+### Welsh schools are unfiltered
+
+`schools` keeps only schools with a secondary cohort (some pupils aged 13+), using GIAS
+`statutoryhighage`. GIAS
+records Welsh schools as "Welsh establishment", with no phase and no age range, so every open Welsh
+school is kept, primaries included. Welsh cells therefore show far more schools than comparable English
+ones. The Welsh Government's own maintained-schools list (DataMap Wales) does give each school's sector,
+and could be used to apply the same filter in Wales.
 
 ## Transform steps
 

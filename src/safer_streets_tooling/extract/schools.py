@@ -1,4 +1,4 @@
-"""GIAS schools with 10-minute walk isochrones → ``schools.parquet`` (needs ``open_roads``)."""
+"""GIAS secondary-age schools with 10-minute walk isochrones → ``schools.parquet`` (needs ``open_roads``)."""
 
 from datetime import date, timedelta
 from pathlib import Path
@@ -15,6 +15,10 @@ from safer_streets_tooling.extract.base import Dataset, ExtractContext
 WALK_TRIP_MINUTES = 10
 WALK_SPEED_KMH = 5
 WALK_RADIUS_M = WALK_TRIP_MINUTES * WALK_SPEED_KMH * 1000 / 60  # reachable network distance, metres
+
+# A school is kept only if its oldest pupils are above this age (GIAS statutoryhighage). Primaries top out
+# at 11 and a few at 12, so this keeps every school with a secondary cohort, including all-through ones.
+MAX_PRIMARY_AGE = 12
 
 
 def _walk_isochrones(
@@ -86,7 +90,9 @@ def extract(ctx: ExtractContext) -> None:
     """
     Write the ``schools`` parquet from the GIAS export, with a 10-minute walk isochrone per school.
 
-    Open schools with valid coordinates are parsed into a point ``geom`` (BNG) plus ``h3_{8..11}_id``
+    Open schools with valid coordinates whose ``statutoryhighage`` exceeds ``MAX_PRIMARY_AGE`` (some
+    pupils aged 13+) are kept. GIAS holds no age range for Welsh establishments, so every
+    school in Wales is kept. Each is parsed into a point ``geom`` (BNG) plus ``h3_{8..11}_id``
     cell ids (the GIAS export has no lon/lat, so these are derived by transforming geom back to
     WGS-84); a walk catchment ``isochrone`` polygon is then computed over the open_roads network, so
     this requires the ``open_roads`` parquet (extract roads first). The GIAS export is downloaded
@@ -114,6 +120,8 @@ def extract(ctx: ExtractContext) -> None:
                     ST_Point(easting, northing) AS geom
                 FROM read_csv_auto('{gias}', encoding='CP1252', normalize_names=true)
                 WHERE establishmentstatus_code IN (1, 3) AND easting > 0 AND northing > 0
+                    -- GIAS has no ages for Welsh establishments (gor_code 'W'), so Wales can't be filtered
+                    AND (statutoryhighage > {MAX_PRIMARY_AGE} OR gor_code = 'W')
             ),
             pts AS (
                 SELECT
@@ -167,6 +175,9 @@ DATASET = Dataset(
     name="schools",
     table="schools",
     extract=extract,
-    description="GIAS schools with a 10-minute walk-isochrone catchment geometry.",
+    description=(
+        "GIAS schools that take pupils aged 13+ (every school in Wales, which GIAS gives no ages for), "
+        "with a 10-minute walk-isochrone catchment geometry."
+    ),
     depends_on=("open_roads",),
 )

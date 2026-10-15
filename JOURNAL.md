@@ -7,6 +7,53 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Keep only secondary-age schools
+
+**Why**: The `schools` layer is meant to mark places where secondary-age young people gather, but it held
+every open GIAS establishment. Primaries, infant and nursery schools made up most of it.
+
+**What**: The schools extract now keeps a school only if it takes pupils aged 13 or over
+(`statutoryhighage > MAX_PRIMARY_AGE`, 12). All Welsh schools are still kept, because GIAS has no ages for
+them. On the 2026-09-04 export this cuts the table from 26,489 rows to 8,514. The 7,121 English schools
+are 3,172 secondaries, 289 sixth-form colleges, 160 all-through schools, 87 middle schools, and 3,413
+independent, special and alternative-provision schools; the other 1,393 are Welsh. The descriptions
+follow it: `near <school>` in `beahiv202_descriptions` now only names a school with a secondary cohort.
+The dataset `description`, docstrings and README (including a new data-quality caveat) are updated. The
+test fixture now has a primary (oldest pupils 11), an 8–12 middle school, an all-through school and a
+Welsh school.
+
+**Design decisions**
+
+- **`statutoryhighage > 12`: the school has a secondary cohort.** The layer marks where teenagers gather,
+  and a 4–18 academy or a 3–18 independent school with a prep department has a full secondary cohort on
+  site. The alternatives considered:
+  - `statutorylowage >= 11` (every pupil 11+, 4,699 English schools) drops those schools just because
+    they also teach younger children: 160 all-through schools and about 2,170 independent or special
+    schools.
+  - `statutoryhighage > 11` keeps about 30 more schools whose oldest pupils are 12: three primaries, two
+    8–12 middle schools and some small independents. These have no teenagers.
+  - `statutoryhighage >= 11` keeps nearly every primary, since a primary's high age is 11.
+- **Age rather than `phaseofeducation_name`.** About 4,300 English independent, special and PRU
+  establishments have phase "Not applicable", but every one has an age range. Filtering by phase would
+  drop all of them, including independent secondaries.
+- **Wales is identified by `gor_code = 'W'`.** This is GIAS's "Wales (pseudo)" region and covers all
+  1,393 open Welsh schools. Matching the "Welsh establishment" type would miss one Welsh special post-16
+  institution.
+- **Filtering happens in the extract.** Downstream steps only read the name, capacity, cell id and
+  catchment, so nothing else changes. Dropping rows before the isochrones are built also cuts the
+  extract's slowest step (one bounded Dijkstra per school) by about 4×.
+
+**Follow-ups**
+
+- **Filter Wales with the Welsh Government list.** The Welsh Government publishes its maintained schools
+  on DataMap Wales (WFS layer `geonode:maintained_schools_wg`, OGL). It has a `sector` (secondary 173,
+  middle 31, special 39, primary 1,192, nursery 5), BNG points and pupil numbers. It joins to GIAS on
+  `la_code * 10000 + establishmentnumber` (1,291 of 1,393 match). The 102 that don't match are mostly
+  independents and PRUs, for which no Welsh source gives a phase.
+- **GIAS drops Welsh schools with no coordinates.** 142 Welsh schools that GIAS marks as open have no
+  easting/northing, so they're dropped today; 8 secondary, 8 middle and 7 special among them. The
+  DataMap layer has coordinates for all of them.
+
 ## Assign residential population per building, not by floor area
 
 **Why**: Weighting residents by floor area sent too much of an OA's population to a few large
