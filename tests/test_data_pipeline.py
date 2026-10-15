@@ -615,14 +615,22 @@ _SQUARE_ROADS = """
 _GIAS_HEADER = (
     "urn,establishmentnumber,establishmentname,typeofestablishment_code,typeofestablishment_name,"
     "establishmentstatus_code,phaseofeducation_code,phaseofeducation_name,statutorylowage,statutoryhighage,"
-    "schoolcapacity,postcode,urbanrural_code,districtadministrative_code,msoa_code,lsoa_code,easting,northing"
+    "schoolcapacity,postcode,urbanrural_code,districtadministrative_code,msoa_code,lsoa_code,easting,northing,gor_code"
 )
 
 
 def _write_gias_csv(path: Path) -> None:
     rows = [
-        "1,1,School A,1,Community,1,4,Secondary,11,18,500,LS1 1AA,A1,E08000035,E02,E01,10,10",
-        "2,2,Closed School,1,Community,4,4,Secondary,11,18,500,LS1 1AB,A1,E08000035,E02,E01,50,50",  # status 4 → excluded
+        "1,1,School A,1,Community,1,4,Secondary,11,18,500,LS1 1AA,A1,E08000035,E02,E01,10,10,D",
+        "2,2,Closed School,1,Community,2,4,Secondary,11,18,500,LS1 1AB,A1,E08000035,E02,E01,50,50,D",  # status 2
+        "7,7,Proposed School,1,Community,4,4,Secondary,11,18,500,LS1 1AF,A1,E08000035,E02,E01,60,60,D",  # status 4
+        "3,3,Primary School,1,Community,1,2,Primary,4,11,300,LS1 1AC,A1,E08000035,E02,E01,20,20,D",  # oldest 11
+        "4,4,Middle School,1,Community,1,3,Middle deemed primary,8,12,400,LS1 1AE,A1,E08000035,E02,E01,25,25,D",  # 12
+        # status 3, open but proposed to close, is still open
+        "5,5,All-through School,1,Community,3,7,All-through,4,18,900,LS1 1AD,A1,E08000035,E02,E01,30,30,D",
+        # a Welsh establishment has no phase or ages in GIAS, so it is dropped only if named as a primary/nursery
+        "6,6,Ysgol Gynradd Amlwch,30,Welsh establishment,1,0,Not applicable,,,,LL68 9DU,A1,W06000001,W02,W01,40,40,W",
+        "8,8,Ysgol Uwchradd Caergybi,30,Welsh establishment,1,0,Not applicable,,,,LL65 1NP,A1,W06000001,W02,W01,45,45,W",
     ]
     path.write_text("\n".join([_GIAS_HEADER, *rows]) + "\n")
 
@@ -644,6 +652,34 @@ def test_walk_isochrones_is_convex_hull_of_reachable_nodes():
     geoms = schools._walk_isochrones(edges, nodes, pts, radius=1000)
     assert len(geoms) == 1
     assert geoms[0].area == 100 * 100  # convex hull of the four corners
+
+
+@pytest.mark.parametrize(
+    ("name", "is_primary"),
+    [
+        ("Ysgol Gynradd Amlwch", True),  # Cynradd, soft-mutated after "Ysgol"
+        ("Ysgol Feithrin Cogan", True),  # Meithrin, soft-mutated
+        ("Cogan Nursery School", True),
+        ("Groes Primary School", True),
+        ("Abernant C.P. School", True),  # county primary
+        ("Ferryside VCP", True),  # voluntary controlled primary
+        ("Brynaman C P School", True),
+        ("Bedwas Infant School", True),
+        ("Cwmaber Junior School", True),
+        ("Ysgol Babanod Glan Conwy", True),
+        ("Ysgol Iau Bodffordd", True),
+        ("Ysgol Minafon 3-11 Community School", True),
+        ("Ely and Caerau Children's Centre", True),
+        ("Ysgol Uwchradd Caergybi", False),  # secondary
+        ("Ysgol Gyfun Gymraeg Glantaf", False),  # comprehensive
+        ("Cardiff High School", False),
+        ("Ysgol Pen Coch", False),  # special
+        ("Ysgol Melyd", False),  # a primary with nothing in its name to go on: a known gap
+    ],
+)
+def test_welsh_primary_name_pattern(name, is_primary):
+    matched = duckdb.sql("SELECT regexp_matches($1, $2, 'i')", params=[name, schools.WELSH_PRIMARY_NAME_PATTERN])
+    assert matched.fetchall() == [(is_primary,)]
 
 
 def test_download_gias_uses_cache(tmp_path, monkeypatch):
@@ -711,11 +747,13 @@ def test_schools_builds_isochrones(tmp_path, monkeypatch):
     # H3 cell ids (resolutions 8-11) derived from the school location
     assert {"h3r9_id", "beahiv202_id"} <= cols
     assert con.execute("SELECT COUNT(*) FROM t WHERE h3r9_id IS NULL").fetchone()[0] == 0
-    # the closed school (status 4) is filtered out
-    assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+    # schools not currently open and those with no pupil over 12 are dropped; an all-through school has a secondary
+    # cohort so it stays; in Wales the primary (Ysgol Gynradd) goes and the secondary (Ysgol Uwchradd) stays
+    names = {r[0] for r in con.execute("SELECT establishmentname FROM t").fetchall()}
+    assert names == {"School A", "All-through School", "Ysgol Uwchradd Caergybi"}
     # the isochrone is a polygon with positive area (the reachable square)
-    assert con.execute("SELECT ST_GeometryType(isochrone) FROM t").fetchone()[0] == "POLYGON"
-    assert con.execute("SELECT isochrone_area_km2 FROM t").fetchone()[0] > 0
+    assert con.execute("SELECT DISTINCT ST_GeometryType(isochrone) FROM t").fetchall() == [("POLYGON",)]
+    assert con.execute("SELECT MIN(isochrone_area_km2) FROM t").fetchone()[0] > 0
     con.close()
 
 

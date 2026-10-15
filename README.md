@@ -353,7 +353,7 @@ absence). Registry order respects `depends_on`:
 | `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |
 | `streetlights` | [streetlights.py](src/safer_streets_tooling/extract/streetlights.py) | no | — |
 | `cctv` | [cctv.py](src/safer_streets_tooling/extract/cctv.py) | no | — |
-| `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network) |
+| `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network). Only schools that take pupils aged 13+ (GIAS `statutoryhighage > 12`) are kept, Welsh schools are filtered by name instead — see [Welsh schools](#welsh-schools-are-filtered-by-name) |
 | `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
 | `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
@@ -392,6 +392,18 @@ and (b) that licence permits us to publish the aggregate `h3r9_streetlight_count
 (per-cell counts, not the raw point locations). Until then the OSM/Overture layer stands as an
 indicative placeholder. The same OS caveat applies to `cctv`, for which there is no comparable
 authoritative national feed — it remains indicative only.
+
+### Welsh schools are filtered by name
+
+`schools` keeps only schools with a secondary cohort (some pupils aged 13+), using GIAS
+`statutoryhighage`. GIAS records Welsh schools as "Welsh establishment", with no phase and no age range,
+so in Wales a school is dropped when its name marks it as a primary or nursery, in English or Welsh
+(`WELSH_PRIMARY_NAME_PATTERN` in [schools.py](src/safer_streets_tooling/extract/schools.py)). Checked
+against the Welsh Government's own sector labels, this drops about 720 of the roughly 1,070 Welsh
+primaries and nurseries and no secondary, middle or special school. The other ~350 are named only
+for their place (e.g. "Ysgol Melyd") and are kept, so Welsh cells still show somewhat more schools than
+comparable English ones. The Welsh Government's maintained-schools list (DataMap Wales) gives each
+school's sector and would close the gap.
 
 ## Transform steps
 
