@@ -22,11 +22,11 @@ from safer_streets_tooling.grids import BEAHIV_ID, H3_ID, H3_RESOLUTION
 
 
 def cell_id_columns(con: duckdb.DuckDBPyConnection, lon: str, lat: str, bng_geom: str) -> str:
-    """SQL for the grid-id columns a point layer carries: ``h3r9_id`` and ``beahiv202_id``.
+    """SQL for the grid-id columns a point layer carries: ``h3r9_id`` and ``bh350eef_id``.
 
     Every point extract tags each feature with the cell it falls in on both grids, so the transform can
     group by a column instead of doing a spatial join, and a consumer can join a feature straight to
-    ``h3r9_geogs`` or ``beahiv202_geogs``. Emitting them from one place keeps the two layers' columns
+    ``h3r9_geogs`` or ``bh350eef_geogs``. Emitting them from one place keeps the two layers' columns
     identically named and derived — the H3 id from the WGS-84 lon/lat the h3 extension wants, the
     BEAHIV id by arithmetic on the BNG point (see :mod:`safer_streets_tooling.beahiv_grid`).
 

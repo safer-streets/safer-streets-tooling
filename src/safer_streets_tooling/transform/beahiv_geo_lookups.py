@@ -1,4 +1,4 @@
-"""``beahiv202_{key}_lookup`` — each BEAHIV cell mapped to one ONS geography code (in memory only).
+"""``bh350eef_{key}_lookup`` — each BEAHIV cell mapped to one ONS geography code (in memory only).
 
 The BEAHIV counterpart of :mod:`.geo_lookups`: the same :func:`~.geo_lookups.build_unit` over
 :data:`~safer_streets_tooling.transform.beahiv.BEAHIV_UNIT`. Like the H3 step it declares no ``outputs``, so
@@ -14,7 +14,7 @@ from safer_streets_tooling.transform.base import Grid, TransformStep
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Build every ``beahiv202_{key}_lookup``."""
+    """Build every ``bh350eef_{key}_lookup``."""
     if not beahiv.available(con):
         return
     beahiv.register_udfs(con)  # BEAHIV_UNIT.cells calls the cell-polygon UDF
@@ -30,7 +30,7 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.BEAHIV,
-    description="Per-cell ONS geography codes (max-overlap) on the BEAHIV grid; in memory only, folded into beahiv202_geogs.",
+    description="Per-cell ONS geography codes (max-overlap) on the BEAHIV grid; in memory only, folded into bh350eef_geogs.",
     depends_on=("beahiv_counts",),
     extract_inputs=geo_lookups.STEP.extract_inputs,
 )

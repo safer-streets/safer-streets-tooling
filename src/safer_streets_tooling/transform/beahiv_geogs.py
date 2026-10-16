@@ -1,4 +1,4 @@
-"""``beahiv202_geogs`` — one row per BEAHIV cell: ONS codes + overlap id lists (+ nearest retail centre, opt-in).
+"""``bh350eef_geogs`` — one row per BEAHIV cell: ONS codes + overlap id lists (+ nearest retail centre, opt-in).
 
 The BEAHIV counterpart of ``h3r{res}_geogs``: same columns, same scope (see
 :mod:`safer_streets_tooling.transform.geogs`), built by the same query over the BEAHIV lookups — which
@@ -13,7 +13,7 @@ from safer_streets_tooling.transform.base import Grid, TransformStep
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Build ``beahiv202_geogs``."""
+    """Build ``bh350eef_geogs``."""
     if not beahiv.available(con):
         return
     beahiv.register_udfs(con)  # the lookups are views, so their cell-polygon UDF calls run here

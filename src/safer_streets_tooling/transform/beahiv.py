@@ -1,13 +1,13 @@
-"""The BEAHIV 202m hex grid as a spatial unit: the two UDFs it needs, and :data:`BEAHIV_UNIT`.
+"""The BEAHIV 350m edge-to-edge hex grid as a spatial unit: the two UDFs it needs, and :data:`BEAHIV_UNIT`.
 
 The transform's third spatial unit, alongside the H3 cells and the Home Office hotspot hexes. Every
-relation built on it is named with the ``beahiv202`` key (``beahiv202_crime_counts``,
-``beahiv202_geogs``, …) and keyed by ``spatial_id``, so a consumer joins the BEAHIV counts and
+relation built on it is named with the ``bh350eef`` key (``bh350eef_crime_counts``,
+``bh350eef_geogs``, …) and keyed by ``spatial_id``, so a consumer joins the BEAHIV counts and
 attributes exactly as it joins the H3 ones — which is the point of the grid: the same crimes on an
 equal-area hexagonal gridding, comparable cell for cell with H3 resolution 9.
 
 Like the H3 units and unlike the hotspot hexes, the cells are those *carrying crimes* — taken from
-``beahiv202_crime_counts`` rather than from the ``beahiv202`` extract, which tiles the whole of
+``bh350eef_crime_counts`` rather than from the ``bh350eef`` extract, which tiles the whole of
 England & Wales (~1.5m cells) and would put the great majority of them through the lookups for
 nothing. That also keeps the grid exactly the crime grid, as it is for H3.
 

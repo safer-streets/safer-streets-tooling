@@ -9,7 +9,7 @@ relation names it produces (so they can be cached as parquet). Steps are ordered
 The steps come in three families over the three spatial units, each declaring its
 :class:`~safer_streets_tooling.transform.base.Grid`: the H3 grid at each resolution in
 ``H3_RESOLUTIONS`` (``Grid.H3``), the Home Office hotspot hexes (the ``hotspot_*`` steps, ``Grid.HO``, a
-no-op when that optional extract is absent), and the BEAHIV 202m hex grid (the ``beahiv_*`` steps,
+no-op when that optional extract is absent), and the BEAHIV 350m edge-to-edge hex grid (the ``beahiv_*`` steps,
 ``Grid.BEAHIV``). All produce the same relations keyed by ``spatial_id``, differing in the unit's name —
 and, for BEAHIV, in that column's type: an integer cell id rather than the hex string the other two
 units use. No step depends on one in another family (checked at import), so a run can be narrowed to

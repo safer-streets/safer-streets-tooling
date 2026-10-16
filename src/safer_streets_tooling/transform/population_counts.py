@@ -149,10 +149,10 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``beahiv202_population_counts``: the same allocation, summed onto the BEAHIV cells.
+    """Create ``bh350eef_population_counts``: the same allocation, summed onto the BEAHIV cells.
 
     Identical weighting (:func:`_allocation_sql`); only the cell a building belongs to differs — read
-    from the extract's ``beahiv202_id`` instead of its ``h3r9_id``.
+    from the extract's ``bh350eef_id`` instead of its ``h3r9_id``.
 
     Every cell the allocation reaches is kept, matching the H3 table and the other per-cell counts —
     see :func:`.building_counts._build_on`.

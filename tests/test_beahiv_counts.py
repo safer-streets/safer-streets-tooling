@@ -11,12 +11,12 @@ from beahiv import Orientation, bng_to_cell, decode, lonlat_to_cell
 from duckdb.sqltypes import BIGINT, DOUBLE
 from safer_streets_core.database import duckdb_connector
 
-from safer_streets_tooling.beahiv_grid import ORIENTATION, SIDE_LENGTH
+from safer_streets_tooling.beahiv_grid import MEASURE, ORIENTATION, SIZE
 from safer_streets_tooling.transform import beahiv, beahiv_counts
 
 TABLE = beahiv.COUNTS_TABLE
 
-# two coordinates ~20 m apart (same cell at a 202 m side) plus two far-apart cities
+# two coordinates ~20 m apart (same cell at 350 m edge-to-edge) plus two far-apart cities
 _LEEDS = (-1.50, 53.80)
 _LEEDS_NEARBY = (-1.50005, 53.8001)
 _MANCHESTER = (-2.50, 53.40)
@@ -50,7 +50,7 @@ def _crime_data(con):
 
 def _spatial_id(lon: float, lat: float) -> int:
     """The spatial_id the step should emit for a point, via beahiv's scalar encoder."""
-    return lonlat_to_cell(lon, lat, size=SIDE_LENGTH, orientation=ORIENTATION)
+    return lonlat_to_cell(lon, lat, size=SIZE, measure=MEASURE, orientation=ORIENTATION)
 
 
 def test_counts_conserve_filtered_input():
@@ -74,13 +74,13 @@ def test_cell_ids_match_beahiv_scalar_encoder():
 
     per_cell = dict(con.execute(f"SELECT spatial_id, SUM(count) FROM {TABLE} GROUP BY spatial_id").fetchall())
     assert per_cell == {
-        _spatial_id(*_LEEDS): 2,  # the two Leeds points are ~20 m apart: one cell at a 202 m side
+        _spatial_id(*_LEEDS): 2,  # the two Leeds points are ~20 m apart: one cell at 350 m edge-to-edge
         _spatial_id(*_MANCHESTER): 1,
     }
 
 
 def test_spatial_id_is_a_signed_integer_on_the_declared_grid():
-    """spatial_id is a BIGINT that decodes straight back to the configured side length/orientation.
+    """spatial_id is a BIGINT that decodes straight back to the configured size/measure/orientation.
 
     beahiv's id layout is what makes this possible: every id is below 2**52, so no cast, no unsigned
     column and no hex-string encoding stands between the table and ``decode``.
@@ -99,7 +99,8 @@ def test_spatial_id_is_a_signed_integer_on_the_declared_grid():
     for (cell,) in con.execute(f"SELECT spatial_id FROM {TABLE}").fetchall():
         assert isinstance(cell, int) and cell > 0
         index = decode(cell)
-        assert index.side_length == SIDE_LENGTH
+        assert index.size == SIZE
+        assert index.measure is MEASURE
         assert index.orientation is ORIENTATION
 
 
@@ -132,7 +133,7 @@ def test_udf_matches_beahiv_across_a_multi_vector_scan():
     beahiv.register_udfs(con)
     con.create_function(
         "beahiv_cell_scalar",
-        lambda x, y: bng_to_cell(x, y, size=SIDE_LENGTH, orientation=ORIENTATION),
+        lambda x, y: bng_to_cell(x, y, size=SIZE, measure=MEASURE, orientation=ORIENTATION),
         [DOUBLE, DOUBLE],
         BIGINT,
     )
@@ -186,7 +187,7 @@ def test_scalar_and_vector_bng_to_cell_agree():
     the scalar one does, so the UDF is a faithful batching of it."""
     xs = [400000.0, 383000.0, 530000.0]
     ys = [400000.0, 398000.0, 180000.0]
-    vector = bng_to_cell(xs, ys, size=SIDE_LENGTH, orientation=Orientation.FLAT)
+    vector = bng_to_cell(xs, ys, size=SIZE, measure=MEASURE, orientation=Orientation.FLAT)
     assert [int(c) for c in vector] == [
-        bng_to_cell(x, y, size=SIDE_LENGTH, orientation=Orientation.FLAT) for x, y in zip(xs, ys, strict=True)
+        bng_to_cell(x, y, size=SIZE, measure=MEASURE, orientation=Orientation.FLAT) for x, y in zip(xs, ys, strict=True)
     ]

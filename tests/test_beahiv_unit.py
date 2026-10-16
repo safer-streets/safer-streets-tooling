@@ -11,10 +11,10 @@ import math
 
 import duckdb
 import pytest
-from beahiv import cell_polygon
+from beahiv import Measure, Orientation, cell_polygon
 from safer_streets_core.database import duckdb_connector
 
-from safer_streets_tooling.beahiv_grid import CELL_AREA, KEY, SIDE_LENGTH
+from safer_streets_tooling.beahiv_grid import CELL_AREA, KEY, MEASURE, ORIENTATION, SIZE
 from safer_streets_tooling.transform import (
     STEPS,
     beahiv,
@@ -97,7 +97,7 @@ def test_cell_geom_matches_beahiv_cell_polygon():
 
 
 def test_cell_area_is_the_exact_hexagon_area():
-    """cell_area is the analytic 3*sqrt(3)/2*s² — and agrees with the built polygon's own ST_Area.
+    """cell_area is the analytic sqrt(3)/2*d² — and agrees with the built polygon's own ST_Area.
 
     The grid is equal-area in EPSG:27700, so this is a constant rather than a per-cell measure; it is
     the *planar* BNG area, matching the planar {prefix}_overlap_area columns it is the denominator for.
@@ -105,13 +105,15 @@ def test_cell_area_is_the_exact_hexagon_area():
     The analytic formula is restated *here* on purpose. ``CELL_AREA`` is measured off beahiv's own
     reference cell rather than computed, so checking it against the SQL polygon alone would compare
     two things derived from the same source; the closed form is the independent third opinion that
-    catches a wrong side length or orientation in either of them.
+    catches a wrong size or measure in either of them (a size read as a side length rather than
+    edge-to-edge would be out by a factor of 3).
     """
     con = _connect()
     _crime_counts(con)
     beahiv.register_udfs(con)
 
-    analytic = 1.5 * math.sqrt(3.0) * SIDE_LENGTH**2
+    assert MEASURE is Measure.EDGE_TO_EDGE  # the closed form below is for d edge-to-edge
+    analytic = math.sqrt(3.0) / 2 * SIZE**2
     declared_constant = CELL_AREA
     assert declared_constant == pytest.approx(analytic, rel=1e-12)
 
@@ -123,9 +125,14 @@ def test_cell_area_is_the_exact_hexagon_area():
 
 
 def test_relation_names_follow_the_unit_key():
-    """Every relation on this grid carries one key, so it needs no naming special case."""
+    """Every relation on this grid carries one key, so it needs no naming special case.
+
+    The key spells out all three grid parameters — size, measure (``ee`` edge-to-edge) and orientation
+    (``f`` flat) — since beahiv treats a change to any one of them as a different lattice.
+    """
     key, counts_table = KEY, beahiv.COUNTS_TABLE
-    assert key == f"beahiv{SIDE_LENGTH}"
+    assert (SIZE, MEASURE, ORIENTATION) == (350, Measure.EDGE_TO_EDGE, Orientation.FLAT)
+    assert key == "bh350eef"
     assert beahiv.BEAHIV_UNIT.key == key
     assert counts_table == f"{key}_crime_counts"
 
@@ -168,7 +175,7 @@ def test_lookup_and_geogs_steps_build_the_beahiv_relations():
     beahiv_geogs.build(con, True)
 
     # the geography lookups are built (geogs reads them) but not published: their codes are columns of
-    # beahiv202_geogs over the same cells, so a parquet each would be the same data twice
+    # bh350eef_geogs over the same cells, so a parquet each would be the same data twice
     assert beahiv_lookups.outputs(con) == []
     for key in GEOGRAPHY_MAPPINGS:
         assert con.execute(f"SELECT COUNT(*) FROM {KEY}_{key}_lookup").fetchone()[0] > 0
@@ -195,7 +202,7 @@ def test_opted_in_retail_lookup_adds_the_retail_columns_to_geogs():
 
 
 def test_geogs_schema_matches_h3_apart_from_the_id_type():
-    """h3r9_geogs and beahiv202_geogs carry the same columns in the same order, so the two griddings
+    """h3r9_geogs and bh350eef_geogs carry the same columns in the same order, so the two griddings
     are directly comparable and a consumer can swap one for the other.
 
     Only ``spatial_id`` differs, and only in type: an H3 cell is identified by its canonical hex
@@ -270,9 +277,9 @@ def test_geogs_rebuilds_while_the_overlap_lookups_are_cached(tmp_path):
     """A cached run must still build the in-memory geography lookups, or a beahiv_geogs rebuild fails.
 
     Regression: the geography lookups were built inside beahiv_lookups, which is served from its parquet
-    cache when fresh. With beahiv202_geogs.parquet missing, the second run reloaded the overlap lookups,
+    cache when fresh. With bh350eef_geogs.parquet missing, the second run reloaded the overlap lookups,
     skipped their build — and with it the geography lookups — and beahiv_geogs failed on a missing
-    beahiv202_lad24cd_lookup. As their own step with no outputs, the geography lookups always build.
+    bh350eef_lad24cd_lookup. As their own step with no outputs, the geography lookups always build.
     """
     steps = [beahiv_geo_lookups.STEP, beahiv_lookups.STEP, beahiv_geogs.STEP]
 
@@ -299,7 +306,7 @@ def test_geogs_rebuilds_while_the_overlap_lookups_are_cached(tmp_path):
 def test_extract_cell_id_columns_tag_the_cell_containing_the_feature():
     """The ids the extracts tag onto each feature are the cells that actually contain it.
 
-    This is what makes the two phases joinable: the extract writes ``beahiv202_id`` / ``h3r9_id``
+    This is what makes the two phases joinable: the extract writes ``bh350eef_id`` / ``h3r9_id``
     columns, the transform aggregates crimes onto grids of the same name, and a consumer joins one to
     the other. Two encodings of "the same" grid that disagreed would join to nothing without ever
     raising, so the tagged cell is checked against beahiv's own polygon rather than against the encoder
@@ -339,7 +346,7 @@ def _buildings_on_cells(con, crime_cell, empty_cell):
             ({crime_cell}, 'Residential', 100.0, 200.0),
             ({crime_cell}, 'Residential', 100.0, 200.0),
             ({empty_cell}, 'Residential', 100.0, 200.0)
-        ) t(beahiv202_id, map_simple_use, premise_area, gross_area)
+        ) t(bh350eef_id, map_simple_use, premise_area, gross_area)
     """)
 
 
@@ -348,7 +355,7 @@ def test_beahiv_counts_cover_the_other_layers_on_every_cell():
     and counts every cell holding one — the same rule as H3, so the two stay comparable.
 
     The cell is a point-to-cell calculation on both grids, so neither needs the crime grid to bound it.
-    ``beahiv202_geogs`` still describes only the crime cells, as ``h3r9_geogs`` does."""
+    ``bh350eef_geogs`` still describes only the crime cells, as ``h3r9_geogs`` does."""
     from safer_streets_tooling.transform import building_counts
 
     con = _connect()
@@ -376,7 +383,7 @@ def test_beahiv_counts_cover_the_other_layers_on_every_cell():
 
 
 def test_beahiv_counts_skip_a_layer_extracted_before_the_cell_id_existed():
-    """A parquet predating the beahiv202_id column is skipped with no output, not a failed build — the
+    """A parquet predating the bh350eef_id column is skipped with no output, not a failed build — the
     extracts are re-run on their own schedule."""
     from safer_streets_tooling.transform import building_counts
 
@@ -396,12 +403,12 @@ def test_beahiv_outputs_lists_the_other_counts_before_build_has_run():
     write, then ``build`` runs), so a check that only reads true *after* the crime counts exist would
     have every one of these tables built in memory and never written to parquet. Regression for exactly
     that: ``beahiv.tagged`` used to gate on ``beahiv.available``, which tests for
-    ``beahiv202_crime_counts`` — absent at this point in a real run.
+    ``bh350eef_crime_counts`` — absent at this point in a real run.
     """
     from safer_streets_tooling.transform import building_counts
 
     con = _connect()
-    _crime_counts(con, beahiv_too=False)  # the source layers exist; beahiv202_crime_counts does not yet
+    _crime_counts(con, beahiv_too=False)  # the source layers exist; bh350eef_crime_counts does not yet
     con.execute(f"CREATE TABLE buildings AS SELECT 1 AS {beahiv.KEY}_id, 'Residential' AS map_simple_use")
 
     assert not beahiv.available(con)  # the precondition the bug depended on

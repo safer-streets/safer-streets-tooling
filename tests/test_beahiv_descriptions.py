@@ -1,7 +1,7 @@
-"""Tests for ``beahiv202_descriptions`` / ``hotspots_descriptions``: the human-readable labels built from the
+"""Tests for ``bh350eef_descriptions`` / ``hotspots_descriptions``: the human-readable labels built from the
 geogs and their lookups.
 
-The contract: every cell of ``beahiv202_geogs`` gets exactly one row with a non-empty ``short_location``
+The contract: every cell of ``bh350eef_geogs`` gets exactly one row with a non-empty ``short_location``
 ("main road / second road, own LAD", else the LSOA name) and ``description``; names are resolved from the
 lookups, a missing name source drops its clause instead of failing the build, and the retail centre named is
 the one the cell overlaps most — not the (deprecated, opt-in) nearest centre the geogs may carry. Synthetic
