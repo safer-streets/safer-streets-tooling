@@ -1,4 +1,4 @@
-"""``beahiv202_*_counts`` — the per-cell counts, aggregated onto the BEAHIV hexagonal grid.
+"""``bh350eef_*_counts`` — the per-cell counts, aggregated onto the BEAHIV hexagonal grid.
 
 The same schema and exclusions as ``h3r{res}_crime_counts`` (see :mod:`.crime_counts`), on the
 equal-area hexagonal grid described in :mod:`.beahiv` instead of H3. The BEAHIV counterpart of
@@ -16,7 +16,7 @@ every cell holding a feature, as its H3 counterpart does, so the two grids cover
 import duckdb
 from beahiv import INVALID_CELL_ID
 
-from safer_streets_tooling.beahiv_grid import SIDE_LENGTH
+from safer_streets_tooling.beahiv_grid import SIZE
 from safer_streets_tooling.transform import (
     beahiv,
     building_counts,
@@ -32,10 +32,10 @@ _MODULES = (streetlight_counts, building_counts, population_counts, road_interse
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``beahiv202_crime_counts`` counting crimes per BEAHIV cell / crime type / month.
+    """Create ``bh350eef_crime_counts`` counting crimes per BEAHIV cell / crime type / month.
 
-    The grid is parameterised by a side length in metres, not by an H3 resolution. ``spatial_id`` is the
-    cell id as a ``BIGINT`` (see :mod:`.beahiv`), the same column ``beahiv202`` and ``beahiv202_geogs``
+    The grid is parameterised by a cell size in metres (edge-to-edge), not by an H3 resolution. ``spatial_id`` is the
+    cell id as a ``BIGINT`` (see :mod:`.beahiv`), the same column ``bh350eef`` and ``bh350eef_geogs``
     are keyed by.
 
     Exclusions are ``crime_counts``' :data:`~.crime_counts.CRIME_FILTER` verbatim (un-geolocated and
@@ -95,7 +95,7 @@ STEP = TransformStep(
     build=build,
     outputs=outputs,
     grid=Grid.BEAHIV,
-    description=f"Crime / street light / building / population / road-intersection counts per BEAHIV {SIDE_LENGTH}m-side hexagonal cell, keyed by spatial_id.",
+    description=f"Crime / street light / building / population / road-intersection counts per BEAHIV {SIZE}m edge-to-edge hexagonal cell, keyed by spatial_id.",
     extract_inputs=(
         "crime_data",
         "streetlights",

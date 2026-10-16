@@ -1,4 +1,4 @@
-"""BEAHIV 202m hex grid over the police force areas → ``beahiv202.parquet``.
+"""BEAHIV hex grid (350m edge-to-edge, flat) over the police force areas → ``bh350eef.parquet``.
 
 One row per (hex cell, police force area) covering England & Wales, derived from the
 ``police_force_areas`` boundaries rather than downloaded. ``proportion`` is the fraction of the cell's
@@ -6,8 +6,9 @@ area lying inside that force, so a cell straddling a boundary appears once per f
 its proportions sum to 1 (less on a coast, where part of the cell is sea).
 
 beahiv works natively in British National Grid, so no reprojection happens here. ``spatial_id`` is the
-cell id as a plain ``BIGINT``: beahiv reserves the top three bits of an id, so every one of them fits
-a signed 64-bit column, and ``beahiv202_crime_counts`` is keyed the same way.
+cell id as a plain ``BIGINT``: every beahiv id is below 2**52, so every one of them fits a signed
+64-bit column, and ``bh350eef_crime_counts`` is keyed the same way. The dataset is named by the
+grid key (see :mod:`safer_streets_tooling.beahiv_grid`), so a change to the grid renames it too.
 """
 
 import beahiv as bh
@@ -17,7 +18,7 @@ import shapely
 from safer_streets_core.database import duckdb_connector, read_geoparquet, write_geoparquet
 from shapely.geometry.base import BaseGeometry
 
-from safer_streets_tooling.beahiv_grid import ORIENTATION, SIDE_LENGTH
+from safer_streets_tooling.beahiv_grid import KEY, MEASURE, ORIENTATION, SIZE
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # small enough that clipping one cell against a tile is cheap, large enough that the subdivision
@@ -80,7 +81,7 @@ def cell_proportions(polygon: BaseGeometry, cell_polys: np.ndarray) -> np.ndarra
 
 def polyfill_force(polygon: BaseGeometry) -> tuple[np.ndarray, np.ndarray, list[BaseGeometry]]:
     """Cell ids covering polygon, the proportion of each inside it, and their hex outlines."""
-    cell_ids = np.asarray(bh.polyfill(polygon, SIDE_LENGTH, ORIENTATION), dtype=np.int64)
+    cell_ids = np.asarray(bh.polyfill(polygon, size=SIZE, measure=MEASURE, orientation=ORIENTATION), dtype=np.int64)
     if cell_ids.size == 0:
         return cell_ids, np.zeros(0), []
     cell_polys = np.asarray(bh.cell_polygons(cell_ids), dtype=object)
@@ -88,7 +89,7 @@ def polyfill_force(polygon: BaseGeometry) -> tuple[np.ndarray, np.ndarray, list[
 
 
 def extract(ctx: ExtractContext) -> None:
-    """Write the ``beahiv202`` parquet from the police force area boundaries."""
+    """Write the ``bh350eef`` parquet from the police force area boundaries."""
     pfas = ctx.parquet("police_force_areas")
     if not pfas.exists():
         raise FileNotFoundError(f"police_force_areas parquet not found: {pfas}")
@@ -99,8 +100,8 @@ def extract(ctx: ExtractContext) -> None:
             f"SELECT spatial_id, pfa24nm, ST_AsText(geom) AS wkt FROM ({read_geoparquet(pfas)}) ORDER BY spatial_id"
         ).fetchall()
 
-        con.execute("""
-            CREATE TABLE beahiv202 (
+        con.execute(f"""
+            CREATE TABLE {KEY} (
                 spatial_id BIGINT, proportion DOUBLE, pfa24cd VARCHAR, pfa24nm VARCHAR, geom GEOMETRY
             );
         """)
@@ -122,25 +123,25 @@ def extract(ctx: ExtractContext) -> None:
                 ),
             )
             con.execute(
-                """
-                INSERT INTO beahiv202
+                f"""
+                INSERT INTO {KEY}
                 SELECT spatial_id, proportion, ?, ?, ST_GeomFromText(wkt) FROM force_cells;
                 """,
                 [pfa24cd, pfa24nm],
             )
             con.unregister("force_cells")
 
-        row_count = con.execute("SELECT COUNT(*) FROM beahiv202").fetchone()[0]  # ty:ignore[not-subscriptable]
-        write_geoparquet(con, "SELECT * FROM beahiv202", ctx.parquet("beahiv202"))
+        row_count = con.execute(f"SELECT COUNT(*) FROM {KEY}").fetchone()[0]  # ty:ignore[not-subscriptable]
+        write_geoparquet(con, f"SELECT * FROM {KEY}", ctx.parquet(KEY))
     finally:
         con.close()
-    print(f"  beahiv202: {row_count:,} rows")
+    print(f"  {KEY}: {row_count:,} rows")
 
 
 DATASET = Dataset(
-    name="beahiv202",
-    table="beahiv202",
+    name=KEY,
+    table=KEY,
     extract=extract,
-    description="BEAHIV 202m hex grid over E&W police force areas; spatial_id = cell id, proportion = share of the cell inside that force.",
+    description=f"BEAHIV {SIZE}m edge-to-edge flat hex grid over E&W police force areas; spatial_id = cell id, proportion = share of the cell inside that force.",
     depends_on=("police_force_areas",),
 )

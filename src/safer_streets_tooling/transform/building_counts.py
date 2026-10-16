@@ -23,7 +23,7 @@ FLOOR_AREA = "SUM(COALESCE(gross_area, premise_area) * CASE map_simple_use WHEN 
 def _build_on(con: duckdb.DuckDBPyConnection, unit_key: str, cell: str, replace: bool) -> None:
     """Create ``{unit_key}_building_counts`` from the cell id the extract already tags on each footprint.
 
-    Both the H3 and BEAHIV grids tag their cell onto the building (``h3r9_id`` / ``beahiv202_id``), so
+    Both the H3 and BEAHIV grids tag their cell onto the building (``h3r9_id`` / ``bh350eef_id``), so
     counting is a group-and-count on that column whichever of them is asked for; only the hotspot hexes,
     which carry no id, need a spatial join (see :func:`build_hotspots`). Each building is placed by its
     footprint *centroid* — the point both id columns are derived from.
@@ -55,9 +55,9 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``beahiv202_building_counts`` — the same counts on the BEAHIV grid, off its own id column.
+    """Create ``bh350eef_building_counts`` — the same counts on the BEAHIV grid, off its own id column.
 
-    No-op until the buildings extract has been re-run to carry ``beahiv202_id`` (see
+    No-op until the buildings extract has been re-run to carry ``bh350eef_id`` (see
     :func:`.beahiv.tagged`).
     """
     if not beahiv.tagged(con, BUILDINGS_TABLE):

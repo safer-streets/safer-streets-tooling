@@ -260,7 +260,7 @@ def test_poi_extracts_filtered_places(tmp_path, monkeypatch):
         "poi_id",
         "geom",
         "h3r9_id",
-        "beahiv202_id",
+        "bh350eef_id",
         "name",
         "postcode",
         "basic_category",
@@ -288,7 +288,7 @@ def test_streetlights_extracts_street_lamps(tmp_path, monkeypatch):
 
     con = _read_parquet(tmp_path / "streetlights.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert cols == {"streetlight_id", "geom", "h3r9_id", "beahiv202_id"}
+    assert cols == {"streetlight_id", "geom", "h3r9_id", "bh350eef_id"}
     # street lamps exist in central London; geometry reprojected to BNG metres, every row has a h3 id
     assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] > 0
     assert con.execute("SELECT MIN(ST_X(geom)) FROM t").fetchone()[0] > 1000  # BNG metres, not lon/lat
@@ -334,7 +334,7 @@ def test_cctv_extracts_surveillance_nodes(tmp_path, monkeypatch):
     assert user_agent and "python-requests" not in user_agent
     con = _read_parquet(tmp_path / "cctv.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert cols == {"cctv_id", "geom", "h3r9_id", "beahiv202_id"}  # schema mirrors streetlights
+    assert cols == {"cctv_id", "geom", "h3r9_id", "bh350eef_id"}  # schema mirrors streetlights
 
     # only the two nodes with coordinates survive; id carries the node/ prefix
     ids = {r[0] for r in con.execute("SELECT cctv_id FROM t").fetchall()}
@@ -392,7 +392,7 @@ def test_naptan_extracts_active_stops_and_categorises(tmp_path, monkeypatch):
     naptan.extract(_ctx(tmp_path))  # cached CSV → no download
     con = _read_parquet(tmp_path / "naptan.parquet")
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert {"atco_code", "naptan_code", "name", "stop_type", "stop_category", "geom", "h3r9_id", "beahiv202_id"} <= cols
+    assert {"atco_code", "naptan_code", "name", "stop_type", "stop_category", "geom", "h3r9_id", "bh350eef_id"} <= cols
 
     # only the three active, non-rail stops with valid coordinates survive
     assert con.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 3
@@ -479,7 +479,7 @@ def test_food_outlets_extracts_england_and_wales_food_venues(tmp_path, monkeypat
         "rating_value",
         "geom",
         "h3r9_id",
-        "beahiv202_id",
+        "bh350eef_id",
     } <= cols
     # address + all component scores dropped; rating_value is the only hygiene field kept (plus postcode)
     assert {"address", "hygiene_score", "structural_score", "confidence_score"}.isdisjoint(cols)
@@ -745,7 +745,7 @@ def test_schools_builds_isochrones(tmp_path, monkeypatch):
     cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
     assert {"urn", "geom", "isochrone", "isochrone_area_km2"} <= cols
     # H3 cell ids (resolutions 8-11) derived from the school location
-    assert {"h3r9_id", "beahiv202_id"} <= cols
+    assert {"h3r9_id", "bh350eef_id"} <= cols
     assert con.execute("SELECT COUNT(*) FROM t WHERE h3r9_id IS NULL").fetchone()[0] == 0
     # schools not currently open and those with no pupil over 12 are dropped; an all-through school has a secondary
     # cohort so it stays; in Wales the primary (Ysgol Gynradd) goes and the secondary (Ysgol Uwchradd) stays

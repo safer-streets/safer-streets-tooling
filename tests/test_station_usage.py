@@ -163,7 +163,7 @@ def test_extract_locates_stations_in_bng(tmp_path, monkeypatch):
     assert df.loc["ABW", "entries_exits"] == 11_873_686
     assert df.loc["ABW", "period"] == "2024-25"
     assert pd.isna(df.loc["TEA", "entries_exits"])
-    assert df["h3r9_id"].notna().all() and df["beahiv202_id"].notna().all()
+    assert df["h3r9_id"].notna().all() and df["bh350eef_id"].notna().all()
 
     monkeypatch.setattr(station_usage, "download", _unreachable)
     station_usage.extract(ctx)

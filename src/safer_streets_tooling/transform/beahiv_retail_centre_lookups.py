@@ -1,4 +1,4 @@
-"""``beahiv202_retail_centre_lookup`` — each BEAHIV cell's nearest retail centre. Deprecated, not built by default.
+"""``bh350eef_retail_centre_lookup`` — each BEAHIV cell's nearest retail centre. Deprecated, not built by default.
 
 The BEAHIV counterpart of :mod:`.retail_centre_lookups` (see there for why it is deprecated): the same
 :func:`~.retail_centre_lookups.build_unit` over :data:`~safer_streets_tooling.transform.beahiv.BEAHIV_UNIT`.
@@ -12,7 +12,7 @@ from safer_streets_tooling.transform.base import Grid, TransformStep
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Build ``beahiv202_retail_centre_lookup``."""
+    """Build ``bh350eef_retail_centre_lookup``."""
     if not beahiv.available(con):
         return
     beahiv.register_udfs(con)  # BEAHIV_UNIT.cells calls the cell-polygon UDF
