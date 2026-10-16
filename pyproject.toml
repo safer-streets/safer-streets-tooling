@@ -12,8 +12,9 @@ dependencies = [
     "safer-streets-core",
     # the hex indexing library behind the beahiv_202 grid extract and the BEAHIV transform steps.
     # [arrow] pins the pyarrow its vectorised *_to_cell overloads need — the transform hands whole
-    # DuckDB vectors straight to them as pyarrow arrays.
-    "beahiv[arrow]",
+    # DuckDB vectors straight to them as pyarrow arrays. >=0.1.0: keyword-only sizes and the
+    # edge-to-edge measure; ids from 0.0.x are a different grid and do not decode.
+    "beahiv[arrow]>=0.1.0",
 ]
 
 [project.scripts]

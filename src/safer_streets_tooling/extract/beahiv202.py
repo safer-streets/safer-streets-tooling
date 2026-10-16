@@ -6,8 +6,8 @@ area lying inside that force, so a cell straddling a boundary appears once per f
 its proportions sum to 1 (less on a coast, where part of the cell is sea).
 
 beahiv works natively in British National Grid, so no reprojection happens here. ``spatial_id`` is the
-cell id as a plain ``BIGINT``: beahiv reserves the top three bits of an id, so every one of them fits
-a signed 64-bit column, and ``beahiv202_crime_counts`` is keyed the same way.
+cell id as a plain ``BIGINT``: every beahiv id is below 2**52, so every one of them fits a signed
+64-bit column, and ``beahiv202_crime_counts`` is keyed the same way.
 """
 
 import beahiv as bh
@@ -80,7 +80,7 @@ def cell_proportions(polygon: BaseGeometry, cell_polys: np.ndarray) -> np.ndarra
 
 def polyfill_force(polygon: BaseGeometry) -> tuple[np.ndarray, np.ndarray, list[BaseGeometry]]:
     """Cell ids covering polygon, the proportion of each inside it, and their hex outlines."""
-    cell_ids = np.asarray(bh.polyfill(polygon, SIDE_LENGTH, ORIENTATION), dtype=np.int64)
+    cell_ids = np.asarray(bh.polyfill(polygon, size=SIDE_LENGTH, orientation=ORIENTATION), dtype=np.int64)
     if cell_ids.size == 0:
         return cell_ids, np.zeros(0), []
     cell_polys = np.asarray(bh.cell_polygons(cell_ids), dtype=object)

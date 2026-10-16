@@ -33,7 +33,7 @@ KEY = f"beahiv{SIDE_LENGTH}"
 # reason the transform takes its cell polygons straight from beahiv (see transform.beahiv): beahiv
 # owns the cell's geometry, so anything derived from it should come from beahiv and not be
 # reimplemented against it. Exact to the last bit either way, and computed once at import.
-CELL_AREA = cell_polygon(encode(0, 0, SIDE_LENGTH, ORIENTATION)).area
+CELL_AREA = cell_polygon(encode(0, 0, size=SIDE_LENGTH, orientation=ORIENTATION)).area
 
 # DuckDB has no BEAHIV function, so encoding a point is a vectorised (``type="arrow"``) Python UDF.
 # It lives here rather than with the transform because both phases need it: the extract tags each
@@ -46,8 +46,8 @@ def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
 
     A pyarrow array in gives a pyarrow array back, so the DuckDB vectors pass straight through to
     beahiv and back; the cast to ``int64`` is the only work here, matching the BIGINT the UDF
-    declares (beahiv returns the ids as ``uint64``, and every one of them fits — beahiv reserves its
-    top three bits, which puts every id below 2**61).
+    declares (beahiv returns the ids as ``uint64``, and every one of them fits — every id is below
+    2**52, which also keeps it exact as a float64).
 
     It takes projected coordinates rather than lon/lat, for two reasons in order of importance:
 
@@ -61,7 +61,7 @@ def _cell_from_bng(x: pa.ChunkedArray, y: pa.ChunkedArray) -> pa.Array:
 
     Verified equivalent: identical cell ids to ``lonlat_to_cell`` on 2M rows of the extract.
     """
-    return bng_to_cell(x, y, SIDE_LENGTH, ORIENTATION).cast(pa.int64())
+    return bng_to_cell(x, y, size=SIDE_LENGTH, orientation=ORIENTATION).cast(pa.int64())
 
 
 def register_encoder(con: duckdb.DuckDBPyConnection) -> None:

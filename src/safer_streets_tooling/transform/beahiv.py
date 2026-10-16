@@ -20,9 +20,9 @@ has no BEAHIV function for either:
   ``beahiv_cell_polygon``, which hands a whole vector of ids to beahiv's ``cell_polygons`` and returns
   WKB for ``ST_GeomFromWKB``. The geometry is beahiv's own, not reconstructed here.
 
-``spatial_id`` is the cell id as a plain ``BIGINT``. beahiv reserves its top three bits, which puts
-every id below 2**61, so the natural integer column is signed and no unsigned type or hex-string
-encoding is needed to hold one.
+``spatial_id`` is the cell id as a plain ``BIGINT``. Every beahiv id is below 2**52, so the natural
+integer column is signed and no unsigned type or hex-string encoding is needed to hold one — and an
+id that passes through a float64 (a pandas column gaining a NaN, a JSON number) comes back exact.
 """
 
 import duckdb

@@ -50,7 +50,7 @@ def _crime_data(con):
 
 def _spatial_id(lon: float, lat: float) -> int:
     """The spatial_id the step should emit for a point, via beahiv's scalar encoder."""
-    return lonlat_to_cell(lon, lat, SIDE_LENGTH, ORIENTATION)
+    return lonlat_to_cell(lon, lat, size=SIDE_LENGTH, orientation=ORIENTATION)
 
 
 def test_counts_conserve_filtered_input():
@@ -82,8 +82,8 @@ def test_cell_ids_match_beahiv_scalar_encoder():
 def test_spatial_id_is_a_signed_integer_on_the_declared_grid():
     """spatial_id is a BIGINT that decodes straight back to the configured side length/orientation.
 
-    beahiv's reserved top bits are what make this possible: every id is below 2**61, so no cast, no
-    unsigned column and no hex-string encoding stands between the table and ``decode``.
+    beahiv's id layout is what makes this possible: every id is below 2**52, so no cast, no unsigned
+    column and no hex-string encoding stands between the table and ``decode``.
     """
     con = _connect()
     _crime_data(con)
@@ -132,7 +132,7 @@ def test_udf_matches_beahiv_across_a_multi_vector_scan():
     beahiv.register_udfs(con)
     con.create_function(
         "beahiv_cell_scalar",
-        lambda x, y: bng_to_cell(x, y, SIDE_LENGTH, ORIENTATION),
+        lambda x, y: bng_to_cell(x, y, size=SIDE_LENGTH, orientation=ORIENTATION),
         [DOUBLE, DOUBLE],
         BIGINT,
     )
@@ -186,7 +186,7 @@ def test_scalar_and_vector_bng_to_cell_agree():
     the scalar one does, so the UDF is a faithful batching of it."""
     xs = [400000.0, 383000.0, 530000.0]
     ys = [400000.0, 398000.0, 180000.0]
-    vector = bng_to_cell(xs, ys, SIDE_LENGTH, Orientation.FLAT)
+    vector = bng_to_cell(xs, ys, size=SIDE_LENGTH, orientation=Orientation.FLAT)
     assert [int(c) for c in vector] == [
-        bng_to_cell(x, y, SIDE_LENGTH, Orientation.FLAT) for x, y in zip(xs, ys, strict=True)
+        bng_to_cell(x, y, size=SIDE_LENGTH, orientation=Orientation.FLAT) for x, y in zip(xs, ys, strict=True)
     ]
