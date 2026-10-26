@@ -7,6 +7,56 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Place workplace population in residential-only OAs
+
+**Why**: `population_counts` dropped an OA's whole workplace population when the OA had no Non
+Residential or Mixed Use building. 22,224 OAs (about 12%) contain only Residential buildings, so 1.38M
+of WP001's 27.67M workers (5.0%) never reached the grid. WP001 counts people who work mainly at or from
+home, or have no fixed workplace, in their home OA. In a residential-only OA these are most of the
+workplace population, and they really are in the Residential buildings that had a weight of 0.
+
+**What**: In `_allocation_sql`, an OA whose summed workplace weight is zero (or NULL) shares its
+workplace population by the residential weights instead. Every other OA is allocated as before. The
+H3, hotspot and BEAHIV tables all pick this up, since they share the SQL. On the current extract, the
+workplace population allocated to `h3r9_population_counts` rises from 94.9% to 99.9% (26,270,394 →
+27,655,194). The residential allocation is unchanged at 99.9%. The H3 test fixture gains a third OA
+with populations but no buildings, which are still unassigned. OA2, which is residential only, now
+receives its workers. The hotspot test now expects the fallback's two-thirds share of workers. The
+docstrings and README are updated.
+
+**Design decisions**
+
+- **The fallback uses the residential weights.** Home workers live where residents live, so they are
+  spread the same way: one share per Residential building. Mixed Use buildings don't come into it,
+  because an OA containing one already has a positive workplace weight. The alternative was floor area
+  of the residential buildings. That would bring back the large-footprint bias the residential
+  allocation dropped in the previous entry.
+- **The fallback only applies when an OA has no workplace weight.** A mixed OA still sends all of its
+  WP001 count, home workers included, to its shops and offices. Splitting home workers out properly
+  needs another Census table (see Follow-ups). The user chose the simple fix for now.
+- **The fallback lives in the share, not as a second pass.** It is a `CASE` on the OA's window sum
+  (a named `WINDOW oa`, so the partition is written once), so the shares still sum to 1 per OA and the
+  per-cell `SUM` is unchanged. Named windows are standard SQL; see DuckDB's
+  [WINDOW clause](https://duckdb.org/docs/sql/query_syntax/window).
+
+**Follow-ups**
+
+- **Split home workers out of WP001 using TS058.** Census 2021 TS058 (distance travelled to work, nomis
+  `NM_2075_1`, per OA of residence) has "Works mainly from home" (8.67M in England & Wales) and "offshore,
+  no fixed place or outside the UK" (4.01M). WP001 places both in the home OA, so per OA,
+  `WP001 = those two + people commuting in`. The enhancement would be a new optional extract, fetched
+  from the nomis API like `residential_population` (it needs `NOMIS_API_KEY`). Home workers would go by
+  the residential weights and only the commuters by floor area. Caveats:
+  - Census Day (21 March 2021) fell during lockdown, so 31% working mainly from home overstates today's
+    figure. Placing them correctly makes the 2021 data internally consistent, not current.
+  - "No fixed place" workers aren't really at home during the day. They are placed there only because
+    WP001 puts them there.
+  - Statistical disclosure control means `WP001 − home workers` can go slightly negative in an OA, so it
+    would need flooring at 0.
+- Two cases are still unassigned. The 148 OAs with no buildings (36.9k residents, 16.3k workers) are
+  probably new-build estates missing from the Verisk data. The 84 OAs with only Non Residential
+  buildings hold 21.4k residents.
+
 ## Switch the BEAHIV grid to 350m edge-to-edge (`bh350eef`); move to beahiv 0.1.0
 
 **Why**: The BEAHIV grid was sized by its side (202 m, flat). Cells are better stated by their width

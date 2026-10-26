@@ -312,11 +312,22 @@ further scaled by total floor area (`gross_area`, falling back to the footprint 
 floor count is unknown); the residential population (households + communal establishments) to
 **Residential** (×1.0) and **Mixed Use** (×0.5) buildings irrespective of their size — one share per
 residential building, half a share per mixed-use one, which sits 50-50 in both pools — then the
-per-building assignments are grouped by the building's `h3r9_id` and summed. Both populations are
-conserved onto the grid except where they cannot be assigned (an OA with no building of the right
-type, or a building whose centroid falls in no OA); the step reports the allocated share of each
-source total. It is bundled in the default minimal DB (skipped if any of its three input extracts was
-absent).
+per-building assignments are grouped by the building's `h3r9_id` and summed. WP001 counts people who
+work mainly at or from home (or have no fixed workplace) in their home OA, so about 12% of OAs have a
+workplace population but only Residential buildings; there the workplace population is shared by the
+residential weights instead of being dropped. Both populations are conserved onto the grid except where
+they cannot be assigned (an OA with no buildings, an OA with only Non Residential buildings for its
+residents, or a building whose centroid falls in no OA) — on the current extract 99.9% of each lands;
+the step reports the allocated share of each source total. It is bundled in the default minimal DB
+(skipped if any of its three input extracts was absent).
+
+> **Possible enhancement:** the fallback only fires where an OA has *no* workplace building, so in a
+> mixed OA its home workers still go to the shops and offices. Census 2021 TS058 (distance travelled
+> to work, nomis `NM_2075_1`, per OA of residence) counts "works mainly from home" and "no fixed place /
+> offshore / outside the UK", which WP001 places in the home OA; subtracting them from WP001 and
+> allocating them by the residential weights would place home workers everywhere. Caveat: Census Day
+> (21 March 2021) fell in lockdown — 8.7M of 27.8M workers in England & Wales worked mainly from home —
+> so either way the 2021 split overstates home working relative to today.
 
 > **TODO:** now that the `buildings` extract carries `h3r9_id` per footprint, `h3r9_building_counts` may
 > be surplus to requirements — a consumer can aggregate the counts directly from `buildings` by
