@@ -62,7 +62,9 @@ def _allocation_sql(buildings_sql: str) -> str:
     falling back to the footprint ``premise_area`` where the floor count is unknown) times its
     USE_WEIGHTS multiplier; its share of the residential population is the USE_WEIGHTS multiplier alone,
     ignoring size (a Residential building takes one share, a Mixed Use one half a share). Both are
-    normalised within the OA; the per-building assignments are then summed per cell.
+    normalised within the OA; the per-building assignments are then summed per cell. An OA with no
+    workplace weight at all (only Residential buildings) shares its workplace population by the
+    residential weights instead — WP001 counts home workers in their home OA.
 
     ``buildings_sql`` must cover *every* building in the OA, including those the grid doesn't reach —
     the shares are normalised over whatever it returns, so filtering to a partial grid first would
@@ -85,12 +87,18 @@ def _allocation_sql(buildings_sql: str) -> str:
             SELECT
                 wt.spatial_id,
                 rp.household_population + rp.communal_population AS oa_residential,
-                wt.res_weight / NULLIF(SUM(wt.res_weight) OVER (PARTITION BY wt.oa21cd), 0) AS res_share,
+                wt.res_weight / NULLIF(SUM(wt.res_weight) OVER oa, 0) AS res_share,
                 wp.workplace_population AS oa_workplace,
-                wt.work_weight / NULLIF(SUM(wt.work_weight) OVER (PARTITION BY wt.oa21cd), 0) AS work_share
+                -- WP001 counts home workers in their home OA, so an OA with no workplace building
+                -- places its workplace population as it does its residents rather than dropping it
+                CASE
+                    WHEN COALESCE(SUM(wt.work_weight) OVER oa, 0) > 0 THEN wt.work_weight / SUM(wt.work_weight) OVER oa
+                    ELSE wt.res_weight / NULLIF(SUM(wt.res_weight) OVER oa, 0)
+                END AS work_share
             FROM weighted wt
             LEFT JOIN {RESIDENTIAL_TABLE} rp ON rp.spatial_id = wt.oa21cd
             LEFT JOIN {WORKPLACE_TABLE} wp ON wp.spatial_id = wt.oa21cd
+            WINDOW oa AS (PARTITION BY wt.oa21cd)
         )
         SELECT
             spatial_id,
@@ -130,9 +138,13 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     grouped by the building's res-9 ``h3r9_id`` and summed, keyed by ``spatial_id`` to match
     ``h3r9_crime_counts`` / ``h3r9_geogs``.
 
+    WP001 counts people who work mainly at or from home (or have no fixed workplace) in their home OA,
+    so an OA with only Residential buildings has a workplace population but no workplace building; it
+    is shared over those buildings by the residential weights rather than dropped.
+
     Both populations are conserved onto the grid except where they cannot be assigned: an OA with no
-    building of the right type (its population has nowhere to land), and buildings whose centroid falls
-    in no OA (they receive nothing). The allocated shares of the source totals are reported. No-op if
+    buildings, an OA with only Non Residential buildings (its residents have nowhere to land), and
+    buildings whose centroid falls in no OA (they receive nothing). The allocated shares of the source totals are reported. No-op if
     any input table is absent, or if the buildings table predates the size columns.
     Only resolution 9 is ever produced — the buildings extract carries a single ``h3r9_id``.
 

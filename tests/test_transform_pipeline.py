@@ -650,7 +650,8 @@ def test_building_counts_count_and_floor_area_per_cell_and_use():
 
 
 def _population_inputs(con):
-    """Two-OA fixture: buildings spanning three cells plus both per-OA population extracts."""
+    """Three-OA fixture: buildings spanning three cells plus both per-OA population extracts. OA2 has
+    only a Residential building; OA3 has populations but no buildings at all."""
     con.execute("""
         CREATE TABLE buildings AS SELECT * FROM (VALUES
             (1, 'OA1', 'aaa', 'Non Residential', 100.0, 300.0),
@@ -663,11 +664,12 @@ def _population_inputs(con):
     """)
     con.execute(
         "CREATE TABLE workplace_population AS SELECT * FROM "
-        "(VALUES ('OA1', 500), ('OA2', 50)) t(spatial_id, workplace_population)"
+        "(VALUES ('OA1', 500), ('OA2', 50), ('OA3', 20)) t(spatial_id, workplace_population)"
     )
     con.execute(
         "CREATE TABLE residential_population AS SELECT * FROM "
-        "(VALUES ('OA1', 270, 30), ('OA2', 10, 0)) t(spatial_id, household_population, communal_population)"
+        "(VALUES ('OA1', 270, 30), ('OA2', 10, 0), ('OA3', 5, 0)) "
+        "t(spatial_id, household_population, communal_population)"
     )
 
 
@@ -675,7 +677,8 @@ def test_population_counts_assigns_by_use_then_sums_per_cell():
     """Each OA's populations are assigned to buildings pro rata to use weight (workplace → Non
     Residential ×1 / Mixed ×0.5, scaled by floor area; residential → Residential ×1 / Mixed ×0.5, size
     ignored), then summed per res-9 cell. Residential buildings take no workplace population and vice
-    versa; OA-less buildings nothing."""
+    versa, except that an OA with no workplace building places its workplace population as it does its
+    residents (WP001 counts home workers); OA-less buildings get nothing."""
     from safer_streets_tooling.transform import population_counts
 
     con = duckdb.connect()  # plain SQL, no spatial/h3 extensions needed
@@ -692,18 +695,19 @@ def test_population_counts_assigns_by_use_then_sums_per_cell():
     # OA1 workplace 500 over work weights #1 300, #2 200×0.5=100, #4 premise-fallback 100 → 300/100/100
     # OA1 residential 270+30=300 over res weights #2 0.5, #3 1.0 → 100/200 (#3's larger floor area is
     # ignored; by area it would be 60/240)
-    # OA2 workplace 50 has no eligible building → unassigned; OA2 residential 10 → #6; #5 has no OA
+    # OA2 has only Residential #6, so its residential 10 and (by the fallback) its workplace 50 both go to
+    # #6; OA3 has no buildings, so its 5 residents and 20 workers are unassigned; #5 has no OA
     assert rows.keys() == {"aaa", "bbb", "ccc"}
     assert rows["aaa"] == (pytest.approx(100.0), pytest.approx(400.0))  # res: #2; work: #1 + #2
     assert rows["bbb"] == (pytest.approx(200.0), pytest.approx(100.0))  # res: #3; work: #4
-    assert rows["ccc"] == (pytest.approx(10.0), pytest.approx(0.0))  # res: #6; work: none assignable
+    assert rows["ccc"] == (pytest.approx(10.0), pytest.approx(50.0))  # res and work: #6
 
     # consistency: everything assignable is conserved onto the grid
     res_total, work_total = con.execute(
         "SELECT SUM(residential_population), SUM(workplace_population) FROM h3r9_population_counts"
     ).fetchone()  # ty:ignore[not-iterable]
-    assert res_total == pytest.approx(310.0)  # all 300 (OA1) + 10 (OA2) residents land
-    assert work_total == pytest.approx(500.0)  # OA1's 500 land; OA2's 50 have nowhere to go
+    assert res_total == pytest.approx(310.0)  # OA1's 300 + OA2's 10 land; OA3's 5 have nowhere to go
+    assert work_total == pytest.approx(550.0)  # OA1's 500 + OA2's 50 land; OA3's 20 have nowhere to go
 
     assert population_counts.outputs(con) == ["h3r9_population_counts"]
 
@@ -902,7 +906,8 @@ def test_population_counts_hotspots_allocates_only_the_hexes_share():
     spatial_id, residential, workplace = rows[0]
     assert spatial_id == "leeds"
     assert residential == pytest.approx(200.0)  # 2 of the OA's 3 equal buildings, not the whole 300
-    assert workplace == pytest.approx(0.0)  # no Non Residential / Mixed Use building to take it
+    # no Non Residential / Mixed Use building, so the 60 fall back to the residential shares: 2/3 again
+    assert workplace == pytest.approx(40.0)
     assert population_counts.hotspot_outputs(con) == ["hotspots_population_counts"]
 
 
