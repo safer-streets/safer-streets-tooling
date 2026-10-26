@@ -1,4 +1,4 @@
-"""``beahiv202_{name}_lookup`` — the overlap lookups, built on the BEAHIV 202m hex grid.
+"""``bh350eef_{name}_lookup`` — the overlap lookups, built on the BEAHIV 350m edge-to-edge hex grid.
 
 The overlap layers are the H3 ones with a different set of cells, so this step calls
 :func:`~.overlap_lookups.build_unit` with :data:`~safer_streets_tooling.transform.beahiv.BEAHIV_UNIT`. Like

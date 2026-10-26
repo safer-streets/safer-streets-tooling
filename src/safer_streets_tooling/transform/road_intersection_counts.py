@@ -58,7 +58,7 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``beahiv202_road_intersection_counts``: the nodes are already BNG, so the cell is
+    """Create ``bh350eef_road_intersection_counts``: the nodes are already BNG, so the cell is
     arithmetic on the point rather than a reprojection. No-op if the layer is absent.
 
     Gated on the layer alone, never on the grid: ``outputs`` is resolved before ``build``, so a check

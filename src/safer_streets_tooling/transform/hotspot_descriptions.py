@@ -1,6 +1,6 @@
 """``hotspots_descriptions`` — a human-readable location for every Home Office hotspot hex.
 
-The hotspot counterpart of ``beahiv202_descriptions``: the same labels, built by the same query
+The hotspot counterpart of ``bh350eef_descriptions``: the same labels, built by the same query
 (:func:`safer_streets_tooling.transform.beahiv_descriptions.build_unit`) over ``hotspots_geogs`` and the
 hotspot lookups. One clause differs: the school. Its site is found from the cell id each school is tagged
 with at extract, and there is no hotspot-hex tag, so the clause drops out — the ``school_ids`` in

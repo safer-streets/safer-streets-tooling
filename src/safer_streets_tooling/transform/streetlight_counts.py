@@ -35,7 +35,7 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
 
 
 def build_beahiv(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create ``beahiv202_streetlight_counts``. No-op until the extract carries ``beahiv202_id``."""
+    """Create ``bh350eef_streetlight_counts``. No-op until the extract carries ``bh350eef_id``."""
     if not beahiv.tagged(con, STREETLIGHTS_TABLE):
         return
     _build_on(con, beahiv.BEAHIV_UNIT.key, BEAHIV_ID, replace)

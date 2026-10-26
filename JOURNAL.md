@@ -7,6 +7,54 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Switch the BEAHIV grid to 350m edge-to-edge (`bh350eef`); move to beahiv 0.1.0
+
+**Why**: The BEAHIV grid was sized by its side (202 m, flat). Cells are better stated by their width
+across (350 m edge-to-edge), the figure a reader can check on a map. beahiv 0.1.0 adds that measure. It
+also made sizes keyword-only, so tooling no longer imported against the sibling checkout
+(`encode() takes 2 positional arguments`). It moved the grid origin and changed the id layout too, so
+every stored `beahiv202` id is unusable: beahiv 0.1.0 rejects them as "reserved bits set".
+
+**What**: Two commits. The first moves to the 0.1.0 API (`size=` / `orientation=` by keyword,
+`beahiv[arrow]>=0.1.0`, re-locked) and corrects the id-width comments: every id is now below 2**52,
+not 2**61. The second sets `beahiv_grid` to `SIZE = 350`, `MEASURE = Measure.EDGE_TO_EDGE`,
+`ORIENTATION = FLAT`. The grid key becomes `bh350eef`, which renames every relation on the grid
+(`bh350eef_crime_counts`, `_geogs`, `_descriptions`, the lookups), the `bh350eef_id` column on every
+point extract, and the grid extract itself (`extract/bh350eef.py`, dataset and parquet `bh350eef`).
+Descriptions, docstrings, the `--grid` help, README (prose, tables, DAG) and tests follow.
+
+**Design decisions**
+
+- **The geometry barely moves.** 350/√3 ≈ 202.07 m per side, against 202 m, so the cell area goes from
+  106,012 m² to 106,088 m² (+0.07%). It is still within a percent of H3 res 9, so the reason the grid
+  exists is unchanged. What changes is which figure is a whole metre, the ids, and the names.
+- **The key is derived from all three parameters**: `bh{SIZE}{ee|el}{f|p}`, through two small tag
+  maps. beahiv treats a different measure or orientation at the same size as a different lattice, so a
+  key built from the size alone (`beahiv350`) could name two incompatible grids. Deriving the key keeps
+  the existing rule that changing the grid renames its tables. The alternative was a literal
+  `KEY = "bh350eef"`, simpler to read but able to drift from the parameters without anything failing.
+  `el` / `p` name the unused cases only so the maps are total.
+- **The extract is renamed with the transform outputs.** Its ids are incompatible with the old
+  `beahiv202.parquet` anyway, and a kept name would let a stale file be read as the new grid. A
+  size-neutral name (`beahiv`) would have avoided renaming the module on the next resize, but it would
+  give up exactly that protection. The module, dataset and table now take their name from `KEY`, so the
+  only literal left is the module filename.
+- **The step / family names are not renamed** (`beahiv_*` steps, `Grid.BEAHIV`, `--grid beahiv`). They
+  name the family, which a resize doesn't change.
+- **`SIDE_LENGTH` becomes `SIZE`.** With an edge-to-edge measure the stored size is no longer a side
+  length (beahiv's `CellIndex.side_length` is the geometric one, ≈ 202.07), so keeping the old name
+  would mislead.
+- **The tests restate the closed form for edge-to-edge (`√3/2·d²`) and assert the measure first.** So
+  the analytic check stays independent of beahiv's own geometry. A size read as a side length would be
+  out by a factor of 3, which the test would catch.
+
+**Follow-ups**
+
+- **Every extract must be re-run** (`data extract --all`). Until a point layer is re-extracted it has no
+  `bh350eef_id`, and its BEAHIV counts are skipped without any error (`beahiv.tagged`).
+- **The old `beahiv202*` parquet files (and `beahiv_202_england_wales.zip`) are orphaned in the data
+  directory.** Nothing reads them and they can't be decoded; delete them by hand.
+
 ## Keep only secondary-age schools
 
 **Why**: The `schools` layer is meant to mark places where secondary-age young people gather, but it held

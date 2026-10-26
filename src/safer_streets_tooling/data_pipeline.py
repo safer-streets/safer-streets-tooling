@@ -211,7 +211,7 @@ _GRID_OPTION = typer.Option(
     list(ALL_GRIDS),
     "--grid",
     help="Grid family to build, repeatable: h3 (H3 cells), ho (Home Office hotspot hexes), beahiv "
-    "(BEAHIV 202m hexes), ons (OA/LSOA/MSOA/LAD/PFA). Default: all four.",
+    "(BEAHIV 350m edge-to-edge hexes), ons (OA/LSOA/MSOA/LAD/PFA). Default: all four.",
 )
 
 

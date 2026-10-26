@@ -8,7 +8,7 @@ it below.
 """
 
 from safer_streets_tooling.extract import (
-    beahiv202,
+    bh350eef,
     boundaries,
     buildings,
     cctv,
@@ -52,7 +52,7 @@ DATASETS: tuple[Dataset, ...] = (
     *oac.DATASETS,
     workplace_population.DATASET,
     residential_population.DATASET,
-    beahiv202.DATASET,  # depends on police_force_areas
+    bh350eef.DATASET,  # depends on police_force_areas
     hotspots.DATASET,  # the hotspot-hex grid: the transform's second spatial unit
 )
 

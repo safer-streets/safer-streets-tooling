@@ -132,7 +132,7 @@ def extract(ctx: ExtractContext) -> None:
     active one whose name best matches the ORR station name wins, then the lowest ATCO code. Stations with
     no candidate are reported and dropped. Counts are BIGINT, NULL where ORR prints ``[z]`` (e.g. a station
     closed all year, explained in ``additional_information``); ``geom`` is
-    the BNG point, with ``h3r9_id`` / ``beahiv202_id`` cell ids. Both sources are downloaded automatically
+    the BNG point, with ``h3r9_id`` / ``bh350eef_id`` cell ids. Both sources are downloaded automatically
     (cached unless force_download).
     """
     src = data_source("station_usage")

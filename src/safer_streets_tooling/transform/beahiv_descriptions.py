@@ -1,6 +1,6 @@
-"""``beahiv202_descriptions`` — a human-readable location for every BEAHIV cell.
+"""``bh350eef_descriptions`` — a human-readable location for every BEAHIV cell.
 
-Resolves the ids in ``beahiv202_geogs`` and its lookups to names (OS Open Roads, OS Open Greenspace, GIAS
+Resolves the ids in ``bh350eef_geogs`` and its lookups to names (OS Open Roads, OS Open Greenspace, GIAS
 schools, ONS area names) and assembles two labels per cell:
 
 * ``short_location`` — street-level: the two main roads and the cell's LAD, e.g.
@@ -211,7 +211,7 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
 
 
 def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Build ``beahiv202_descriptions``."""
+    """Build ``bh350eef_descriptions``."""
     if not beahiv.available(con):
         return
     beahiv.register_udfs(con)  # the lookups are views carrying the cell-polygon UDF call

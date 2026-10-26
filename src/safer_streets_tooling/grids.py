@@ -5,12 +5,12 @@ phase aggregates onto those grids; both must spell a grid the same way or the co
 drift apart. The keys live here, above both phases, and every name is derived from them:
 
 * a **relation** is ``{grid key}_{dataset}`` — ``h3r9_crime_counts``, ``hotspots_geogs``,
-  ``beahiv202_greenspace_lookup`` (see :func:`relation`);
-* a **cell-id column** on an extract layer is ``{grid key}_id`` — ``h3r9_id``, ``beahiv202_id``
+  ``bh350eef_greenspace_lookup`` (see :func:`relation`);
+* a **cell-id column** on an extract layer is ``{grid key}_id`` — ``h3r9_id``, ``bh350eef_id``
   (see :data:`H3_ID` / :data:`BEAHIV_ID`).
 
-A grid key is a single token with no internal ``_`` (``h3r9``, not ``h3_9``; ``beahiv202``, not
-``beahiv_202``), so exactly one underscore separates the grid from what follows it and the key stays
+A grid key is a single token with no internal ``_`` (``h3r9``, not ``h3_9``; ``bh350eef``, not
+``bh_350_eef``), so exactly one underscore separates the grid from what follows it and the key stays
 greppable as one word.
 """
 
