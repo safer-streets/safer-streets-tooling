@@ -20,6 +20,7 @@ from safer_streets_tooling.extract import (
     land_cover,
     naptan,
     oac,
+    osm_landuse,
     poi,
     residential_population,
     retail_centres,
@@ -37,6 +38,7 @@ DATASETS: tuple[Dataset, ...] = (
     *boundaries.DATASETS,
     greenspace.DATASET,
     land_cover.DATASET,
+    *osm_landuse.DATASETS,  # osm_landuse (attributes), then osm_landuse_geom (polygons) reusing its QuackOSM parse
     buildings.DATASET,
     retail_centres.DATASET,
     roads.DATASET,

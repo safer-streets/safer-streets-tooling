@@ -104,6 +104,8 @@ flowchart LR
    output_areas_2021
    open_greenspace
    land_cover
+   osm_landuse
+   osm_landuse_geom
    buildings
    retail_centres
    open_roads
@@ -155,6 +157,7 @@ flowchart LR
     open_roads --> schools
     local_authority_districts --> imd_scores_pct
     output_areas_2021 --> buildings
+    osm_landuse --> osm_landuse_geom
 
     %% transform edges
     crime_data --> h3r9_crime_counts
@@ -258,7 +261,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
-    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,bh350eef,hotspots extract;
+    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_landuse_geom,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,bh350eef,hotspots extract;
     class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions transform;
     class h3_retail_centres_lookup,hotspots_retail_centre_lookup,bh350eef_retail_centre_lookup deprecated;
 ```
@@ -334,6 +337,19 @@ the step reports the allocated share of each source total. It is bundled in the 
 > `h3r9_id` / `map_simple_use`. Consider dropping the transform (and its bundled table) once nothing
 > depends on the pre-aggregated form.
 
+The OpenStreetMap land-use extract comes as two tables joined on `osm_id` (`way/123`, `relation/456`).
+`osm_landuse` holds the attributes, with no geometry. `osm_landuse_geom` holds the BNG polygons. Both are
+read from Geofabrik's England and Wales PBFs with [QuackOSM](https://github.com/kraina-ai/quackosm), which
+assembles polygons from closed ways and multipolygon relations. A polygon is kept if it has a `landuse`,
+`leisure` or `amenity` tag, a land-cover `natural` value (wood, scrub, water, ...), or marks a
+pedestrian area (`highway=pedestrian|footway` mapped as an area, `area:highway=pedestrian|footway`,
+`place=square`). Buildings are left out. Each of those keys is a column holding the raw tag value, and a
+polygon may have several (`leisure=park` with `landuse=grass`), so the category a polygon counts towards
+is decided in the transform. `osm_landuse` also carries `name` and `area_m2`. The PBFs are cached under their
+dated Geofabrik names (`england-261108.osm.pbf`), and the newest is used until `--force-download` fetches
+the current snapshot. QuackOSM caches its parse in `raw/quackosm`. Rebuild both tables together, so they
+come from the same snapshot.
+
 OSM coverage of the `streetlights` and `cctv` layers is uneven — see
 [Data-quality caveats](#data-quality-caveats) below.
 
@@ -355,6 +371,7 @@ absence). Registry order respects `depends_on`:
 | 5 ONS boundary tables | [boundaries.py](src/safer_streets_tooling/extract/boundaries.py) | yes | — |
 | `open_greenspace` | [greenspace.py](src/safer_streets_tooling/extract/greenspace.py) | no | — |
 | `land_cover` | [land_cover.py](src/safer_streets_tooling/extract/land_cover.py) | no | — |
+| `osm_landuse`, `osm_landuse_geom` | [osm_landuse.py](src/safer_streets_tooling/extract/osm_landuse.py) | no | `osm_landuse_geom` on `osm_landuse` — not for its parquet, but so it reuses the QuackOSM parse rather than running a second one at the same time |
 | `buildings` | [buildings.py](src/safer_streets_tooling/extract/buildings.py) | no | `output_areas_2021` (OA `oa21cd` for each footprint) |
 | `retail_centres` | [retail_centres.py](src/safer_streets_tooling/extract/retail_centres.py) | no | — |
 | `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |

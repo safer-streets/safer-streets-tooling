@@ -203,5 +203,10 @@
   "hotspots": {
     "path": "ho/hotspots.geoparquet",
     "note": "Home Office hotspot hexes: the 350m hex-grid cells flagged as hotspots for one or more offence classes (the `hits` letters). Supplied directly rather than downloaded, so the GeoParquet is placed by hand at this path (relative to the data directory). Already BNG (EPSG:27700)."
+  },
+  "osm": {
+    "url": "https://download.geofabrik.de/europe/united-kingdom/{region}-latest.osm.pbf",
+    "regions": ["england", "wales"],
+    "note": "OpenStreetMap PBF extracts from Geofabrik (open data, ODbL, no API key), rebuilt daily. The -latest URL redirects to a dated snapshot ({region}-YYMMDD.osm.pbf), which is what gets cached in the data directory's raw folder, so the snapshot date is in the file name; --force-download fetches the current one. Parsed with QuackOSM (cache in raw/quackosm). WGS-84; reprojected to BNG (EPSG:27700) on load."
   }
 }

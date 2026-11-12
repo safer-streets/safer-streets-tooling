@@ -53,15 +53,58 @@ def raw_dir() -> Path:
 
 
 def download(url: str, dest: Path) -> None:
-    """Stream ``url`` to ``dest`` with a progress bar."""
-    print(f"  Downloading {dest}…")
-    response = requests.get(url, stream=True, timeout=60)
-    response.raise_for_status()
-    size = int(response.headers.get("content-length", 0))
-    with open(dest, "wb") as fd, tqdm(total=size, unit="B", unit_scale=True) as bar:
-        for chunk in response.iter_content(1024**2):
-            bar.update(len(chunk))
-            fd.write(chunk)
+    """Stream ``url`` to ``dest`` with a progress bar, resuming an interrupted download where the server allows.
+
+    Bytes go to ``<dest>.part``, which is renamed to ``dest`` only once complete. Extractors treat an
+    existing ``dest`` as a cached copy, so writing to it directly would let an interrupted download pass
+    as a good one on every later run.
+
+    To resume, the validator (``ETag``, else ``Last-Modified``) of the response that started the ``.part``
+    is kept beside it in ``<dest>.part.validator``. A rerun asks for the remaining bytes with ``If-Range``
+    set to it, so the server sends either the rest of the same file (206) or, if the file has changed
+    since, the whole new one (200), which starts the download again. Without a validator there is
+    nothing to check a resume against, so the download starts again. Raises ``OSError`` if the server
+    announced a length and the stream ended short of it.
+    """
+    part = dest.with_name(dest.name + ".part")
+    validator_file = dest.with_name(dest.name + ".part.validator")
+    # identity: the bytes on disk are the bytes on the wire, so byte ranges and content-length line up
+    headers = {"Accept-Encoding": "identity"}
+    done = part.stat().st_size if part.exists() else 0
+    if done and validator_file.exists():
+        headers |= {"Range": f"bytes={done}-", "If-Range": validator_file.read_text()}
+        print(f"  Resuming {dest} from {done:,} bytes…")
+    else:
+        done = 0
+        print(f"  Downloading {dest}…")
+
+    with requests.get(url, headers=headers, stream=True, timeout=60) as response:
+        if response.status_code == 416:  # the .part is longer than the file: it's from another version
+            part.unlink()
+            validator_file.unlink(missing_ok=True)
+            return download(url, dest)
+        response.raise_for_status()
+        if response.status_code != 206:
+            done = 0
+            validator = response.headers.get("ETag") or response.headers.get("Last-Modified")
+            if validator:
+                validator_file.write_text(validator)
+            else:
+                validator_file.unlink(missing_ok=True)
+        remaining = int(response.headers.get("content-length", 0))
+        total = done + remaining if remaining else None
+        with (
+            open(part, "ab" if done else "wb") as fd,
+            tqdm(initial=done, total=total, unit="B", unit_scale=True) as bar,
+        ):
+            for chunk in response.iter_content(1024**2):
+                bar.update(len(chunk))
+                fd.write(chunk)
+
+    if total is not None and (size := part.stat().st_size) != total:
+        raise OSError(f"Incomplete download of {url}: {size:,} of {total:,} bytes in {part}. Run again to resume.")
+    part.replace(dest)
+    validator_file.unlink(missing_ok=True)
 
 
 def extract_cached(zip_path: Path, member: str) -> Path:

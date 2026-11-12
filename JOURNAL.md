@@ -7,6 +7,151 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Extract OpenStreetMap land use (`osm_landuse`, `osm_landuse_geom`)
+
+**Why**: Our land-use layers are UKCEH land cover (urban/suburban) and OS Open Greenspace. Neither says
+which ground is retail, commercial, industrial, a car park, school grounds or a pedestrianised square.
+OSM does. The plan is to work out per-cell overlap areas on the BEAHIV grid for chosen categories, and
+that transform comes next. The exploration is in safer-streets-eda's `osm-landuse.ipynb`: OSM's tags,
+read from the raw PBFs, cover more of a city centre than Overture's `land_use` (76–79% against 71–75%
+on the Cardiff and Leeds test boxes). They also have more classes.
+
+**What**: A new optional extract module, `extract/osm_landuse.py`, yields two datasets joined on
+`osm_id` (`way/123`, `relation/456`):
+
+- `osm_landuse` holds the attributes and no geometry. There is one column per filter key (`landuse`,
+  `leisure`, `amenity`, `natural`, `highway`, `area_highway`, `place`) holding the raw tag value, plus
+  `name` and `area_m2`.
+- `osm_landuse_geom` holds the BNG polygons, as `osm_id` and `geom`.
+
+The source is Geofabrik's England and Wales PBFs, read with QuackOSM (new dependency), with the URL
+and regions in `config/data_sources.json` under `osm`. On the 2026-11-08 snapshot this gives
+3,886,198 polygons, 5,162 of them pedestrian areas. Tests cover the tag filter, the two-table split,
+BNG areas and coordinates, and choosing a PBF snapshot. They run offline: QuackOSM's output is replaced
+by a fixture in its schema. README updated (dataset table, DAG, a paragraph on the tables).
+
+**Design decisions**
+
+- **QuackOSM over DuckDB's `ST_ReadOSM` or Geofabrik's free GeoPackage.** `ST_ReadOSM` returns raw
+  nodes, ways and relations, so we'd have to assemble multipolygons ourselves. The free GeoPackage's
+  `landuse_a` layer only has `landuse=*` and drops pedestrian areas, which leaves about 15 points less
+  coverage in the test boxes. QuackOSM builds polygons from closed ways and relations and caches its
+  parse in `raw/quackosm`. The cost is a heavy dependency (it pulls in arro3, geoarrow, osmfinder and
+  rq-geo-toolkit) and the memory use below.
+- **Two tables, keyed on the OSM id.** Attributes are 64 MB and the polygons are 1.2 GB, so the
+  attributes can be filtered and summarised without loading geometry. Both tables come from one QuackOSM
+  parse. `osm_landuse_geom` declares `depends_on=("osm_landuse",)` even though it doesn't read that
+  parquet: the edge makes it run second and hit QuackOSM's cache, rather than both parsing at once.
+- **Every filter key is a column; no primary class.** A polygon can be `leisure=park` and
+  `landuse=grass`. Choosing one class would be a category decision, which belongs in the transform, so
+  the extract stays lossless for the keys it selects on. Values are raw OSM, typos included (there is a
+  `landuse=residnecial`).
+- **The tag filter lives in code, not the catalogue.** Unlike `poi`'s categories, the filter is tied to
+  the SQL gate and to the output columns, so changing it in JSON alone would break the schema. The
+  URL and regions, which are the source, are in the catalogue.
+- **A SQL gate keeps footway lines out of QuackOSM.** Pedestrian areas need
+  `highway=pedestrian|footway` in the filter, but nearly all such ways are lines. A Wales-only trial
+  with the lines left in was killed (exit 137), while the gated one peaked at 2 GB. The gate drops
+  buildings and also drops those highway
+  ways unless they have `area=yes`, `type=multipolygon` or another land-use key. The first version
+  missed that last case and lost 106 polygons, e.g. `amenity=marketplace` streets. Checking against an
+  independent run of the notebook's filter caught it, and the final output contains every polygon
+  that run had.
+- **The PBF is cached under its dated name** (`england-261108.osm.pbf`, resolved from `-latest`'s
+  redirect), so the snapshot in use is visible. The newest cached one is used until `--force-download`.
+- **No `ST_MakeValid` in the extract.** `index_geometry_tables` already repairs geometry when the
+  transform imports the table.
+
+**Peak memory (unresolved)**
+
+*Measured.* These are from one cold run of `data extract --only osm_landuse --only osm_landuse_geom`
+over England and Wales. The process tree was sampled every second. The run took 213 s.
+
+| Process | Peak RSS |
+| --- | --- |
+| Whole tree | **15.6 GB** |
+| Main `data` process | 12.5 GB |
+| QuackOSM workers | up to 15.1 GB |
+
+The three peaks needn't coincide. An earlier run, timed with `/usr/bin/time`, had a 12.7 GB peak for
+its largest process. Wales alone peaks at 2 GB and takes about 20 s. The machine has 30 GB of RAM,
+with about 14 GB free before the run. Warm runs, which read QuackOSM's cache, haven't been measured
+on their own, so it's unknown how much of the main process's 12.5 GB is the parse.
+
+*What happens.* QuackOSM runs its heavy SQL in a worker process, started with multiprocessing `spawn`
+(hence the `__main__` guard the `data` script already has).
+
+- **Memory limit.** Each worker opens DuckDB with DuckDB's default limit of 80% of RAM: 24.3 GiB
+  here. That's sized against total memory, not what is free.
+- **Failure.** A worker reaching the limit fails with "failed to pin block of size 256 KiB (24.3
+  GiB/24.3 GiB used)", aborts (the `terminate called after throwing ... OutOfMemoryException` lines)
+  and exits non-zero.
+- **Recovery.** QuackOSM treats the non-zero exit as a `MemoryError` and retries the step. It tries
+  another grouping method first, then fewer rows per group. For steps in its own process, it halves
+  the threads.
+- **Watchdog.** QuackOSM also kills a worker when machine-wide memory use passes about 97%, or when
+  the machine is swapping heavily.
+
+Each cold run prints two or three of these tracebacks. The output is still complete: it was checked
+against an independent run. The retries add time, but how much hasn't been measured.
+
+*Why it matters.*
+
+- **A full build could lose everything.** In a full `data build` the parse competes with every other
+  extractor in the same process. If the kernel's OOM killer fires, it picks the largest process, which
+  is the whole `data` run. A SIGKILL can't be caught, so the rule that a failed *optional* dataset is
+  skipped doesn't protect the build, and every extract in flight dies with it.
+- **Shared machines.** Other users and sessions on the same box compete for the same memory.
+- **Smaller machines are untested.** QuackOSM picks a smaller group size from total RAM, so a 16 GB
+  machine may cope, just more slowly.
+
+*Options* (none implemented yet):
+
+1. **Cap QuackOSM's DuckDB through `duckdb_conn_kwargs`** (untested), e.g.
+   `{"config_kwargs": {"memory_limit": "6GB"}}`. QuackOSM passes these settings to its main connection
+   and to its worker, so this works on any platform and is a one-line change. The unknowns:
+   - Not every DuckDB operator can spill to disk, so it may only turn into more retries, or into a
+     failure.
+   - Memory outside DuckDB (Python, Arrow) isn't capped.
+   - The worker pool runs one process at a time, so expect about twice the limit (main connection plus
+     worker).
+
+   **This is the first thing to try**, using the same sampler.
+2. **QuackOSM's own `memory_limit=` argument isn't a cap.** It replaces the total that QuackOSM
+   sizes its row groups and watchdog against, but the usage it compares that total with is still
+   machine-wide. Set it below what the machine is already using and the watchdog kills every worker
+   at once, which the notebook found. It might help alongside option 1, to make QuackOSM pick smaller
+   row groups.
+3. **A cgroup cap: `systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`.** This is what
+   the notebook does. It's a hard kernel limit, and DuckDB and QuackOSM both read the cgroup and size
+   themselves to it. Going over the cap kills only the child, so the failure comes back as an ordinary
+   error and the optional dataset is skipped as designed.
+   - It means running QuackOSM in a subprocess with its arguments passed as JSON.
+   - It only works on Linux with a user systemd session: not on Windows or macOS, and not in most
+     containers or CI.
+4. **Run the parse in a plain child process.** This doesn't lower the peak, but an OOM kill then hits
+   the child rather than the build, so a failure is a skip again. It works on any platform, and
+   combines naturally with option 1. It's the fallback where option 3 isn't available.
+5. **Fewer threads** (`cpu_limit=`). DuckDB's hash tables shrink with the thread count, at the cost of
+   time. Untested.
+6. **Keep the cold parse out of the concurrent build.** This could be a generic `Dataset` flag that
+   makes the pipeline run a dataset alone (AGENTS.md rules out per-dataset control flow in the
+   orchestrator), or just guidance to run `data extract --only osm_landuse` by itself after a new
+   snapshot. It avoids the contention but slows the build, and it doesn't lower the peak.
+7. **Shrink the input** with `osmium tags-filter` before QuackOSM sees it. This adds an external
+   binary. Parsing England and Wales separately gains little, because England is about 90% of the
+   input.
+
+Suggested order: try option 1 (perhaps with option 5) and measure. If the peak doesn't come down
+enough, use option 3 on Linux, with option 4 everywhere else so a failure is at least a skip.
+
+**Follow-ups**
+
+- Settle the peak-memory issue (above) before this runs inside a full `data build`.
+- Old PBF snapshots and their QuackOSM caches (about 2.5 GB per snapshot) accumulate in `raw/`.
+  Nothing prunes them.
+- The BEAHIV overlap-area transform per land-use category is next.
+
 ## Place workplace population in residential-only OAs
 
 **Why**: `population_counts` dropped an OA's whole workplace population when the OA had no Non
