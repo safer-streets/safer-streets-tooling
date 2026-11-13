@@ -38,7 +38,7 @@ DATASETS: tuple[Dataset, ...] = (
     *boundaries.DATASETS,
     greenspace.DATASET,
     land_cover.DATASET,
-    *osm_landuse.DATASETS,  # osm_landuse (attributes), then osm_landuse_geom (polygons) reusing its QuackOSM parse
+    *osm_landuse.DATASETS,  # osm_landuse, then osm_buildings reusing its QuackOSM parse
     buildings.DATASET,
     retail_centres.DATASET,
     roads.DATASET,

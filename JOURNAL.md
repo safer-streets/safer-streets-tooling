@@ -7,7 +7,7 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
-## Extract OpenStreetMap land use (`osm_landuse`, `osm_landuse_geom`)
+## Extract OpenStreetMap land use and buildings (`osm_landuse`, `osm_buildings`)
 
 **Why**: Our land-use layers are UKCEH land cover (urban/suburban) and OS Open Greenspace. Neither says
 which ground is retail, commercial, industrial, a car park, school grounds or a pedestrianised square.
@@ -16,13 +16,17 @@ that transform comes next. The exploration is in safer-streets-eda's `osm-landus
 read from the raw PBFs, cover more of a city centre than Overture's `land_use` (76–79% against 71–75%
 on the Cardiff and Leeds test boxes). They also have more classes.
 
-**What**: A new optional extract module, `extract/osm_landuse.py`, yields two datasets joined on
-`osm_id` (`way/123`, `relation/456`):
+**What**: A new optional extract module, `extract/osm_landuse.py`, yields two datasets, each with one
+row per OSM way or relation (`osm_id`: `way/123`, `relation/456`), a column per tag holding its raw
+value, `name`, `area_m2` and the BNG `geom`:
 
-- `osm_landuse` holds the attributes and no geometry. There is one column per filter key (`landuse`,
-  `leisure`, `amenity`, `natural`, `highway`, `area_highway`, `place`) holding the raw tag value, plus
-  `name` and `area_m2`.
-- `osm_landuse_geom` holds the BNG polygons, as `osm_id` and `geom`.
+- `osm_landuse` holds the land use: the `landuse`, `leisure`, `amenity`, `natural`, `shop`, `office`,
+  station, `highway`, `area_highway` and `place` columns.
+- `osm_buildings` holds every polygon with a `building` tag other than `no`: the `building`, `shop`,
+  `office`, `amenity`, station, `landuse` and `leisure` columns.
+
+Both also carry the `layer`, `level`, `tunnel` and `location` tags. (The first version split
+attributes from geometry instead, as `osm_landuse` and `osm_landuse_geom`; see below.)
 
 The source is Geofabrik's England and Wales PBFs, read with QuackOSM (new dependency), with the URL
 and regions in `config/data_sources.json` under `osm`. On the 2026-11-08 snapshot this gives
@@ -38,10 +42,25 @@ by a fixture in its schema. README updated (dataset table, DAG, a paragraph on t
   coverage in the test boxes. QuackOSM builds polygons from closed ways and relations and caches its
   parse in `raw/quackosm`. The cost is a heavy dependency (it pulls in arro3, geoarrow, osmfinder and
   rq-geo-toolkit) and the memory use below.
-- **Two tables, keyed on the OSM id.** Attributes are 64 MB and the polygons are 1.2 GB, so the
-  attributes can be filtered and summarised without loading geometry. Both tables come from one QuackOSM
-  parse. `osm_landuse_geom` declares `depends_on=("osm_landuse",)` even though it doesn't read that
-  parquet: the edge makes it run second and hit QuackOSM's cache, rather than both parsing at once.
+- **Two tables, split by geometry role** (replacing a first split into attributes and geometry). On
+  the 2026-11-08 snapshot buildings are 14,930,556 polygons and 2,161 km²; land use is 3,709,478
+  polygons and 114,025 km². They need different transforms. Land-use polygons nest and overlap, so a
+  per-cell share needs a union per (cell, category), which costs in proportion to the polygons, and at
+  3.7M it is back to the benchmarked size (51 s, 14 GB peak, batched, for all 1.46M `bh350eef` cells).
+  Buildings barely overlap: summing their intersection areas overstates the union by 6.2% on the
+  central Leeds box (`building=retail` shopping centres drawn round the shops inside them) and 0.08% on
+  the Ilkley box. Their shops, offices and amenities can be counted per cell rather than measured.
+  - The attribute/geometry split bought nothing for reading: parquet is columnar, so a query on tag
+    columns never reads `geom`. It also didn't shrink the transform, which imports every extract table
+    into memory and indexes every `geom` column, whichever table it's in.
+  - `building=no` means "not a building" (881 polygons, half of them shops or amenities drawn as
+    areas), so those polygons are land use. `building: True` had been selecting them as buildings.
+  - The 9,878 buildings that also carry `landuse`, `leisure` or `natural`, and the 809 with a station
+    tag, are buildings with those columns kept. Platforms (6,698) are land use, so the station rule is
+    a join across the two tables.
+  - Both come from one QuackOSM parse. `osm_buildings` declares `depends_on=("osm_landuse",)` even
+    though it doesn't read that parquet: the edge makes it run second and hit QuackOSM's cache,
+    rather than both parsing at once.
 - **Every filter key is a column; no primary class.** A polygon can be `leisure=park` and
   `landuse=grass`. Choosing one class would be a category decision, which belongs in the transform, so
   the extract stays lossless for the keys it selects on. Values are raw OSM, typos included (there is a
@@ -52,8 +71,8 @@ by a fixture in its schema. README updated (dataset table, DAG, a paragraph on t
 - **A SQL gate keeps footway lines out of QuackOSM.** Pedestrian areas need
   `highway=pedestrian|footway` in the filter, but nearly all such ways are lines. A Wales-only trial
   with the lines left in was killed (exit 137), while the gated one peaked at 2 GB. The gate drops
-  buildings and also drops those highway
-  ways unless they have `area=yes`, `type=multipolygon` or another land-use key. The first version
+  those highway ways unless they have `area=yes`, `type=multipolygon` or another land-use key (it
+  dropped buildings too until they were added; see below). The first version
   missed that last case and lost 106 polygons, e.g. `amenity=marketplace` streets. Checking against an
   independent run of the notebook's filter caught it, and the final output contains every polygon
   that run had.
@@ -61,10 +80,40 @@ by a fixture in its schema. README updated (dataset table, DAG, a paragraph on t
   redirect), so the snapshot in use is visible. The newest cached one is used until `--force-download`.
 - **No `ST_MakeValid` in the extract.** `index_geometry_tables` already repairs geometry when the
   transform imports the table.
+- **`amenity=parking_space` is dropped** (added after the first extract). These are single bays:
+  198,559 polygons, median 12 m², each inside an `amenity=parking` car park that the extract keeps.
+  They were 5% of the rows and add almost no area. A bay that also has a `landuse`, `leisure` or
+  `natural` tag is kept (6 polygons on the 2026-11-08 snapshot). The rule is `POLYGON_FILTER`, applied
+  to QuackOSM's output rather than added to `SQL_FILTER`. Changing `SQL_FILTER` would change
+  QuackOSM's cache key and force a cold parse, with its 15 GB peak; this way a re-extract reuses the
+  cached parse. Every other `amenity`, `landuse` and `leisure` value is still selected (`quarry`,
+  `orchard`, `railway`, `religious`, `garages`, `swimming_pool`, `outdoor_seating`, ...). The
+  categories are the transform's decision. The parking-space-only extract has 3,687,645 polygons.
+- **Buildings, shops, offices and train stations are selected** (added after the first extract).
+  Comparing with the separate `osm_land_use` project's build showed the gap. Of its 13.4M OSM
+  objects, 3.3M are buildings and 139k are `shop`, `office`, station, `tourism` or `museum` polygons.
+  Another 116k amenity polygons (32k places of worship, 20k pubs, 13k takeaways, ...) are buildings
+  that the `NOT building` gate removed. Shops, offices and stations matter most for crime. `building`,
+  `shop` and `office` take any value, and `railway` / `public_transport` take `station` or
+  `platform`. Each is a column, as before.
+  - **Station rule in the transform.** Most station buildings are only `building=yes`, and the big
+    ones are a `building=roof` train shed. `osm_land_use` finds them with three rules: a station tag,
+    a building touched by 3+ platforms, or a roof over a platform. That's a category decision, so it
+    goes in the transform. The extract keeps the platforms and also `layer`, `level`, `tunnel` and
+    `location` as columns (`LEVEL_TAGS`), so underground platforms (tube stations) can be excluded.
+  - **Roads stay out.** OS Open Roads (`open_roads`) is the road network. `osm_land_use` buffers 6.65M
+    OSM highway lines to their width, which is most of its rows.
+  - **Verisk overlaps.** `buildings` (Verisk UKBuildings, 26.8M premises with `premise_use`) is a more
+    complete building layer. What OSM adds is its tags (`shop=*`, `office=*`, `amenity=*`, station
+    and platform), which the extract keeps together with the outlines.
+  - **Cost.** `SQL_FILTER` changed, so QuackOSM's cache key changed and the next run is a cold parse.
+    That run is bigger than the measured one below, since it adds several million buildings. Run it on
+    its own and under a memory cap. It gave 18,640,034 polygons; its peak hasn't been measured.
 
 **Peak memory (unresolved)**
 
-*Measured.* These are from one cold run of `data extract --only osm_landuse --only osm_landuse_geom`
+*Measured.* These are from one cold run of `data extract --only osm_landuse --only osm_landuse_geom` (the
+first version, before buildings)
 over England and Wales. The process tree was sampled every second. The run took 213 s.
 
 | Process | Peak RSS |
@@ -150,7 +199,11 @@ enough, use option 3 on Linux, with option 4 everywhere else so a failure is at 
 - Settle the peak-memory issue (above) before this runs inside a full `data build`.
 - Old PBF snapshots and their QuackOSM caches (about 2.5 GB per snapshot) accumulate in `raw/`.
   Nothing prunes them.
-- The BEAHIV overlap-area transform per land-use category is next.
+- The BEAHIV overlap-area transform per land-use category is next, with per-cell building counts and
+  footprint share alongside.
+- The transform imports every extract table into its in-memory DuckDB, so `osm_buildings` (14.9M
+  polygons) is loaded and RTree-indexed on every run, used or not. A per-dataset way to leave a table
+  in parquet and read it in batches would avoid that.
 
 ## Place workplace population in residential-only OAs
 

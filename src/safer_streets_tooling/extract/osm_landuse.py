@@ -1,12 +1,15 @@
-"""OpenStreetMap land-use polygons → ``osm_landuse.parquet`` (attributes) + ``osm_landuse_geom.parquet`` (geometry).
+"""OpenStreetMap land use → ``osm_landuse.parquet``, and OpenStreetMap buildings → ``osm_buildings.parquet``.
 
 Read from Geofabrik's England and Wales PBF extracts with `QuackOSM <https://github.com/kraina-ai/quackosm>`_, which
 assembles polygons from closed ways and multipolygon relations (DuckDB's own ``ST_ReadOSM`` only yields raw nodes,
-ways and relations). The selection matches the ``LANDUSE`` / ``PEDESTRIAN_AREA`` filters explored in
-safer-streets-eda's ``osm-landuse.ipynb``.
+ways and relations). The selection is land use and land cover, pedestrian areas, buildings, shops, offices, and train
+stations and their platforms. Roads are left out: OS Open Roads (``open_roads``) is the road network.
 
-One feature becomes one row in each of two tables, joined on ``osm_id`` (QuackOSM's ``way/123`` / ``relation/456``):
-the attributes, without geometry, so they can be filtered and summarised cheaply, and the BNG polygons on their own.
+One parse is split by geometry role, one row per OSM way/relation (QuackOSM's ``way/123`` / ``relation/456``) with
+its BNG polygon: ``osm_buildings`` holds every polygon with a ``building`` tag (other than ``building=no``), about 80%
+of the rows but under 2% of the area, and ``osm_landuse`` everything else. Land-use polygons nest and overlap, so a
+per-cell share needs their union; building footprints barely overlap, and the shops, offices and amenities drawn on
+them can be counted, so the two tables are aggregated differently.
 """
 
 import re
@@ -36,38 +39,82 @@ NATURAL_LAND_COVER = [
     "mud",
 ]
 PEDESTRIAN_HIGHWAYS = ["pedestrian", "footway"]
+# Train stations, and the platforms that identify the many station buildings tagged only building=yes (a building
+# touched by several platforms) or building=roof (a train shed over them). That rule belongs to the transform; the
+# extract keeps its inputs.
+STATION_VALUES = ["station", "platform"]
 
-# A feature is selected if it has any of these tags (True: any value). QuackOSM-style filter.
+# A feature is selected if it has any of these tags (True: any value). QuackOSM-style filter. No road network: OS
+# Open Roads (open_roads) is the road layer, so the only highway=* features are pedestrian areas.
 TAGS_FILTER: dict[str, bool | list[str]] = {
     "landuse": True,
     "leisure": True,
     "amenity": True,
     "natural": NATURAL_LAND_COVER,
+    "building": True,
+    "shop": True,
+    "office": True,
+    "railway": STATION_VALUES,
+    "public_transport": STATION_VALUES,
     # pedestrian areas: squares, plazas and pedestrianised streets mapped as areas
     "highway": PEDESTRIAN_HIGHWAYS,
     "area:highway": PEDESTRIAN_HIGHWAYS,
     "place": ["square"],
 }
 
-# Applied by QuackOSM to each element's tags before it builds any geometry. Buildings are left out, so an
-# amenity=pub building isn't counted as land use. A highway=pedestrian|footway way is a line unless it is tagged as
-# an area (or is a multipolygon); skipping the lines here saves assembling millions of footways only to drop them.
-# The gate only applies to those two highway values, and not when another land-use key is present: a pedestrianised
-# street tagged amenity=marketplace, or a park drawn on a footway loop, is a polygon without area=yes.
-_OTHER_LANDUSE_KEYS = " OR ".join(
-    f"map_contains(tags, '{key}')" for key in ("landuse", "leisure", "amenity", "natural")
-)
+# The keys that make a polygon land use or a building by themselves. The pedestrian keys don't: they only select a
+# feature that is mapped as an area.
+_PEDESTRIAN_KEYS = ("highway", "area:highway", "place")
+LAND_KEYS = tuple(key for key in TAGS_FILTER if key not in _PEDESTRIAN_KEYS)
+
+# Applied by QuackOSM to each element's tags before it builds any geometry. A highway=pedestrian|footway way is a
+# line unless it is tagged as an area (or is a multipolygon); skipping the lines here saves assembling millions of
+# footways only to drop them. The gate only applies to those two highway values, and not when another land-use key is
+# present: a pedestrianised street tagged amenity=marketplace, or a park drawn on a footway loop, is a polygon without
+# area=yes.
+_OTHER_LANDUSE_KEYS = " OR ".join(f"map_contains(tags, '{key}')" for key in LAND_KEYS)
 SQL_FILTER = (
-    "NOT map_contains(tags, 'building') AND ("
     f"coalesce(tags['highway'], '') NOT IN ({', '.join(repr(v) for v in PEDESTRIAN_HIGHWAYS)})"
     " OR coalesce(tags['area'], '') = 'yes' OR coalesce(tags['type'], '') = 'multipolygon'"
-    f" OR {_OTHER_LANDUSE_KEYS})"
+    f" OR {_OTHER_LANDUSE_KEYS}"
 )
 
-# Each filter key becomes a column holding the feature's raw value (NULL if absent). All of them are kept, not just
-# the one that matched first: a polygon tagged leisure=park + landuse=grass is both, and which category it counts
-# towards is the transform's decision.
-TAG_COLUMNS = {key: key.replace(":", "_") for key in TAGS_FILTER}
+# Applied to QuackOSM's output, after the parse. amenity=parking_space polygons are single bays (about 200k of them,
+# median 12 m²) inside the amenity=parking car park that already covers them, so they're dropped, unless another
+# land-use key makes the polygon land use in its own right. Filtering here rather than in SQL_FILTER keeps the bay
+# rule out of QuackOSM's cache key.
+_LAND_KEYS_BUT_AMENITY = " OR ".join(f"map_contains(tags, '{key}')" for key in LAND_KEYS if key != "amenity")
+POLYGON_FILTER = f"(coalesce(tags['amenity'], '') <> 'parking_space' OR {_LAND_KEYS_BUT_AMENITY})"
+
+# A building, as opposed to land use. building=no means "not a building" (a shop or amenity drawn as an area), so
+# such polygons are land use.
+BUILDING = "coalesce(tags['building'], 'no') <> 'no'"
+
+# Each table's columns: the feature's raw value of each tag (NULL if absent), keyed by tag. All of a feature's tags
+# among these are kept, not just the one that selected it: a polygon tagged leisure=park + landuse=grass is both, and
+# which category it counts towards is the transform's decision. The level tags select nothing but tell an above-ground
+# platform from an underground one (layer < 0, level < 0, tunnel, location=underground), so tube platforms needn't
+# count towards a train station; on buildings they mark the ones hidden under another.
+LEVEL_TAGS = ("layer", "level", "tunnel", "location")
+LANDUSE_TAGS = (*(key for key in TAGS_FILTER if key != "building"), *LEVEL_TAGS)
+# A building's use (shop, office, amenity=pub, railway=station, ...) and the land-use tags a few carry
+BUILDING_TAGS = (
+    "building",
+    "shop",
+    "office",
+    "amenity",
+    "railway",
+    "public_transport",
+    "landuse",
+    "leisure",
+    *LEVEL_TAGS,
+)
+
+
+def _column(key: str) -> str:
+    """``area:highway`` → ``area_highway``."""
+    return key.replace(":", "_")
+
 
 _PBF_NAME = re.compile(r"(?P<region>[a-z-]+)-\d{6}\.osm\.pbf")
 
@@ -118,40 +165,42 @@ def landuse_geoparquet(ctx: ExtractContext) -> Path:
     )
 
 
-def _polygons_sql(src: Path) -> str:
-    """The polygonal features of QuackOSM's output, in BNG (points and lines matched a key but aren't land use)."""
+def _polygons_sql(src: Path, tags: tuple[str, ...], where: str) -> str:
+    """The polygonal features of QuackOSM's output that pass POLYGON_FILTER and ``where``, as ``osm_id``, a column
+    per tag in ``tags``, ``name``, ``area_m2`` and the BNG ``geom`` (points and lines matched a key but aren't land
+    use or buildings)."""
+    # quoted: natural, level and location are SQL keywords
+    tag_cols = "".join(f"tags['{key}'] AS \"{_column(key)}\", " for key in tags)
     return f"""
-        SELECT feature_id AS osm_id, tags,
-               ST_Transform(geometry, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
-        FROM read_parquet('{src}')
-        WHERE ST_GeometryType(geometry) IN ('POLYGON', 'MULTIPOLYGON')
+        SELECT osm_id, {tag_cols}tags['name'] AS name, ST_Area(geom) AS area_m2, geom
+        FROM (
+            SELECT feature_id AS osm_id, tags,
+                   ST_Transform(geometry, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
+            FROM read_parquet('{src}')
+            WHERE ST_GeometryType(geometry) IN ('POLYGON', 'MULTIPOLYGON') AND {POLYGON_FILTER} AND {where}
+        )
     """
 
 
+def _write(ctx: ExtractContext, name: str, tags: tuple[str, ...], where: str) -> None:
+    src = landuse_geoparquet(ctx)
+    con = duckdb_connector(writeable=True)
+    try:
+        write_geoparquet(con, _polygons_sql(src, tags, where), ctx.parquet(name))
+        row_count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{ctx.parquet(name)}')").fetchone()[0]  # ty:ignore[not-subscriptable]
+    finally:
+        con.close()
+    print(f"  {name}: {row_count:,} rows")
+
+
 def extract_landuse(ctx: ExtractContext) -> None:
-    """Write ``osm_landuse``: one row per land-use polygon with its tag values, name and area (m²), no geometry."""
-    src = landuse_geoparquet(ctx)
-    tag_cols = ", ".join(f"tags['{key}'] AS {col}" for key, col in TAG_COLUMNS.items())
-    con = duckdb_connector(writeable=True)
-    try:
-        query = f"SELECT osm_id, {tag_cols}, tags['name'] AS name, ST_Area(geom) AS area_m2 FROM ({_polygons_sql(src)})"
-        write_geoparquet(con, query, ctx.parquet("osm_landuse"))
-        row_count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{ctx.parquet('osm_landuse')}')").fetchone()[0]  # ty:ignore[not-subscriptable]
-    finally:
-        con.close()
-    print(f"  osm_landuse: {row_count:,} rows")
+    """Write ``osm_landuse``: one row per land-use polygon with its tag values, name, area (m²) and geometry."""
+    _write(ctx, "osm_landuse", LANDUSE_TAGS, f"NOT ({BUILDING})")
 
 
-def extract_landuse_geom(ctx: ExtractContext) -> None:
-    """Write ``osm_landuse_geom``: the BNG polygon of each ``osm_landuse`` row, keyed on ``osm_id``."""
-    src = landuse_geoparquet(ctx)
-    con = duckdb_connector(writeable=True)
-    try:
-        write_geoparquet(con, f"SELECT osm_id, geom FROM ({_polygons_sql(src)})", ctx.parquet("osm_landuse_geom"))
-        row_count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{ctx.parquet('osm_landuse_geom')}')").fetchone()[0]  # ty:ignore[not-subscriptable]
-    finally:
-        con.close()
-    print(f"  osm_landuse_geom: {row_count:,} rows")
+def extract_buildings(ctx: ExtractContext) -> None:
+    """Write ``osm_buildings``: one row per building polygon with its tag values, name, area (m²) and geometry."""
+    _write(ctx, "osm_buildings", BUILDING_TAGS, BUILDING)
 
 
 DATASETS = (
@@ -160,17 +209,20 @@ DATASETS = (
         table="osm_landuse",
         extract=extract_landuse,
         description=(
-            "OpenStreetMap land-use polygons (landuse/leisure/amenity/land-cover natural tags and pedestrian areas; "
-            "no buildings), one row per OSM way/relation (osm_id) with its tag values, name and area_m2. "
-            "Geometry is in osm_landuse_geom."
+            "OpenStreetMap land-use polygons (landuse/leisure/amenity/land-cover natural, shop and office areas, "
+            "railway and public_transport station/platform tags, and pedestrian areas; no buildings, roads or "
+            "parking_space bays), one row per OSM way/relation (osm_id) with its tag values, the platform level "
+            "tags, name, area_m2 and BNG geom."
         ),
-        geometry=False,
     ),
     Dataset(
-        name="osm_landuse_geom",
-        table="osm_landuse_geom",
-        extract=extract_landuse_geom,
-        description="BNG polygons of the osm_landuse features, keyed on osm_id.",
+        name="osm_buildings",
+        table="osm_buildings",
+        extract=extract_buildings,
+        description=(
+            "OpenStreetMap building polygons (building=* other than no), one row per OSM way/relation (osm_id) with "
+            "its building, shop, office, amenity, station and land-use tags, level tags, name, area_m2 and BNG geom."
+        ),
         # not a parquet it reads: run after osm_landuse so it reuses QuackOSM's cached parse instead of a second,
         # concurrent one
         depends_on=("osm_landuse",),
