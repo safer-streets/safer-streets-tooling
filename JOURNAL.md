@@ -7,6 +7,101 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Points of interest from OpenStreetMap instead of Overture (`poi`)
+
+**Why**: `poi` came from Overture Maps places, which is built mostly from business listings. Checked
+against the FSA food hygiene register (`food_outlets`, every registered food business), Overture lists
+many venues that aren't there, and OSM, which we now parse anyway for `osm_landuse`, does better.
+
+*National counts* (OSM nodes and polygons, 2026-11-08 snapshot; Overture as extracted on 2026-10-16):
+
+| | Register | OSM | Overture |
+| --- | --- | --- | --- |
+| Pubs, bars, nightclubs | 40,467 | 43,289 | 68,023 |
+| Hospitals | — | 1,603 | 8,822 (includes clinics) |
+| Car parks | — | 254,700 | 23,567 |
+| Shops | — | 261,496 | 487,199 |
+
+*Venue-by-venue on the test boxes* (central Cardiff and Leeds, and Ilkley). A match is a similar name
+(Jaro-Winkler ≥ 0.85, or one name contains the other) within 200 m, since the register's points are
+postcode-based. Both directions are lower bounds, because the register uses operator names, files some
+bars as restaurants and misplaces some venues. That affects both sources alike, so the comparison holds.
+
+| Box | Register venues found: OSM / Overture | Source venues on the register: OSM / Overture |
+| --- | --- | --- |
+| Cardiff drink | 78% / 76% | 73% / 42% |
+| Cardiff eat | 53% / 50% | 63% / 44% |
+| Leeds drink | 75% / 63% | 69% / 37% |
+| Leeds eat | 56% / 41% | 61% / 43% |
+| Ilkley drink | 52% / 43% | 86% / 46% |
+| Ilkley eat | 74% / 51% | 78% / 54% |
+
+So OSM finds at least as many of the registered venues, and far fewer of its own are missing from the
+register. Overture's unmatched Leeds bars include "Budweiser" (twice), "Barbour" (a clothes shop), a
+mobile bar-hire firm, a Christmas-market stall, "Clarence Dock" and "Be At One" three times. OSM's
+unmatched ones are mostly real pubs that the register files elsewhere or misplaces.
+
+**What**: `extract/poi.py` now reads QuackOSM's cached parse of the Geofabrik PBFs (shared with
+`osm_landuse` and `osm_buildings`). It keeps every OSM node whose tags put it in one of `CATEGORIES`:
+`alcohol`, `restaurant`, `food`, `shop`, `office`, `gambling`, `adult`, `market`, `hospital`, `police`,
+`atm` and `parking`. The columns are `osm_id`, `category`, the raw `amenity`, `shop`, `office` and
+`leisure` values, `name`, `brand`, `postcode` (`addr:postcode`), `opening_hours`, the BNG point `geom`,
+and `h3r9_id` and `bh350eef_id`. The 2026-11-08 snapshot gives 305,144 rows. The run takes 14 s with a
+1.4 GB peak, because it reuses the cached parse. The Overture `poi` entry is gone from
+`config/data_sources.json`. `overturemaps` stays, as `streetlights` still uses it. Tests in
+`tests/test_poi.py` cover the categories and their precedence, nodes only, the columns and the grid
+cells. The Overture integration test is removed. README updated (dataset table, DAG, a paragraph).
+
+**Design decisions**
+
+- **Our own `category`, not Overture's taxonomy.** OSM's tags don't map onto Overture's
+  `basic_category` without inventing a correspondence (which of 25 `*_store` values is
+  `shop=newsagent`?). A short list of categories, each a set of tag values, matches what consumers
+  actually count. The raw tag columns are kept so a consumer can refine a category (`shop=supermarket`).
+  `basic_category`, `primary_category`, `alternate_category` and `poi_id` are gone: **this is a breaking
+  schema change** for the consumers listed under Follow-ups.
+- **One category per POI, first match wins.** The order settles features with several tags: a cafe
+  tagged `shop=bakery` is `food`, a bookmaker is `gambling` rather than `shop`. `shop=vacant`,
+  `shop=disused` and `=no` aren't shops. `amenity=pharmacy` counts as a shop, as Overture's
+  `pharmacy_and_drug_store` did. `amenity=parking_space` (a single bay) is in no category.
+- **Nodes only.** A POI is literally a point. A venue mapped as its building or site is a polygon, and
+  it's already in `osm_buildings` or `osm_landuse` with the same `amenity` / `shop` / `office` tags.
+  Folding polygons in as points inside them was tried first: it needed a dedup rule for a venue drawn
+  both ways (about 2.5k node/polygon pairs nationally with matching or missing names), and it duplicated
+  the polygon tables. The cost is that `poi` alone undercounts any category often drawn as an area:
+  - pubs, bars and nightclubs: 19,490 nodes against 23,798 polygons;
+  - hospitals: 225 nodes against about 1,400 site polygons;
+  - car parks: 15,933 nodes against 238,751 polygons.
+
+  A count per cell has to take the polygons from the other two tables.
+- **The category keys must be ones QuackOSM already selects** (`osm_landuse.TAGS_FILTER`; a test
+  checks). Adding a key such as `tourism` (hotels) or `healthcare` changes QuackOSM's cache key and
+  forces a cold parse, the one that peaked at 15.6 GB.
+- **`depends_on=("osm_landuse",)`**, as for `osm_buildings`: it doesn't read that parquet, but running
+  second means it reuses QuackOSM's cache instead of a concurrent parse.
+
+**Follow-ups**
+
+- **Consumers to update** (not in this repo). Each counts with Overture's `basic_category`:
+  - peer-hex-explorer `data.py` (`CHARACTERISATION_QUERY`, and `SHOP_CATEGORIES`);
+  - safer-streets-eda `generate_hotspots.py`, `hotspot_archetype.py` and `hex_features.py`
+    (`SHOP_CATEGORIES`), plus the characterisation notebooks.
+
+  The mapping:
+  - `n_alcohol` (`bar`, `alcoholic_beverage_venue`, `lounge`, `inn`) → `category = 'alcohol'`. Inns
+    (hotels) have no equivalent: `tourism` isn't parsed.
+  - `n_food` (`casual_eatery`, `fast_food_restaurant`, `food_service`) → `category = 'food'`.
+  - `n_shops` (`SHOP_CATEGORIES`) → `category = 'shop'`.
+  - `n_hospital` (`hospital`, `emergency_department`) → `category = 'hospital'`.
+
+  Because `poi` is nodes only, the alcohol, hospital and parking counts should add the polygons in
+  `osm_buildings` / `osm_landuse` with the same tags (by centroid, or `ST_PointOnSurface`). Hospitals
+  need this most. Expect every count feature's scale to change, and models fitted on the Overture
+  features to need refitting.
+- **Shops are unvalidated.** There's no register to check them against, unlike food and drink.
+- **`food_outlets` keeps 26 Northern Ireland venues.** Their postcodes are lower case (`bt33 0AL`), and
+  the `BT` filter is case-sensitive.
+
 ## Extract OpenStreetMap land use and buildings (`osm_landuse`, `osm_buildings`)
 
 **Why**: Our land-use layers are UKCEH land cover (urban/suburban) and OS Open Greenspace. Neither says

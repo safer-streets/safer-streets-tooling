@@ -146,8 +146,8 @@ def osm_pbf(region: str, *, force_download: bool = False) -> Path:
 def landuse_geoparquet(ctx: ExtractContext) -> Path:
     """QuackOSM's GeoParquet of every selected feature in England & Wales (any geometry, WGS-84, all tags as a MAP).
 
-    QuackOSM caches the result in ``raw/quackosm`` under a name hashing the PBFs and the filters, so the second of
-    the two datasets (and any rerun on the same snapshot) reads it instead of re-parsing (several minutes for
+    QuackOSM caches the result in ``raw/quackosm`` under a name hashing the PBFs and the filters, so the datasets
+    after the first (``osm_buildings``, ``poi``) and any rerun on the same snapshot read it instead of re-parsing (several minutes for
     England). QuackOSM merges the two files, keeping one copy of a feature that crosses the border.
     """
     pbfs = [osm_pbf(region, force_download=ctx.force_download) for region in data_source("osm")["regions"]]

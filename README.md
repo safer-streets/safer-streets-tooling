@@ -158,6 +158,7 @@ flowchart LR
     local_authority_districts --> imd_scores_pct
     output_areas_2021 --> buildings
     osm_landuse --> osm_buildings
+    osm_landuse --> poi
 
     %% transform edges
     crime_data --> h3r9_crime_counts
@@ -359,6 +360,15 @@ names (`england-261108.osm.pbf`), and the newest is used until `--force-download
 snapshot. QuackOSM caches its parse in `raw/quackosm`. Rebuild both tables together, so they come from
 the same snapshot.
 
+`poi` comes from the same QuackOSM parse: every OSM **node** (points only) whose `amenity`, `shop`, `office` or
+`leisure` tag puts it in one of `poi.CATEGORIES` — `alcohol` (pub, bar, nightclub, biergarten), `restaurant`,
+`food` (cafe, fast food, food court, ice cream), `shop` (any `shop=*` but vacant/disused, plus pharmacies),
+`office`, `gambling`, `adult`, `market`, `hospital`, `police`, `atm` and `parking` (car parks mapped as a point;
+individual `parking_space` bays are excluded). The first matching category wins, and the raw `amenity`, `shop`,
+`office` and `leisure` values are kept alongside `name`, `brand`, `postcode` and `opening_hours`. A venue mapped as
+its building or site is a polygon, not a POI: it is in `osm_buildings` or `osm_landuse` with the same tags. This
+replaced Overture Maps places (see JOURNAL.md).
+
 OSM coverage of the `streetlights` and `cctv` layers is uneven — see
 [Data-quality caveats](#data-quality-caveats) below.
 
@@ -384,7 +394,7 @@ absence). Registry order respects `depends_on`:
 | `buildings` | [buildings.py](src/safer_streets_tooling/extract/buildings.py) | no | `output_areas_2021` (OA `oa21cd` for each footprint) |
 | `retail_centres` | [retail_centres.py](src/safer_streets_tooling/extract/retail_centres.py) | no | — |
 | `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |
-| `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | — |
+| `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | `osm_landuse` — not for its parquet, but so it reuses the QuackOSM parse |
 | `naptan` | [naptan.py](src/safer_streets_tooling/extract/naptan.py) | no | — (national rail stop types `RLY`/`RPL`/`RSE` are dropped; rail is represented by `station_usage`) |
 | `station_usage` | [station_usage.py](src/safer_streets_tooling/extract/station_usage.py) | yes | — (ORR Table 1410 has no coordinates; stations are located by CRS code against NaPTAN's rail XML, fetched by the extractor itself rather than read from the `naptan` parquet) |
 | `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |
