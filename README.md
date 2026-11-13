@@ -93,6 +93,15 @@ several, found by intersecting the cell with `retail_centres`; a cell overlappin
 `hotspot_descriptions` runs the same query over `hotspots_geogs` to give `hotspots_descriptions` — without
 the school clause, since schools carry no hotspot-hex tag — which, like every hotspot table, never syncs.
 
+`beahiv_osm_landuse` gives `bh350eef_osm_landuse_lookup`: one row per crime cell and OSM land-use polygon
+overlapping it, with the polygon's `osm_id`, `overlap_pct` (the part of the polygon inside the cell, as a percentage
+of the cell's area) and its land-use `category`. A polygon takes the first of `beahiv_osm_landuse.CATEGORIES` it
+has a tag of: specific uses (`hospitality`, `station`, `parking`, `shop`, `office`, `education`, `health`,
+`pedestrian`, `sport`, `park`, `cemetery`, `transport`) before the zones they sit in (`retail`, `commercial`,
+`industrial`, `residential`, `vacant`, `woodland`, `water`, `moorland`, `agriculture`). Polygons in none are left
+out. Land-use polygons nest (a car park on retail land), so a cell's percentages can sum past 100, and summing
+them per category double counts the nesting.
+
 ```mermaid
 flowchart LR
    crime_data
@@ -149,6 +158,7 @@ flowchart LR
    bh350eef_retail_centre_lookup["bh350eef_retail_centre_lookup<br/>(deprecated, opt-in)"]
    bh350eef_geogs
    bh350eef_descriptions
+   bh350eef_osm_landuse_lookup
 
    direction LR
 
@@ -257,13 +267,15 @@ flowchart LR
     local_authority_districts --> bh350eef_descriptions
     msoa_2021 --> bh350eef_descriptions
     lsoa_2021 --> bh350eef_descriptions
+    bh350eef_crime_counts --> bh350eef_osm_landuse_lookup
+    osm_landuse --> bh350eef_osm_landuse_lookup
 
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
     class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,bh350eef,hotspots extract;
-    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions transform;
+    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions,bh350eef_osm_landuse_lookup transform;
     class h3_retail_centres_lookup,hotspots_retail_centre_lookup,bh350eef_retail_centre_lookup deprecated;
 ```
 
@@ -483,6 +495,7 @@ each exposing a `STEP`. Each step writes the relations it produces out as parque
 | `beahiv_retail_centre_lookups` *(deprecated, opt-in)* | [beahiv_retail_centre_lookups.py](src/safer_streets_tooling/transform/beahiv_retail_centre_lookups.py) | `beahiv` | `bh350eef_retail_centre_lookup` | `beahiv_counts` |
 | `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `bh350eef_geogs` | `beahiv_counts`, `beahiv_geo_lookups`, `beahiv_lookups`, `beahiv_retail_centre_lookups` |
 | `beahiv_descriptions` | [beahiv_descriptions.py](src/safer_streets_tooling/transform/beahiv_descriptions.py) | `beahiv` | `bh350eef_descriptions` (`short_location`, `description` + the named components, including `retail_centre`) | `beahiv_lookups`, `beahiv_geogs` |
+| `beahiv_osm_landuse` | [beahiv_osm_landuse.py](src/safer_streets_tooling/transform/beahiv_osm_landuse.py) | `beahiv` | `bh350eef_osm_landuse_lookup` (`spatial_id`, `osm_id`, `overlap_pct`, `category`) | `beahiv_counts` |
 
 ### Spatial units
 
