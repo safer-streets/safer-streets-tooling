@@ -15,6 +15,7 @@ dependencies = [
     # DuckDB vectors straight to them as pyarrow arrays. >=0.1.0: keyword-only sizes and the
     # edge-to-edge measure; ids from 0.0.x are a different grid and do not decode.
     "beahiv[arrow]>=0.1.0",
+    "quackosm>=0.20.0",
 ]
 
 [project.scripts]

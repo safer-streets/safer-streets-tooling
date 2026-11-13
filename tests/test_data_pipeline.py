@@ -24,7 +24,6 @@ from safer_streets_tooling.extract import (
     imd,
     land_cover,
     naptan,
-    poi,
     retail_centres,
     roads,
     schools,
@@ -239,38 +238,6 @@ def test_extract_cached_extracts_reuses_and_refreshes(tmp_path):
         z.writestr("Data/file.gpkg", b"v2")
     os.utime(zp, (time.time() + 10, time.time() + 10))
     assert _common.extract_cached(zp, "Data/file.gpkg").read_bytes() == b"v2"
-
-
-# --- POI ---
-
-
-def test_poi_extracts_filtered_places(tmp_path, monkeypatch):
-    """Integration: stream a tiny Overture bbox into the poi parquet (skipped if S3 is unreachable)."""
-    _connect().close()
-    # a tiny bbox keeps the download small; the module default is all of E&W
-    monkeypatch.setattr(poi, "POI_BBOX", (-1.84, 53.91, -1.80, 53.94))
-    try:
-        poi.extract(_ctx(tmp_path))
-    except Exception as e:  # noqa: BLE001 — network/S3 unavailable in this environment
-        pytest.skip(f"Overture S3 unavailable: {e}")
-
-    con = _read_parquet(tmp_path / "poi.parquet")
-    cols = {d[0] for d in con.execute("SELECT * FROM t LIMIT 0").description}
-    assert cols == {
-        "poi_id",
-        "geom",
-        "h3r9_id",
-        "bh350eef_id",
-        "name",
-        "postcode",
-        "basic_category",
-        "primary_category",
-        "alternate_category",
-    }
-    # only the requested categories are kept
-    cats = {r[0] for r in con.execute("SELECT DISTINCT basic_category FROM t").fetchall()}
-    assert cats <= set(poi.POI_CATEGORIES)
-    con.close()
 
 
 # --- streetlights (Overture infrastructure) ---

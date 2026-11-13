@@ -104,6 +104,8 @@ flowchart LR
    output_areas_2021
    open_greenspace
    land_cover
+   osm_landuse
+   osm_buildings
    buildings
    retail_centres
    open_roads
@@ -155,6 +157,8 @@ flowchart LR
     open_roads --> schools
     local_authority_districts --> imd_scores_pct
     output_areas_2021 --> buildings
+    osm_landuse --> osm_buildings
+    osm_landuse --> poi
 
     %% transform edges
     crime_data --> h3r9_crime_counts
@@ -258,7 +262,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
-    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,bh350eef,hotspots extract;
+    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,bh350eef,hotspots extract;
     class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions transform;
     class h3_retail_centres_lookup,hotspots_retail_centre_lookup,bh350eef_retail_centre_lookup deprecated;
 ```
@@ -334,6 +338,37 @@ the step reports the allocated share of each source total. It is bundled in the 
 > `h3r9_id` / `map_simple_use`. Consider dropping the transform (and its bundled table) once nothing
 > depends on the pre-aggregated form.
 
+The OpenStreetMap extract comes as two tables, each with one row per OSM way or relation (`osm_id`:
+`way/123`, `relation/456`) and its BNG polygon. `osm_buildings` holds every polygon with a `building` tag
+other than `building=no`: about 80% of the rows but under 2% of the area. `osm_landuse` holds the rest.
+The two are aggregated differently: land-use polygons nest and overlap, so a per-cell share needs their
+union, while building footprints barely overlap and the shops, offices and amenities drawn on them can be
+counted. Both are read from Geofabrik's England and Wales PBFs with
+[QuackOSM](https://github.com/kraina-ai/quackosm), which assembles polygons from closed ways and
+multipolygon relations. A polygon is kept if it has a `landuse`, `leisure`, `amenity`, `building`, `shop`
+or `office` tag, a land-cover `natural` value (wood, scrub, water, ...), a `railway` or `public_transport`
+value of `station` or `platform`, or marks a pedestrian area (`highway=pedestrian|footway` mapped as an
+area, `area:highway=pedestrian|footway`, `place=square`). Roads are left out (OS Open Roads is the road
+network), and so are `amenity=parking_space` bays (the car park around them is kept) unless they also
+carry another of those keys. Each key is a column holding the raw tag value, and a polygon may have
+several (`leisure=park` with `landuse=grass`, `building=retail` with `shop=supermarket`), so the category
+a polygon counts towards is decided in the transform. So is the train-station rule: most station
+buildings are only `building=yes` or a `building=roof` shed, found by the platforms they touch (in
+`osm_landuse`), and `layer`, `level`, `tunnel` and `location` are kept so underground platforms can be
+left out. Both tables also carry `name` and `area_m2`. The PBFs are cached under their dated Geofabrik
+names (`england-261108.osm.pbf`), and the newest is used until `--force-download` fetches the current
+snapshot. QuackOSM caches its parse in `raw/quackosm`. Rebuild both tables together, so they come from
+the same snapshot.
+
+`poi` comes from the same QuackOSM parse: every OSM **node** (points only) whose `amenity`, `shop`, `office` or
+`leisure` tag puts it in one of `poi.CATEGORIES` — `alcohol` (pub, bar, nightclub, biergarten), `restaurant`,
+`food` (cafe, fast food, food court, ice cream), `shop` (any `shop=*` but vacant/disused, plus pharmacies),
+`office`, `gambling`, `adult`, `market`, `hospital`, `police`, `atm` and `parking` (car parks mapped as a point;
+individual `parking_space` bays are excluded). The first matching category wins, and the raw `amenity`, `shop`,
+`office` and `leisure` values are kept alongside `name`, `brand`, `postcode` and `opening_hours`. A venue mapped as
+its building or site is a polygon, not a POI: it is in `osm_buildings` or `osm_landuse` with the same tags. This
+replaced Overture Maps places (see JOURNAL.md).
+
 OSM coverage of the `streetlights` and `cctv` layers is uneven — see
 [Data-quality caveats](#data-quality-caveats) below.
 
@@ -355,10 +390,11 @@ absence). Registry order respects `depends_on`:
 | 5 ONS boundary tables | [boundaries.py](src/safer_streets_tooling/extract/boundaries.py) | yes | — |
 | `open_greenspace` | [greenspace.py](src/safer_streets_tooling/extract/greenspace.py) | no | — |
 | `land_cover` | [land_cover.py](src/safer_streets_tooling/extract/land_cover.py) | no | — |
+| `osm_landuse`, `osm_buildings` | [osm_landuse.py](src/safer_streets_tooling/extract/osm_landuse.py) | no | `osm_buildings` on `osm_landuse` — not for its parquet, but so it reuses the QuackOSM parse rather than running a second one at the same time |
 | `buildings` | [buildings.py](src/safer_streets_tooling/extract/buildings.py) | no | `output_areas_2021` (OA `oa21cd` for each footprint) |
 | `retail_centres` | [retail_centres.py](src/safer_streets_tooling/extract/retail_centres.py) | no | — |
 | `open_roads` | [roads.py](src/safer_streets_tooling/extract/roads.py) | no | — |
-| `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | — |
+| `poi` | [poi.py](src/safer_streets_tooling/extract/poi.py) | no | `osm_landuse` — not for its parquet, but so it reuses the QuackOSM parse |
 | `naptan` | [naptan.py](src/safer_streets_tooling/extract/naptan.py) | no | — (national rail stop types `RLY`/`RPL`/`RSE` are dropped; rail is represented by `station_usage`) |
 | `station_usage` | [station_usage.py](src/safer_streets_tooling/extract/station_usage.py) | yes | — (ORR Table 1410 has no coordinates; stations are located by CRS code against NaPTAN's rail XML, fetched by the extractor itself rather than read from the `naptan` parquet) |
 | `food_outlets` | [food_outlets.py](src/safer_streets_tooling/extract/food_outlets.py) | no | — |

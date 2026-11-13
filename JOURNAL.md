@@ -7,6 +7,299 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Points of interest from OpenStreetMap instead of Overture (`poi`)
+
+**Why**: `poi` came from Overture Maps places, which is built mostly from business listings. Checked
+against the FSA food hygiene register (`food_outlets`, every registered food business), Overture lists
+many venues that aren't there, and OSM, which we now parse anyway for `osm_landuse`, does better.
+
+*National counts* (OSM nodes and polygons, 2026-11-08 snapshot; Overture as extracted on 2026-10-16):
+
+| | Register | OSM | Overture |
+| --- | --- | --- | --- |
+| Pubs, bars, nightclubs | 40,467 | 43,289 | 68,023 |
+| Hospitals | — | 1,603 | 8,822 (includes clinics) |
+| Car parks | — | 254,700 | 23,567 |
+| Shops | — | 261,496 | 487,199 |
+
+*Venue-by-venue on the test boxes* (central Cardiff and Leeds, and Ilkley). A match is a similar name
+(Jaro-Winkler ≥ 0.85, or one name contains the other) within 200 m, since the register's points are
+postcode-based. Both directions are lower bounds, because the register uses operator names, files some
+bars as restaurants and misplaces some venues. That affects both sources alike, so the comparison holds.
+
+| Box | Register venues found: OSM / Overture | Source venues on the register: OSM / Overture |
+| --- | --- | --- |
+| Cardiff drink | 78% / 76% | 73% / 42% |
+| Cardiff eat | 53% / 50% | 63% / 44% |
+| Leeds drink | 75% / 63% | 69% / 37% |
+| Leeds eat | 56% / 41% | 61% / 43% |
+| Ilkley drink | 52% / 43% | 86% / 46% |
+| Ilkley eat | 74% / 51% | 78% / 54% |
+
+So OSM finds at least as many of the registered venues, and far fewer of its own are missing from the
+register. Overture's unmatched Leeds bars include "Budweiser" (twice), "Barbour" (a clothes shop), a
+mobile bar-hire firm, a Christmas-market stall, "Clarence Dock" and "Be At One" three times. OSM's
+unmatched ones are mostly real pubs that the register files elsewhere or misplaces.
+
+**What**: `extract/poi.py` now reads QuackOSM's cached parse of the Geofabrik PBFs (shared with
+`osm_landuse` and `osm_buildings`). It keeps every OSM node whose tags put it in one of `CATEGORIES`:
+`alcohol`, `restaurant`, `food`, `shop`, `office`, `gambling`, `adult`, `market`, `hospital`, `police`,
+`atm` and `parking`. The columns are `osm_id`, `category`, the raw `amenity`, `shop`, `office` and
+`leisure` values, `name`, `brand`, `postcode` (`addr:postcode`), `opening_hours`, the BNG point `geom`,
+and `h3r9_id` and `bh350eef_id`. The 2026-11-08 snapshot gives 305,144 rows. The run takes 14 s with a
+1.4 GB peak, because it reuses the cached parse. The Overture `poi` entry is gone from
+`config/data_sources.json`. `overturemaps` stays, as `streetlights` still uses it. Tests in
+`tests/test_poi.py` cover the categories and their precedence, nodes only, the columns and the grid
+cells. The Overture integration test is removed. README updated (dataset table, DAG, a paragraph).
+
+**Design decisions**
+
+- **Our own `category`, not Overture's taxonomy.** OSM's tags don't map onto Overture's
+  `basic_category` without inventing a correspondence (which of 25 `*_store` values is
+  `shop=newsagent`?). A short list of categories, each a set of tag values, matches what consumers
+  actually count. The raw tag columns are kept so a consumer can refine a category (`shop=supermarket`).
+  `basic_category`, `primary_category`, `alternate_category` and `poi_id` are gone: **this is a breaking
+  schema change** for the consumers listed under Follow-ups.
+- **One category per POI, first match wins.** The order settles features with several tags: a cafe
+  tagged `shop=bakery` is `food`, a bookmaker is `gambling` rather than `shop`. `shop=vacant`,
+  `shop=disused` and `=no` aren't shops. `amenity=pharmacy` counts as a shop, as Overture's
+  `pharmacy_and_drug_store` did. `amenity=parking_space` (a single bay) is in no category.
+- **Nodes only.** A POI is literally a point. A venue mapped as its building or site is a polygon, and
+  it's already in `osm_buildings` or `osm_landuse` with the same `amenity` / `shop` / `office` tags.
+  Folding polygons in as points inside them was tried first: it needed a dedup rule for a venue drawn
+  both ways (about 2.5k node/polygon pairs nationally with matching or missing names), and it duplicated
+  the polygon tables. The cost is that `poi` alone undercounts any category often drawn as an area:
+  - pubs, bars and nightclubs: 19,490 nodes against 23,798 polygons;
+  - hospitals: 225 nodes against about 1,400 site polygons;
+  - car parks: 15,933 nodes against 238,751 polygons.
+
+  A count per cell has to take the polygons from the other two tables.
+- **The category keys must be ones QuackOSM already selects** (`osm_landuse.TAGS_FILTER`; a test
+  checks). Adding a key such as `tourism` (hotels) or `healthcare` changes QuackOSM's cache key and
+  forces a cold parse, the one that peaked at 15.6 GB.
+- **`depends_on=("osm_landuse",)`**, as for `osm_buildings`: it doesn't read that parquet, but running
+  second means it reuses QuackOSM's cache instead of a concurrent parse.
+
+**Follow-ups**
+
+- **Consumers to update** (not in this repo). Each counts with Overture's `basic_category`:
+  - peer-hex-explorer `data.py` (`CHARACTERISATION_QUERY`, and `SHOP_CATEGORIES`);
+  - safer-streets-eda `generate_hotspots.py`, `hotspot_archetype.py` and `hex_features.py`
+    (`SHOP_CATEGORIES`), plus the characterisation notebooks.
+
+  The mapping:
+  - `n_alcohol` (`bar`, `alcoholic_beverage_venue`, `lounge`, `inn`) → `category = 'alcohol'`. Inns
+    (hotels) have no equivalent: `tourism` isn't parsed.
+  - `n_food` (`casual_eatery`, `fast_food_restaurant`, `food_service`) → `category = 'food'`.
+  - `n_shops` (`SHOP_CATEGORIES`) → `category = 'shop'`.
+  - `n_hospital` (`hospital`, `emergency_department`) → `category = 'hospital'`.
+
+  Because `poi` is nodes only, the alcohol, hospital and parking counts should add the polygons in
+  `osm_buildings` / `osm_landuse` with the same tags (by centroid, or `ST_PointOnSurface`). Hospitals
+  need this most. Expect every count feature's scale to change, and models fitted on the Overture
+  features to need refitting.
+- **Shops are unvalidated.** There's no register to check them against, unlike food and drink.
+- **`food_outlets` keeps 26 Northern Ireland venues.** Their postcodes are lower case (`bt33 0AL`), and
+  the `BT` filter is case-sensitive.
+
+## Extract OpenStreetMap land use and buildings (`osm_landuse`, `osm_buildings`)
+
+**Why**: Our land-use layers are UKCEH land cover (urban/suburban) and OS Open Greenspace. Neither says
+which ground is retail, commercial, industrial, a car park, school grounds or a pedestrianised square.
+OSM does. The plan is to work out per-cell overlap areas on the BEAHIV grid for chosen categories, and
+that transform comes next. The exploration is in safer-streets-eda's `osm-landuse.ipynb`: OSM's tags,
+read from the raw PBFs, cover more of a city centre than Overture's `land_use` (76–79% against 71–75%
+on the Cardiff and Leeds test boxes). They also have more classes.
+
+**What**: A new optional extract module, `extract/osm_landuse.py`, yields two datasets, each with one
+row per OSM way or relation (`osm_id`: `way/123`, `relation/456`), a column per tag holding its raw
+value, `name`, `area_m2` and the BNG `geom`:
+
+- `osm_landuse` holds the land use: the `landuse`, `leisure`, `amenity`, `natural`, `shop`, `office`,
+  station, `highway`, `area_highway` and `place` columns.
+- `osm_buildings` holds every polygon with a `building` tag other than `no`: the `building`, `shop`,
+  `office`, `amenity`, station, `landuse` and `leisure` columns.
+
+Both also carry the `layer`, `level`, `tunnel` and `location` tags. (The first version split
+attributes from geometry instead, as `osm_landuse` and `osm_landuse_geom`; see below.)
+
+The source is Geofabrik's England and Wales PBFs, read with QuackOSM (new dependency), with the URL
+and regions in `config/data_sources.json` under `osm`. On the 2026-11-08 snapshot this gives
+3,886,198 polygons, 5,162 of them pedestrian areas. Tests cover the tag filter, the two-table split,
+BNG areas and coordinates, and choosing a PBF snapshot. They run offline: QuackOSM's output is replaced
+by a fixture in its schema. README updated (dataset table, DAG, a paragraph on the tables).
+
+**Design decisions**
+
+- **QuackOSM over DuckDB's `ST_ReadOSM` or Geofabrik's free GeoPackage.** `ST_ReadOSM` returns raw
+  nodes, ways and relations, so we'd have to assemble multipolygons ourselves. The free GeoPackage's
+  `landuse_a` layer only has `landuse=*` and drops pedestrian areas, which leaves about 15 points less
+  coverage in the test boxes. QuackOSM builds polygons from closed ways and relations and caches its
+  parse in `raw/quackosm`. The cost is a heavy dependency (it pulls in arro3, geoarrow, osmfinder and
+  rq-geo-toolkit) and the memory use below.
+- **Two tables, split by geometry role** (replacing a first split into attributes and geometry). On
+  the 2026-11-08 snapshot buildings are 14,930,556 polygons and 2,161 km²; land use is 3,709,478
+  polygons and 114,025 km². They need different transforms. Land-use polygons nest and overlap, so a
+  per-cell share needs a union per (cell, category), which costs in proportion to the polygons, and at
+  3.7M it is back to the benchmarked size (51 s, 14 GB peak, batched, for all 1.46M `bh350eef` cells).
+  Buildings barely overlap: summing their intersection areas overstates the union by 6.2% on the
+  central Leeds box (`building=retail` shopping centres drawn round the shops inside them) and 0.08% on
+  the Ilkley box. Their shops, offices and amenities can be counted per cell rather than measured.
+  - The attribute/geometry split bought nothing for reading: parquet is columnar, so a query on tag
+    columns never reads `geom`. It also didn't shrink the transform, which imports every extract table
+    into memory and indexes every `geom` column, whichever table it's in.
+  - `building=no` means "not a building" (881 polygons, half of them shops or amenities drawn as
+    areas), so those polygons are land use. `building: True` had been selecting them as buildings.
+  - The 9,878 buildings that also carry `landuse`, `leisure` or `natural`, and the 809 with a station
+    tag, are buildings with those columns kept. Platforms (6,698) are land use, so the station rule is
+    a join across the two tables.
+  - Both come from one QuackOSM parse. `osm_buildings` declares `depends_on=("osm_landuse",)` even
+    though it doesn't read that parquet: the edge makes it run second and hit QuackOSM's cache,
+    rather than both parsing at once.
+- **Every filter key is a column; no primary class.** A polygon can be `leisure=park` and
+  `landuse=grass`. Choosing one class would be a category decision, which belongs in the transform, so
+  the extract stays lossless for the keys it selects on. Values are raw OSM, typos included (there is a
+  `landuse=residnecial`).
+- **The tag filter lives in code, not the catalogue.** Unlike `poi`'s categories, the filter is tied to
+  the SQL gate and to the output columns, so changing it in JSON alone would break the schema. The
+  URL and regions, which are the source, are in the catalogue.
+- **A SQL gate keeps footway lines out of QuackOSM.** Pedestrian areas need
+  `highway=pedestrian|footway` in the filter, but nearly all such ways are lines. A Wales-only trial
+  with the lines left in was killed (exit 137), while the gated one peaked at 2 GB. The gate drops
+  those highway ways unless they have `area=yes`, `type=multipolygon` or another land-use key (it
+  dropped buildings too until they were added; see below). The first version
+  missed that last case and lost 106 polygons, e.g. `amenity=marketplace` streets. Checking against an
+  independent run of the notebook's filter caught it, and the final output contains every polygon
+  that run had.
+- **The PBF is cached under its dated name** (`england-261108.osm.pbf`, resolved from `-latest`'s
+  redirect), so the snapshot in use is visible. The newest cached one is used until `--force-download`.
+- **No `ST_MakeValid` in the extract.** `index_geometry_tables` already repairs geometry when the
+  transform imports the table.
+- **`amenity=parking_space` is dropped** (added after the first extract). These are single bays:
+  198,559 polygons, median 12 m², each inside an `amenity=parking` car park that the extract keeps.
+  They were 5% of the rows and add almost no area. A bay that also has a `landuse`, `leisure` or
+  `natural` tag is kept (6 polygons on the 2026-11-08 snapshot). The rule is `POLYGON_FILTER`, applied
+  to QuackOSM's output rather than added to `SQL_FILTER`. Changing `SQL_FILTER` would change
+  QuackOSM's cache key and force a cold parse, with its 15 GB peak; this way a re-extract reuses the
+  cached parse. Every other `amenity`, `landuse` and `leisure` value is still selected (`quarry`,
+  `orchard`, `railway`, `religious`, `garages`, `swimming_pool`, `outdoor_seating`, ...). The
+  categories are the transform's decision. The parking-space-only extract has 3,687,645 polygons.
+- **Buildings, shops, offices and train stations are selected** (added after the first extract).
+  Comparing with the separate `osm_land_use` project's build showed the gap. Of its 13.4M OSM
+  objects, 3.3M are buildings and 139k are `shop`, `office`, station, `tourism` or `museum` polygons.
+  Another 116k amenity polygons (32k places of worship, 20k pubs, 13k takeaways, ...) are buildings
+  that the `NOT building` gate removed. Shops, offices and stations matter most for crime. `building`,
+  `shop` and `office` take any value, and `railway` / `public_transport` take `station` or
+  `platform`. Each is a column, as before.
+  - **Station rule in the transform.** Most station buildings are only `building=yes`, and the big
+    ones are a `building=roof` train shed. `osm_land_use` finds them with three rules: a station tag,
+    a building touched by 3+ platforms, or a roof over a platform. That's a category decision, so it
+    goes in the transform. The extract keeps the platforms and also `layer`, `level`, `tunnel` and
+    `location` as columns (`LEVEL_TAGS`), so underground platforms (tube stations) can be excluded.
+  - **Roads stay out.** OS Open Roads (`open_roads`) is the road network. `osm_land_use` buffers 6.65M
+    OSM highway lines to their width, which is most of its rows.
+  - **Verisk overlaps.** `buildings` (Verisk UKBuildings, 26.8M premises with `premise_use`) is a more
+    complete building layer. What OSM adds is its tags (`shop=*`, `office=*`, `amenity=*`, station
+    and platform), which the extract keeps together with the outlines.
+  - **Cost.** `SQL_FILTER` changed, so QuackOSM's cache key changed and the next run is a cold parse.
+    That run is bigger than the measured one below, since it adds several million buildings. Run it on
+    its own and under a memory cap. It gave 18,640,034 polygons; its peak hasn't been measured.
+
+**Peak memory (unresolved)**
+
+*Measured.* These are from one cold run of `data extract --only osm_landuse --only osm_landuse_geom` (the
+first version, before buildings)
+over England and Wales. The process tree was sampled every second. The run took 213 s.
+
+| Process | Peak RSS |
+| --- | --- |
+| Whole tree | **15.6 GB** |
+| Main `data` process | 12.5 GB |
+| QuackOSM workers | up to 15.1 GB |
+
+The three peaks needn't coincide. An earlier run, timed with `/usr/bin/time`, had a 12.7 GB peak for
+its largest process. Wales alone peaks at 2 GB and takes about 20 s. The machine has 30 GB of RAM,
+with about 14 GB free before the run. Warm runs, which read QuackOSM's cache, haven't been measured
+on their own, so it's unknown how much of the main process's 12.5 GB is the parse.
+
+*What happens.* QuackOSM runs its heavy SQL in a worker process, started with multiprocessing `spawn`
+(hence the `__main__` guard the `data` script already has).
+
+- **Memory limit.** Each worker opens DuckDB with DuckDB's default limit of 80% of RAM: 24.3 GiB
+  here. That's sized against total memory, not what is free.
+- **Failure.** A worker reaching the limit fails with "failed to pin block of size 256 KiB (24.3
+  GiB/24.3 GiB used)", aborts (the `terminate called after throwing ... OutOfMemoryException` lines)
+  and exits non-zero.
+- **Recovery.** QuackOSM treats the non-zero exit as a `MemoryError` and retries the step. It tries
+  another grouping method first, then fewer rows per group. For steps in its own process, it halves
+  the threads.
+- **Watchdog.** QuackOSM also kills a worker when machine-wide memory use passes about 97%, or when
+  the machine is swapping heavily.
+
+Each cold run prints two or three of these tracebacks. The output is still complete: it was checked
+against an independent run. The retries add time, but how much hasn't been measured.
+
+*Why it matters.*
+
+- **A full build could lose everything.** In a full `data build` the parse competes with every other
+  extractor in the same process. If the kernel's OOM killer fires, it picks the largest process, which
+  is the whole `data` run. A SIGKILL can't be caught, so the rule that a failed *optional* dataset is
+  skipped doesn't protect the build, and every extract in flight dies with it.
+- **Shared machines.** Other users and sessions on the same box compete for the same memory.
+- **Smaller machines are untested.** QuackOSM picks a smaller group size from total RAM, so a 16 GB
+  machine may cope, just more slowly.
+
+*Options* (none implemented yet):
+
+1. **Cap QuackOSM's DuckDB through `duckdb_conn_kwargs`** (untested), e.g.
+   `{"config_kwargs": {"memory_limit": "6GB"}}`. QuackOSM passes these settings to its main connection
+   and to its worker, so this works on any platform and is a one-line change. The unknowns:
+   - Not every DuckDB operator can spill to disk, so it may only turn into more retries, or into a
+     failure.
+   - Memory outside DuckDB (Python, Arrow) isn't capped.
+   - The worker pool runs one process at a time, so expect about twice the limit (main connection plus
+     worker).
+
+   **This is the first thing to try**, using the same sampler.
+2. **QuackOSM's own `memory_limit=` argument isn't a cap.** It replaces the total that QuackOSM
+   sizes its row groups and watchdog against, but the usage it compares that total with is still
+   machine-wide. Set it below what the machine is already using and the watchdog kills every worker
+   at once, which the notebook found. It might help alongside option 1, to make QuackOSM pick smaller
+   row groups.
+3. **A cgroup cap: `systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`.** This is what
+   the notebook does. It's a hard kernel limit, and DuckDB and QuackOSM both read the cgroup and size
+   themselves to it. Going over the cap kills only the child, so the failure comes back as an ordinary
+   error and the optional dataset is skipped as designed.
+   - It means running QuackOSM in a subprocess with its arguments passed as JSON.
+   - It only works on Linux with a user systemd session: not on Windows or macOS, and not in most
+     containers or CI.
+4. **Run the parse in a plain child process.** This doesn't lower the peak, but an OOM kill then hits
+   the child rather than the build, so a failure is a skip again. It works on any platform, and
+   combines naturally with option 1. It's the fallback where option 3 isn't available.
+5. **Fewer threads** (`cpu_limit=`). DuckDB's hash tables shrink with the thread count, at the cost of
+   time. Untested.
+6. **Keep the cold parse out of the concurrent build.** This could be a generic `Dataset` flag that
+   makes the pipeline run a dataset alone (AGENTS.md rules out per-dataset control flow in the
+   orchestrator), or just guidance to run `data extract --only osm_landuse` by itself after a new
+   snapshot. It avoids the contention but slows the build, and it doesn't lower the peak.
+7. **Shrink the input** with `osmium tags-filter` before QuackOSM sees it. This adds an external
+   binary. Parsing England and Wales separately gains little, because England is about 90% of the
+   input.
+
+Suggested order: try option 1 (perhaps with option 5) and measure. If the peak doesn't come down
+enough, use option 3 on Linux, with option 4 everywhere else so a failure is at least a skip.
+
+**Follow-ups**
+
+- Settle the peak-memory issue (above) before this runs inside a full `data build`.
+- Old PBF snapshots and their QuackOSM caches (about 2.5 GB per snapshot) accumulate in `raw/`.
+  Nothing prunes them.
+- The BEAHIV overlap-area transform per land-use category is next, with per-cell building counts and
+  footprint share alongside.
+- The transform imports every extract table into its in-memory DuckDB, so `osm_buildings` (14.9M
+  polygons) is loaded and RTree-indexed on every run, used or not. A per-dataset way to leave a table
+  in parquet and read it in batches would avoid that.
+
 ## Place workplace population in residential-only OAs
 
 **Why**: `population_counts` dropped an OA's whole workplace population when the OA had no Non
