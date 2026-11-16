@@ -7,6 +7,66 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## OSM land use per BEAHIV cell (`beahiv_osm_landuse`)
+
+**Why**: The `osm_landuse` extract left the category decision to the transform. This step makes it, and puts the
+polygons on the BEAHIV grid so a cell can be described by what its ground is used for.
+
+**What**: A new `Grid.BEAHIV` step, `transform/beahiv_osm_landuse.py`, builds `bh350eef_osm_landuse_lookup`. It has
+one row per crime cell and categorised land-use polygon that overlaps it. The columns are `spatial_id`, `osm_id`,
+`overlap_pct` and `category`, where `overlap_pct` is the part of the polygon inside the cell as a percentage of the
+cell's area (0–100). There are 21 categories in `CATEGORIES`, drafted in safer-streets-eda's `osm-landuse.ipynb`.
+The step depends on `beahiv_counts` and skips cleanly when `osm_landuse` wasn't extracted. The tag-to-category
+`CASE` builder moved out of `extract/poi.py` into a shared `osm_tags.py`, so `poi` and this step agree on what
+having a tag means (`shop=vacant` isn't a shop).
+
+*Real run* (2026-11-08 snapshot, the transform's DuckDB settings: 4 threads, 15 GB limit): the build takes 22 s
+with a 4.5 GB peak for the whole process, loading the extract included. It gives 1,954,175 rows, 34 MB of parquet,
+covering 206,334 of the 221,320 crime cells. A covered cell has 9.5 rows on average and 250 at most. The most common
+categories are residential (509k rows), woodland (338k), agriculture (289k) and parking (228k). In 20.8% of cells
+the percentages add up to more than 100.
+
+Tests in `tests/test_beahiv_osm_landuse.py` cover the percentages (polygons drawn relative to beahiv's own cell
+outline), the category order, uncategorised and zero-overlap polygons being dropped, crime cells only, the skip
+without the extract, and that every category key is an extract column. README updated (step table, DAG, a paragraph).
+
+**Design decisions**
+
+- **One row per (cell, polygon), not a union per (cell, category).** The maintainer asked for the long table, which
+  keeps every polygon traceable by `osm_id`. Its cost is that land-use polygons nest (a car park on retail land, a
+  pitch in a park), so summing `overlap_pct` per category double counts. The exact share needs a union of each
+  category's polygons per cell, which can't be recovered from the table. That's deferred (Follow-ups). The earlier
+  journal estimate for the union (51 s, 14 GB peak) is for all 1.46M grid cells, not the crime cells.
+- **One category per polygon, first match wins**, as for `poi`. The notebook let a polygon fall in several
+  categories. With one, (cell, `osm_id`) is unique and a polygon is never counted twice across categories. The order
+  puts specific uses before the zones they sit in: `amenity=parking` + `landuse=retail` is parking, and a school's
+  `amenity=school` + `landuse=residential` is education. Polygons in no category are dropped (`leisure=garden`, verge
+  `landuse=grass`, `nature_reserve`, ...). The extract still has them.
+- **The notebook's categories, less what needs `osm_buildings`.** `osm_landuse` has no buildings, so the `building`
+  category goes, `shop` and `office` keep only their tags (not `building=retail|office|...`), and `station` is only
+  the `railway` / `public_transport = station` tag. The notebook's platform and train-shed rules join to buildings.
+  Platforms alone are uncategorised.
+- **Percentage of the cell, not of the polygon.** It describes the cell. A polygon's share of itself would serve
+  spreading a polygon's attributes over cells, which nothing here needs.
+- **Crime cells only** (`BEAHIV_UNIT`), the convention for every lookup on this grid.
+- **A step of its own, not an `OverlapFeature`.** Overlap features are built on every grid (each H3 resolution, the
+  hotspot hexes) and folded into `*_geogs` as one MAX per cell. This is a long table on the BEAHIV grid only.
+- **A table, not a view** (the overlap lookups are views). The intersections are the costly part, and a view would
+  recompute them on every read, including the parquet write.
+- **Zero-overlap rows are dropped.** `ST_Intersects` is true for a polygon touching a cell's edge, which would give
+  a 0% row.
+- **`osm_tags.py` at the package root**, as for `grids.py` and `beahiv_grid.py`: both phases need the rule, and the
+  transform shouldn't import from an extract module's internals.
+
+**Follow-ups**
+
+- **Per-category shares**: a `bh350eef_osm_landuse_shares` relation (`spatial_id`, `category`, union share), if
+  consumers need exact category coverage rather than per-polygon rows.
+- **Stations and building uses**: the platform and train-shed station rules, and building-type shops and offices,
+  need `osm_buildings` (with per-cell building counts and footprint share, as the extract's entry planned).
+- **Uncategorised area**: the notebook listed the largest uncategorised values. Recheck them nationally before
+  adding categories.
+
 ## Points of interest from OpenStreetMap instead of Overture (`poi`)
 
 **Why**: `poi` came from Overture Maps places, which is built mostly from business listings. Checked

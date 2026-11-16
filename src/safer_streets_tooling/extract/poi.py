@@ -16,11 +16,12 @@ from safer_streets_core.database import duckdb_connector, write_geoparquet
 from safer_streets_tooling.extract import osm_landuse
 from safer_streets_tooling.extract._common import cell_id_columns
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
+from safer_streets_tooling.osm_tags import Tags, category_case
 
-# A feature's category: the first whose tags it has (None: any value but NOT_A_VALUE). The order settles features
+# A feature's category: the first whose tags it has (None: any value but osm_tags.NOT_A_VALUE). The order settles features
 # with several, e.g. a cafe tagged shop=bakery is food, a bookmaker gambling. Every key is one QuackOSM selects on
 # (osm_landuse.TAGS_FILTER); adding a key there changes its cache key, so the next extract is a cold parse.
-CATEGORIES: dict[str, dict[str, list[str] | None]] = {
+CATEGORIES: dict[str, Tags] = {
     "adult": {"amenity": ["stripclub", "brothel", "swingerclub"]},
     "gambling": {
         "amenity": ["casino", "gambling"],
@@ -38,8 +39,6 @@ CATEGORIES: dict[str, dict[str, list[str] | None]] = {
     "atm": {"amenity": ["atm"]},
     "parking": {"amenity": ["parking"]},  # a car park mapped as a point; amenity=parking_space (one bay) isn't
 }
-# shop=vacant (about 10k), shop=no, ...: not a shop
-NOT_A_VALUE = ["no", "vacant", "disused"]
 
 # Tags kept as columns (raw values, NULL if absent), so a consumer can refine a category: shop=supermarket, ...
 TAG_COLUMNS = {
@@ -54,24 +53,7 @@ TAG_COLUMNS = {
 }
 
 
-def _sql_list(values: list[str]) -> str:
-    return ", ".join(f"'{v}'" for v in values)
-
-
-def _has(key: str, values: list[str] | None) -> str:
-    if values is None:
-        return f"coalesce(tags['{key}'], 'no') NOT IN ({_sql_list(NOT_A_VALUE)})"
-    return f"coalesce(tags['{key}'] IN ({_sql_list(values)}), false)"
-
-
-CATEGORY = (
-    "CASE "
-    + " ".join(
-        f"WHEN {' OR '.join(_has(key, values) for key, values in tags.items())} THEN '{category}'"
-        for category, tags in CATEGORIES.items()
-    )
-    + " END"
-)
+CATEGORY = category_case(CATEGORIES, lambda key: f"tags['{key}']")
 
 
 def extract(ctx: ExtractContext) -> None:
