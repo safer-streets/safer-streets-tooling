@@ -102,6 +102,19 @@ has a tag of: specific uses (`hospitality`, `station`, `parking`, `shop`, `offic
 out. Land-use polygons nest (a car park on retail land), so a cell's percentages can sum past 100, and summing
 them per category double counts the nesting.
 
+`beahiv_osm_buildings` condenses the `osm_buildings` tag columns and gives two tables. `osm_building_categories` has
+one row per OSM building: `osm_id`, a single use `category`, the raw `building` value, `name`, `area_m2`, an
+`underground` flag (from `layer` / `level` / `tunnel` / `location`) and the `h3r9_id` / `bh350eef_id` of its centroid.
+It has no geometry: join to `osm_buildings` on `osm_id` for the footprint. A building takes the first of
+`beahiv_osm_buildings.CATEGORIES` it has a tag of, uses before building types (`hospitality`, `station`, `shop`,
+`office`, `education`, `health`, `worship`, `civic`, `leisure`, `parking`, `hotel`, `commercial`, `industrial`,
+`agricultural`, `residential`, `outbuilding`), so a pub in a `building=house` is hospitality. A building in none is
+`unspecified` (a bare `building=yes`, 37% of them) or `other`. `bh350eef_osm_building_counts` counts them per BEAHIV
+cell and category (`building_count`, `footprint_area` in m²), each building in its centroid's cell, underground ones
+left out. Like `bh350eef_building_counts` (Verisk) it covers every cell with a building, not only crime cells. The
+two are not like for like: OSM draws many terraces and blocks as one polygon and is missing most housing in some
+towns, so compare by area rather than count, and only where OSM's coverage is good.
+
 ```mermaid
 flowchart LR
    crime_data
@@ -159,6 +172,8 @@ flowchart LR
    bh350eef_geogs
    bh350eef_descriptions
    bh350eef_osm_landuse_lookup
+   osm_building_categories
+   bh350eef_osm_building_counts
 
    direction LR
 
@@ -269,13 +284,15 @@ flowchart LR
     lsoa_2021 --> bh350eef_descriptions
     bh350eef_crime_counts --> bh350eef_osm_landuse_lookup
     osm_landuse --> bh350eef_osm_landuse_lookup
+    osm_buildings --> osm_building_categories
+    osm_building_categories --> bh350eef_osm_building_counts
 
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
     class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,bh350eef,hotspots extract;
-    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions,bh350eef_osm_landuse_lookup transform;
+    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions,bh350eef_osm_landuse_lookup,osm_building_categories,bh350eef_osm_building_counts transform;
     class h3_retail_centres_lookup,hotspots_retail_centre_lookup,bh350eef_retail_centre_lookup deprecated;
 ```
 
@@ -367,7 +384,8 @@ several (`leisure=park` with `landuse=grass`, `building=retail` with `shop=super
 a polygon counts towards is decided in the transform. So is the train-station rule: most station
 buildings are only `building=yes` or a `building=roof` shed, found by the platforms they touch (in
 `osm_landuse`), and `layer`, `level`, `tunnel` and `location` are kept so underground platforms can be
-left out. Both tables also carry `name` and `area_m2`. The PBFs are cached under their dated Geofabrik
+left out. Both tables also carry `name` and `area_m2`, and `osm_buildings` the `h3r9_id` / `bh350eef_id` of each
+footprint's centroid (a building is counted in one cell; land use is shared out by area). The PBFs are cached under their dated Geofabrik
 names (`england-261108.osm.pbf`), and the newest is used until `--force-download` fetches the current
 snapshot. QuackOSM caches its parse in `raw/quackosm`. Rebuild both tables together, so they come from
 the same snapshot.
@@ -496,6 +514,7 @@ each exposing a `STEP`. Each step writes the relations it produces out as parque
 | `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `bh350eef_geogs` | `beahiv_counts`, `beahiv_geo_lookups`, `beahiv_lookups`, `beahiv_retail_centre_lookups` |
 | `beahiv_descriptions` | [beahiv_descriptions.py](src/safer_streets_tooling/transform/beahiv_descriptions.py) | `beahiv` | `bh350eef_descriptions` (`short_location`, `description` + the named components, including `retail_centre`) | `beahiv_lookups`, `beahiv_geogs` |
 | `beahiv_osm_landuse` | [beahiv_osm_landuse.py](src/safer_streets_tooling/transform/beahiv_osm_landuse.py) | `beahiv` | `bh350eef_osm_landuse_lookup` (`spatial_id`, `osm_id`, `overlap_pct`, `category`) | `beahiv_counts` |
+| `beahiv_osm_buildings` | [beahiv_osm_buildings.py](src/safer_streets_tooling/transform/beahiv_osm_buildings.py) | `beahiv` | `osm_building_categories` (`osm_id`, `category`, `building`, `name`, `area_m2`, `underground`, `h3r9_id`, `bh350eef_id`), `bh350eef_osm_building_counts` (`spatial_id`, `category`, `building_count`, `footprint_area`) | — |
 
 ### Spatial units
 

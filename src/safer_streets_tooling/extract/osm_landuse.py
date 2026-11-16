@@ -20,7 +20,7 @@ import requests
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
 from safer_streets_tooling.config import data_source
-from safer_streets_tooling.extract._common import download, raw_dir
+from safer_streets_tooling.extract._common import cell_id_columns, download, raw_dir
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 # natural=* values that describe land cover; the others (bay, peninsula, ridge, tree_row, ...) name features
@@ -165,14 +165,14 @@ def landuse_geoparquet(ctx: ExtractContext) -> Path:
     )
 
 
-def _polygons_sql(src: Path, tags: tuple[str, ...], where: str) -> str:
+def _polygons_sql(src: Path, tags: tuple[str, ...], where: str, cell_ids: str = "") -> str:
     """The polygonal features of QuackOSM's output that pass POLYGON_FILTER and ``where``, as ``osm_id``, a column
     per tag in ``tags``, ``name``, ``area_m2`` and the BNG ``geom`` (points and lines matched a key but aren't land
-    use or buildings)."""
+    use or buildings), then ``cell_ids`` (grid-id columns, written over ``geom``) if given."""
     # quoted: natural, level and location are SQL keywords
     tag_cols = "".join(f"tags['{key}'] AS \"{_column(key)}\", " for key in tags)
     return f"""
-        SELECT osm_id, {tag_cols}tags['name'] AS name, ST_Area(geom) AS area_m2, geom
+        SELECT osm_id, {tag_cols}tags['name'] AS name, ST_Area(geom) AS area_m2, geom{", " + cell_ids if cell_ids else ""}
         FROM (
             SELECT feature_id AS osm_id, tags,
                    ST_Transform(geometry, 'EPSG:4326', 'EPSG:27700', always_xy := true) AS geom
@@ -182,11 +182,21 @@ def _polygons_sql(src: Path, tags: tuple[str, ...], where: str) -> str:
     """
 
 
-def _write(ctx: ExtractContext, name: str, tags: tuple[str, ...], where: str) -> None:
+# A building's centroid in WGS-84. Taken in BNG and transformed, rather than from QuackOSM's WGS-84 geometry, so the
+# H3 and BEAHIV ids describe the same point (as cell_id_columns asks, and as the Verisk buildings extract does).
+_CENTROID_LL = "ST_Transform(ST_Centroid(geom), 'EPSG:27700', 'EPSG:4326', always_xy := true)"
+
+
+def _write(ctx: ExtractContext, name: str, tags: tuple[str, ...], where: str, *, cell_ids: bool = False) -> None:
     src = landuse_geoparquet(ctx)
     con = duckdb_connector(writeable=True)
     try:
-        write_geoparquet(con, _polygons_sql(src, tags, where), ctx.parquet(name))
+        ids = (
+            cell_id_columns(con, f"ST_X({_CENTROID_LL})", f"ST_Y({_CENTROID_LL})", "ST_Centroid(geom)")
+            if cell_ids
+            else ""
+        )
+        write_geoparquet(con, _polygons_sql(src, tags, where, ids), ctx.parquet(name))
         row_count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{ctx.parquet(name)}')").fetchone()[0]  # ty:ignore[not-subscriptable]
     finally:
         con.close()
@@ -199,8 +209,14 @@ def extract_landuse(ctx: ExtractContext) -> None:
 
 
 def extract_buildings(ctx: ExtractContext) -> None:
-    """Write ``osm_buildings``: one row per building polygon with its tag values, name, area (m²) and geometry."""
-    _write(ctx, "osm_buildings", BUILDING_TAGS, BUILDING)
+    """Write ``osm_buildings``: one row per building polygon with its tag values, name, area (m²), geometry and the
+    H3 / BEAHIV cell of its centroid.
+
+    A footprint can straddle cells, so it is placed by its centroid, in exactly one cell on each grid: the transform
+    then counts buildings per cell with a group-by. Land-use polygons are far larger than a cell and are shared out
+    by area instead (``beahiv_osm_landuse``), so ``osm_landuse`` carries no cell id.
+    """
+    _write(ctx, "osm_buildings", BUILDING_TAGS, BUILDING, cell_ids=True)
 
 
 DATASETS = (
@@ -221,7 +237,8 @@ DATASETS = (
         extract=extract_buildings,
         description=(
             "OpenStreetMap building polygons (building=* other than no), one row per OSM way/relation (osm_id) with "
-            "its building, shop, office, amenity, station and land-use tags, level tags, name, area_m2 and BNG geom."
+            "its building, shop, office, amenity, station and land-use tags, level tags, name, area_m2, BNG geom and the "
+            "h3r9_id / bh350eef_id cell of its centroid."
         ),
         # not a parquet it reads: run after osm_landuse so it reuses QuackOSM's cached parse instead of a second,
         # concurrent one
