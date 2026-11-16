@@ -1,36 +1,33 @@
-"""``osm_building_categories`` — one use ``category`` per OpenStreetMap building — and
-``bh350eef_osm_building_counts``, those buildings counted per BEAHIV cell and category.
+"""``bh350eef_osm_buildings_lookup`` — each OpenStreetMap building's share of every BEAHIV cell it overlaps.
+
+The buildings' counterpart of ``bh350eef_osm_landuse_lookup``, with the same columns: one row per (cell, building)
+with the cell's ``spatial_id``, the building's ``osm_id``, ``overlap_pct`` (the part of the footprint inside the cell,
+as a percentage of the cell's area) and the building's ``category``. A building straddling cells has a row in each.
 
 The ``osm_buildings`` extract keeps a building's use spread over eight tag columns (``building``, ``shop``,
-``office``, ``amenity``, ``railway``, ``public_transport``, ``landuse``, ``leisure``) and its position relative to the
-ground over four more (``layer``, ``level``, ``tunnel``, ``location``). This step condenses them: the use tags into a
-single ``category``, the level tags into an ``underground`` flag. ``osm_building_categories`` has one row per building
-(``osm_id``, ``category``, the raw ``building`` value, ``name``, ``area_m2``, ``underground`` and the centroid's
-``h3r9_id`` / ``bh350eef_id``), with no geometry: join to ``osm_buildings`` on ``osm_id`` for the footprint.
+``office``, ``amenity``, ``railway``, ``public_transport``, ``landuse``, ``leisure``); ``category`` condenses them to
+one. What a building is used for (a pub, a shop, an office) outranks what it was built as (``building=house``), and
+unlike land use every building has a category: one with no use and no known type is ``unspecified`` (a bare
+``building=yes``, over a third of them) or ``other`` (a ``building`` value in no category). The level tags
+(``layer``, ``level``, ``tunnel``, ``location``) say where a building is rather than what it is for: a building they
+put below ground has no footprint at street level and is left out.
 
-Every building gets a category. What a building is used for (a pub, a shop, an office) outranks what it was built as
-(``building=house``), and a building with neither is ``unspecified`` (a bare ``building=yes``, over a third of them)
-or ``other`` (a ``building`` value in no category).
-
-``bh350eef_osm_building_counts`` mirrors ``bh350eef_building_counts`` (the Verisk buildings): ``spatial_id``,
-``category``, ``building_count`` and ``footprint_area`` (m²), each building in the cell of its centroid. Like that
-table it covers every cell holding a building, not only the crime cells, so the step waits on nothing. OSM draws many
-terraces and blocks as one polygon and has no buildings at all in places, so compare it with the Verisk counts by
-area rather than by count, and not at all where OSM's coverage is thin.
+Footprints barely overlap one another, so unlike land use a cell's ``overlap_pct`` summed per category is close to
+that category's true share of the cell. The cells are the ones carrying crimes (:data:`~.beahiv.BEAHIV_UNIT`), so
+the step waits on ``beahiv_counts``.
 """
 
 import duckdb
 
 from safer_streets_tooling.beahiv_grid import KEY
-from safer_streets_tooling.grids import BEAHIV_ID, H3_ID, relation
 from safer_streets_tooling.osm_tags import Tags, category_case
 from safer_streets_tooling.transform import beahiv
-from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause
+from safer_streets_tooling.transform.base import Grid, TransformStep, table_exists
 from safer_streets_tooling.transform.beahiv_osm_landuse import CATEGORIES as LANDUSE_CATEGORIES
+from safer_streets_tooling.transform.beahiv_osm_landuse import build_lookup
 
 SOURCE = "osm_buildings"
-TABLE = "osm_building_categories"
-COUNTS_TABLE = relation(KEY, "osm_building_counts")
+TABLE = f"{KEY}_osm_buildings_lookup"
 
 # A building's category: the first whose tags it has (None: any value but osm_tags.NOT_A_VALUE). Uses come before
 # building types, so a pub in a building=house is hospitality and a shop under building=apartments is a shop. Where
@@ -109,35 +106,20 @@ UNDERGROUND = (
 )
 
 
-def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create both tables. No-op until ``osm_buildings`` is extracted with its cell ids (:func:`.beahiv.tagged`).
+def _available(con: duckdb.DuckDBPyConnection) -> bool:
+    return beahiv.available(con) and table_exists(con, SOURCE)
 
-    The counts leave out underground buildings and those with no cell (a centroid off the grid).
-    """
-    if not beahiv.tagged(con, SOURCE):
+
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create the lookup from every building above ground (see :func:`.beahiv_osm_landuse.build_lookup`)."""
+    if not _available(con):
         return
-    con.execute(f"""
-        {create_clause("TABLE", TABLE, replace=replace)} AS
-        SELECT osm_id, {CATEGORY} AS category, building, name, area_m2, {UNDERGROUND} AS underground,
-               {H3_ID}, {BEAHIV_ID}
-        FROM {SOURCE}
-    """)
-    con.execute(f"""
-        {create_clause("TABLE", COUNTS_TABLE, replace=replace)} AS
-        SELECT {BEAHIV_ID} AS spatial_id, category, COUNT(*) AS building_count, SUM(area_m2) AS footprint_area
-        FROM {TABLE}
-        WHERE {BEAHIV_ID} IS NOT NULL AND NOT underground
-        GROUP BY {BEAHIV_ID}, category
-    """)
-    buildings, unspecified = con.execute(
-        f"SELECT COUNT(*), COUNT(*) FILTER (WHERE category = '{UNSPECIFIED}') FROM {TABLE}"
-    ).fetchone()  # ty:ignore[not-iterable]
-    (cells,) = con.execute(f"SELECT COUNT(DISTINCT spatial_id) FROM {COUNTS_TABLE}").fetchone()  # ty:ignore[not-iterable]
-    print(f"  {TABLE}: {buildings:,} buildings ({unspecified:,} {UNSPECIFIED}) in {cells:,} cells")
+    features = f"SELECT osm_id, {CATEGORY} AS category, geom FROM {SOURCE} WHERE NOT ({UNDERGROUND})"
+    build_lookup(con, TABLE, features, replace)
 
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
-    return [TABLE, COUNTS_TABLE] if beahiv.tagged(con, SOURCE) else []
+    return [TABLE] if _available(con) else []
 
 
 STEP = TransformStep(
@@ -146,9 +128,9 @@ STEP = TransformStep(
     outputs=outputs,
     grid=Grid.BEAHIV,
     description=(
-        "OpenStreetMap buildings with their tags condensed to one use category each (osm_building_categories: "
-        "osm_id, category, building, name, area_m2, underground, h3r9_id, bh350eef_id), and their count and "
-        "footprint area per BEAHIV cell and category (bh350eef_osm_building_counts), placed by centroid."
+        "Per BEAHIV cell, every overlapping OpenStreetMap building (osm_id) above ground with its use category "
+        "(its tags condensed to one value) and overlap_pct, the percentage of the cell its footprint covers."
     ),
+    depends_on=("beahiv_counts",),
     extract_inputs=(SOURCE,),
 )

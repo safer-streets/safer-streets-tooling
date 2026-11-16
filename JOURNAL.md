@@ -7,57 +7,57 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
-## One category per OSM building, and counts per BEAHIV cell (`beahiv_osm_buildings`)
+## OSM buildings per BEAHIV cell (`beahiv_osm_buildings`)
 
 **Why**: `osm_buildings` was extracted but nothing used it. A building's use is spread over eight tag columns and
 its level over four more, which the land-use transform's follow-ups left for a buildings step. The aim beyond this
 PR is to enrich Verisk UKBuildings (`buildings`) with OSM's detail, so this entry also records how the two compare.
 
-**What**
+**What**: A new `Grid.BEAHIV` step, `transform/beahiv_osm_buildings.py`, builds `bh350eef_osm_buildings_lookup`,
+the buildings' counterpart of `bh350eef_osm_landuse_lookup` with the same columns: `spatial_id`, `osm_id`,
+`overlap_pct` (the part of the footprint inside the cell, as a percentage of the cell's area) and `category`. One
+row per crime cell and building overlapping it. `category` condenses the tag columns to one value: 16 categories in
+`CATEGORIES`, plus `unspecified` (bare `building=yes`) and `other`. The intersection SQL moved into
+`beahiv_osm_landuse.build_lookup`, which both steps call. The step depends on `beahiv_counts` and skips cleanly
+without the extract. No extract change, so no re-extract.
 
-- The `osm_buildings` extract now carries `h3r9_id` / `bh350eef_id`, the cells of each footprint's centroid, as
-  `buildings` and `poi` do. **It needs a re-extract** (`data extract --only osm_landuse --only osm_buildings`, which
-  reads QuackOSM's cached parse); until then the step is skipped, like any step waiting on a tagged extract.
-- A new `Grid.BEAHIV` step, `transform/beahiv_osm_buildings.py`, builds two tables:
-  - `osm_building_categories`: one row per building with `osm_id`, `category`, `building`, `name`, `area_m2`,
-    `underground`, `h3r9_id`, `bh350eef_id`. No geometry.
-  - `bh350eef_osm_building_counts`: `spatial_id`, `category`, `building_count`, `footprint_area`.
-- 16 categories in `CATEGORIES`, plus `unspecified` (bare `building=yes`) and `other`.
+*Real run* (2026-11-08 snapshot, the transform's DuckDB settings: 4 threads, 15 GB limit): the build takes 78 s,
+after 15 s to load and index the extract, with a 9.2 GB peak for the whole process. It gives 13,675,120 rows, 188 MB
+of parquet, for 12,828,826 buildings in 177,238 of the 221,323 crime cells. A covered cell has 77 rows on average
+and 905 at most, and buildings cover 8.4% of it on average. 816,035 buildings straddle cells (7 at most). One cell
+sums past 100% (100.5), so overlapping footprints are negligible.
 
-*Real run* (2026-11-08 snapshot, 4 threads, 15 GB limit, ids added to the existing extract in a scratch database):
-2 s for the step, 5.0 GB peak for the process including loading the extract without geometry. 14,930,556 buildings;
-the counts table has 943,659 rows over 460,353 cells. The parquets are 273 MB and 14 MB.
+| category | rows | buildings | footprint in crime cells, km² |
+| --- | ---: | ---: | ---: |
+| residential | 7,808,557 | 7,344,536 | 659.7 |
+| unspecified | 4,705,730 | 4,409,442 | 597.4 |
+| outbuilding | 639,718 | 616,637 | 22.8 |
+| shop | 148,161 | 131,816 | 65.2 |
+| industrial | 60,084 | 51,181 | 68.0 |
+| education | 59,031 | 48,104 | 54.2 |
+| hospitality | 54,980 | 50,275 | 10.6 |
+| worship | 33,601 | 29,473 | 12.4 |
+| commercial | 31,220 | 27,438 | 17.1 |
+| agricultural | 29,068 | 28,072 | 10.6 |
+| civic | 25,584 | 21,949 | 13.3 |
+| other | 24,584 | 23,117 | 6.6 |
+| office | 24,457 | 21,500 | 12.0 |
+| leisure | 11,337 | 9,649 | 9.7 |
+| health | 10,746 | 8,817 | 10.7 |
+| parking | 3,154 | 2,518 | 4.5 |
+| hotel | 2,718 | 2,269 | 2.1 |
+| station | 2,390 | 2,033 | 1.6 |
 
-| category | buildings | % | footprint km² | % |
-| --- | ---: | ---: | ---: | ---: |
-| residential | 8,070,960 | 54.1 | 739.5 | 34.2 |
-| unspecified | 5,481,567 | 36.7 | 890.5 | 41.2 |
-| outbuilding | 695,891 | 4.7 | 27.4 | 1.3 |
-| agricultural | 144,769 | 1.0 | 73.6 | 3.4 |
-| shop | 144,074 | 1.0 | 77.7 | 3.6 |
-| industrial | 86,076 | 0.6 | 153.7 | 7.1 |
-| hospitality | 56,547 | 0.4 | 12.7 | 0.6 |
-| education | 55,614 | 0.4 | 64.7 | 3.0 |
-| other | 42,852 | 0.3 | 13.5 | 0.6 |
-| worship | 36,850 | 0.2 | 14.6 | 0.7 |
-| commercial | 34,691 | 0.2 | 25.5 | 1.2 |
-| office | 25,221 | 0.2 | 16.3 | 0.8 |
-| civic | 24,596 | 0.2 | 15.0 | 0.7 |
-| leisure | 12,864 | 0.1 | 13.0 | 0.6 |
-| health | 9,829 | 0.1 | 12.9 | 0.6 |
-| parking | 2,982 | 0.0 | 5.6 | 0.3 |
-| hotel | 2,886 | 0.0 | 3.0 | 0.1 |
-| station | 2,287 | 0.0 | 1.8 | 0.1 |
-
-1,733 buildings are underground. The largest `other` values are `construction` (10.4k), `beach_hut` (6.3k) and
-`ruins` (6.3k).
+Nationally (all 14.9M buildings, not only those in crime cells) 54.1% are residential and 36.7% `unspecified`;
+1,733 are underground; the largest `other` values are `construction` (10.4k), `beach_hut` (6.3k) and `ruins`
+(6.3k).
 
 **OSM against Verisk** (spot comparisons, run ad hoc; nothing in the pipeline depends on them)
 
 - *Coverage.* OSM has 14.9M buildings and 2,161 km² of footprint; Verisk has 26.8M premises and 3,044 km² (OSM is
   71% by area). By 10 km square the median OSM / Verisk area ratio is 0.71 and the 5th percentile 0.28; squares
-  under 50% hold about 4.8M Verisk premises (18%). Of the 221,323 crime cells, 200,390 have Verisk buildings and
-  174,350 have OSM buildings; 26,213 have Verisk only and 173 OSM only.
+  under 50% hold about 4.8M Verisk premises (18%). Of the 221,323 crime cells, 200,390 hold a Verisk building's
+  centroid and 174,350 an OSM building's; 26,213 have Verisk only and 173 OSM only.
 - *Eight 2 km squares* (Verisk premises / OSM buildings / share of Verisk footprint that OSM overlaps / Verisk
   premises touching no OSM building): Manchester centre 2,698 / 2,655 / 93% / 5%; Leeds centre 1,791 / 1,543 / 92%
   / 10%; Soho 7,297 / 6,685 / 89% / 2%; Headingley 7,735 / 5,597 / 80% / 14%; Skipton 5,746 / 2,386 / 75% / 5%;
@@ -77,29 +77,24 @@ the counts table has 943,659 rows over 460,353 cells. The parquets are 273 MB an
 
 **Design decisions**
 
-- **A per-building table as well as the counts**, at the maintainer's request: the tags condensed to one column per
-  building, traceable by `osm_id`, and the input the Verisk join will need. The counts are a group-by over it.
-- **No geometry on the per-building table.** It would be a second copy of 1.5 GB of footprints. `osm_id` joins back
-  to the extract.
-- **Centroid placement, cell id from the extractor.** A footprint can straddle cells; a count needs each building
-  in one. The centroid is what Verisk `buildings` uses, so the two count tables are placed alike. Sharing a
-  building out by area, as the land-use lookup does, would give fractional counts and a 14.9M-polygon intersection
-  for footprints far smaller than a 350 m cell. Computing the id in the transform instead would avoid the
-  re-extract but repeat the work on every run and treat the two building layers differently.
+- **A lookup like land use, not counts.** The first version of this PR placed each building in one cell by its
+  centroid and published a per-building category table plus per-cell counts. The maintainer wanted the building ids
+  that intersect each cell, as the land-use lookup gives them: every building stays traceable by `osm_id`, a
+  straddling building appears in each of its cells, and counts or areas per category are a group-by on the lookup.
+  The centroid version needed cell ids on the extract (and a re-extract); this doesn't.
+- **Same columns and the same SQL as the land-use lookup** (`build_lookup`), so a consumer can union the two. The
+  cost is the intersection: 78 s against 2 s for the centroid group-by.
+- **Crime cells only**, as for every lookup on this grid, where the centroid counts covered every cell.
 - **Use before building type, first match wins**, with `osm_tags.category_case`. `building=house` + `amenity=pub`
-  is hospitality. Where `beahiv_osm_landuse` has the same category its tags are reused, so the two tables can't
-  drift on what a pub or a school is.
+  is hospitality. Where `beahiv_osm_landuse` has the same category its tags are reused (a test holds them to it),
+  so the two lookups can't drift on what a pub or a school is.
 - **Every building gets a category** (land use drops the uncategorised). `unspecified` and `other` are kept apart:
   the first is OSM saying nothing, which Verisk can fill; the second is a value with no category here.
-- **Level tags become an `underground` flag, not a category.** They say where a building is, not what it is for.
-  Underground buildings (1,733) are left out of the counts, having no footprint at street level, and kept in the
-  per-building table. Only a plain negative `layer` / `level` counts (`-1;0` spans the ground floor).
-- **Every cell with a building, not crime cells only**, as for `bh350eef_building_counts`: the cell comes from the
-  building itself, so the step depends on no other.
-- **Stations by tag only.** The platform and train-shed rules need a spatial join to `osm_landuse`; kept out so this
-  step stays a group-by.
-- **One step, two outputs**, under `Grid.BEAHIV` although the per-building table isn't grid-specific: every step
-  needs a family, and the counts are this grid's.
+- **Level tags filter, they don't categorise.** They say where a building is, not what it is for. Buildings below
+  ground (1,733 nationally) are left out, having no footprint at street level; a column for them would break the
+  shared schema. Only a plain negative `layer` / `level` counts (`-1;0` spans the ground floor).
+- **Stations by tag only.** The platform and train-shed rules need a spatial join to `osm_landuse`.
+- **BEAHIV only**, as for land use. Another grid is the same query over that unit's cells.
 
 **Follow-ups**
 
@@ -109,8 +104,7 @@ the counts table has 943,659 rows over 460,353 cells. The parquets are 273 MB an
 - **Station rules**: a building touched by 3+ platforms, or a roof over one. Until then most station buildings are
   `unspecified` or `outbuilding` (`building=roof`).
 - **`other`**: `terraced`, `mobile_home`, `houseboat` and `glasshouse` could join existing categories.
-- **H3 counts**: `h3r9_id` is on the per-building table, so an `h3r9_osm_building_counts` is a group-by away.
-- The transform still loads and RTree-indexes the 14.9M footprints for a step that reads no geometry.
+- **Other grids**: `build_lookup` takes the BEAHIV cells; the H3 or hotspot units would need it to take a unit.
 
 ## OSM land use per BEAHIV cell (`beahiv_osm_landuse`)
 

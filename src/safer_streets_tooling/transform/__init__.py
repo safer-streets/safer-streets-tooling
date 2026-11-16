@@ -68,7 +68,7 @@ STEPS: tuple[TransformStep, ...] = (
     beahiv_geogs.STEP,  # depends on beahiv_geo_lookups + beahiv_lookups (+ beahiv_retail_centre_lookups)
     beahiv_descriptions.STEP,  # depends on beahiv_geogs + beahiv_lookups: names for every cell
     beahiv_osm_landuse.STEP,  # depends on beahiv_counts: OSM land-use polygons per BEAHIV cell, with their share
-    beahiv_osm_buildings.STEP,  # independent: one category per OSM building, and their counts per BEAHIV cell
+    beahiv_osm_buildings.STEP,  # depends on beahiv_counts: OSM buildings per BEAHIV cell, with their share
 )
 
 

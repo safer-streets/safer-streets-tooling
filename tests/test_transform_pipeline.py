@@ -66,7 +66,7 @@ def test_pipeline_wires_data_dependencies():
     assert pipeline.nodes["beahiv_geogs"].dependency_ids == ("beahiv_counts", "beahiv_geo_lookups", "beahiv_lookups")
     assert pipeline.nodes["beahiv_descriptions"].dependency_ids == ("beahiv_lookups", "beahiv_geogs")
     assert pipeline.nodes["beahiv_osm_landuse"].dependency_ids == ("beahiv_counts",)
-    assert pipeline.nodes["beahiv_osm_buildings"].dependency_ids == ()  # every cell with a building, not crime cells
+    assert pipeline.nodes["beahiv_osm_buildings"].dependency_ids == ("beahiv_counts",)
 
 
 def test_retail_centre_lookups_are_opt_in_on_every_grid():

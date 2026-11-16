@@ -1,122 +1,130 @@
-"""Tests for the OSM buildings step: one category per building, the underground flag, and the per-cell counts.
+"""Tests for the OSM buildings lookup on the BEAHIV grid: categories, overlap percentages and which cells get rows.
 
-The step only reads columns (the extract has already put each building in a cell), so the fixture is a plain table in
-the extract's schema without geometry. Nothing is downloaded and no extension is loaded.
+One crime puts one cell on the grid. The footprints are drawn relative to that cell's own outline (beahiv's
+``cell_polygon``), so the expected percentages are exact areas over :data:`CELL_AREA`. Synthetic fixtures only —
+offline-safe, mirroring test_beahiv_osm_landuse.
 """
 
 import duckdb
 import pandas as pd
 import pytest
+import shapely
+from beahiv import cell_polygon
+from safer_streets_core.database import duckdb_connector, index_geometry_tables
 
+from safer_streets_tooling.beahiv_grid import CELL_AREA
 from safer_streets_tooling.extract import osm_landuse
+from safer_streets_tooling.transform import beahiv, beahiv_counts, beahiv_osm_landuse
 from safer_streets_tooling.transform import beahiv_osm_buildings as step
 
+CRIME = (430050.0, 433050.0)  # BNG, central Leeds
 TAGS = osm_landuse.BUILDING_TAGS
-CELL_A, CELL_B = 101, 202
-
-# osm_id, tags, name, area_m2, bh350eef_id
-BUILDINGS: list[tuple[str, dict[str, str], str | None, float, int | None]] = [
-    ("way/1", {"building": "house"}, None, 60.0, CELL_A),
-    ("way/2", {"building": "terrace"}, None, 300.0, CELL_A),
-    ("way/3", {"building": "house", "amenity": "pub"}, "The Owl", 200.0, CELL_A),  # its use, not its type
-    ("way/4", {"building": "yes"}, None, 100.0, CELL_A),
-    ("way/5", {"building": "retail", "shop": "vacant"}, None, 80.0, CELL_B),  # an empty unit is still retail-built
-    ("way/6", {"building": "yes", "amenity": "parking", "layer": "-1"}, None, 5000.0, CELL_B),  # underground
-    ("way/7", {"building": "bridge"}, None, 40.0, CELL_B),
-    ("relation/8", {"building": "yes", "office": "company"}, "Acme", 900.0, None),  # centroid off the grid
-]
 
 
-def _buildings(con: duckdb.DuckDBPyConnection, *, tagged: bool = True) -> None:
-    """``osm_buildings`` in the extract's schema, less ``geom`` (and less the cell ids when not ``tagged``)."""
-    cols = [f'"{key}" VARCHAR' for key in TAGS]
-    con.execute(
-        f"CREATE TABLE osm_buildings (osm_id VARCHAR, {', '.join(cols)}, name VARCHAR, area_m2 DOUBLE, "
-        "h3r9_id VARCHAR, bh350eef_id BIGINT)"
-    )
+def _connect() -> duckdb.DuckDBPyConnection:
+    try:
+        return duckdb_connector(writeable=True)
+    except duckdb.HTTPException as e:  # extension download unavailable
+        pytest.skip(f"extension download unavailable: {e}")
+
+
+def _grid(con: duckdb.DuckDBPyConnection) -> shapely.Polygon:
+    """Put one crime on the grid and return the outline of the cell it lands in."""
+    x, y = CRIME
+    con.execute(f"""
+        CREATE TABLE crime_data AS
+        SELECT ST_Point({x}, {y}) AS geom, 'Burglary' AS crime_type, '2024-01' AS _month,
+               'West Yorkshire Police' AS falls_within, -1.55 AS longitude, 53.8 AS latitude
+    """)
+    beahiv_counts.build(con, True)
+    (spatial_id,) = con.execute(f"SELECT spatial_id FROM {beahiv.COUNTS_TABLE}").fetchone()  # ty:ignore[not-iterable]
+    return cell_polygon(spatial_id)
+
+
+def _buildings(con: duckdb.DuckDBPyConnection, rows: list[tuple[str, dict[str, str], shapely.Geometry]]) -> None:
+    """``osm_buildings`` in the extract's schema: a column per tag (NULL unless given) and a BNG ``geom``."""
+    columns = ("osm_id", *TAGS, "wkt")
+    con.execute(f"CREATE TABLE f ({', '.join(f'"{col}" VARCHAR' for col in columns)})")
     con.executemany(
-        f"INSERT INTO osm_buildings VALUES ({', '.join('?' for _ in range(len(TAGS) + 5))})",
+        f"INSERT INTO f VALUES ({', '.join('?' for _ in columns)})",
+        [[osm_id, *(tags.get(key) for key in TAGS), g.wkt] for osm_id, tags, g in rows],
+    )
+    con.execute("CREATE TABLE osm_buildings AS SELECT * EXCLUDE (wkt), ST_GeomFromText(wkt) AS geom FROM f")
+    index_geometry_tables(con)  # as the transform does on import: repaired, labelled BNG, RTree-indexed
+
+
+def _box(cx: float, cy: float, half: float) -> shapely.Polygon:
+    return shapely.box(cx - half, cy - half, cx + half, cy + half)
+
+
+@pytest.fixture
+def lookup() -> pd.DataFrame:
+    con = _connect()
+    cell = _grid(con)
+    cx, cy = cell.centroid.x, cell.centroid.y
+    top = max(y for _, y in cell.exterior.coords)  # a flat-topped cell: its top edge is horizontal through (cx, top)
+    _buildings(
+        con,
         [
-            [osm_id, *(tags.get(key) for key in TAGS), name, area, "891f1d48177ffff", cell]
-            for osm_id, tags, name, area, cell in BUILDINGS
+            ("way/1", {"building": "house"}, _box(cx, cy, 5)),
+            ("way/2", {"building": "house", "amenity": "pub"}, _box(cx + 50, cy, 10)),  # its use, not its type
+            ("way/3", {"building": "yes"}, _box(cx - 50, cy, 10)),
+            ("way/4", {"building": "bridge"}, _box(cx, cy + 50, 10)),
+            ("way/5", {"building": "yes", "amenity": "parking", "layer": "-1"}, _box(cx, cy - 50, 40)),  # underground
+            ("way/6", {"building": "retail"}, _box(cx + 5000, cy, 10)),  # in a cell without crimes
+            ("relation/7", {"building": "warehouse"}, _box(cx, top, 10)),  # half in this cell, half in the next
         ],
     )
-    if not tagged:
-        con.execute("ALTER TABLE osm_buildings DROP COLUMN bh350eef_id")
-
-
-@pytest.fixture
-def con() -> duckdb.DuckDBPyConnection:
-    con = duckdb.connect()
-    _buildings(con)
     step.build(con, True)
-    return con
+    return con.execute(f"SELECT * FROM {step.TABLE}").df()
 
 
-@pytest.fixture
-def categories(con) -> pd.DataFrame:
-    return con.execute(f"SELECT * FROM {step.TABLE}").df().set_index("osm_id")
+def test_same_columns_as_the_landuse_lookup(lookup):
+    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_pct", "category"]
+    assert lookup.spatial_id.nunique() == 1  # the only cell with a crime
 
 
-@pytest.fixture
-def counts(con) -> pd.DataFrame:
-    return con.execute(f"SELECT * FROM {step.COUNTS_TABLE}").df().set_index(["spatial_id", "category"])
+def test_overlap_is_the_percentage_of_the_cell_the_footprint_covers(lookup):
+    """Only the part inside the cell counts: the warehouse straddling the top edge gives half its footprint."""
+    expected = {
+        "way/1": 100 * 10**2 / CELL_AREA,
+        "way/2": 100 * 20**2 / CELL_AREA,
+        "way/3": 100 * 20**2 / CELL_AREA,
+        "way/4": 100 * 20**2 / CELL_AREA,
+        "relation/7": 100 * 20 * 10 / CELL_AREA,
+    }
+    assert lookup.set_index("osm_id").overlap_pct.to_dict() == pytest.approx(expected)
 
 
-def test_one_row_per_building_with_the_tags_condensed(categories):
-    assert list(categories.columns) == [
-        "category",
-        "building",
-        "name",
-        "area_m2",
-        "underground",
-        "h3r9_id",
-        "bh350eef_id",
-    ]
-    assert categories.category.to_dict() == {
+def test_every_building_above_ground_has_a_category(lookup):
+    """Unlike land use nothing is dropped for want of a category; the underground car park (way/5) is left out."""
+    assert lookup.set_index("osm_id").category.to_dict() == {
         "way/1": "residential",
-        "way/2": "residential",
-        "way/3": "hospitality",
-        "way/4": "unspecified",
-        "way/5": "shop",
-        "way/6": "parking",
-        "way/7": "other",
-        "relation/8": "office",
+        "way/2": "hospitality",
+        "way/3": "unspecified",
+        "way/4": "other",
+        "relation/7": "industrial",
     }
-    assert categories.loc["way/3", ["building", "name"]].tolist() == ["house", "The Owl"]
 
 
-def test_underground_flag(categories):
-    assert categories.index[categories.underground].tolist() == ["way/6"]
-
-
-def test_counts_per_cell_and_category(counts):
-    """Count and footprint per (cell, category): the underground car park and the building with no cell are left out."""
-    assert counts.building_count.to_dict() == {
-        (CELL_A, "residential"): 2,
-        (CELL_A, "hospitality"): 1,
-        (CELL_A, "unspecified"): 1,
-        (CELL_B, "shop"): 1,
-        (CELL_B, "other"): 1,
-    }
-    assert counts.footprint_area[(CELL_A, "residential")] == 360.0
-
-
-def test_outputs_are_both_tables():
-    con = duckdb.connect()
-    _buildings(con)
-    assert step.outputs(con) == ["osm_building_categories", "bh350eef_osm_building_counts"]
-
-
-@pytest.mark.parametrize("tagged", [None, False])
-def test_noop_without_a_tagged_extract(tagged):
-    """No extract at all, or one from before it carried the cell ids: nothing is built and nothing is declared."""
-    con = duckdb.connect()
-    if tagged is not None:
-        _buildings(con, tagged=tagged)
+def test_noop_without_the_extract():
+    con = _connect()
+    _grid(con)
     assert step.outputs(con) == []
     step.build(con, True)
-    assert not con.execute("SELECT * FROM duckdb_tables() WHERE table_name <> 'osm_buildings'").fetchall()
+    assert not con.execute(f"SELECT * FROM duckdb_tables() WHERE table_name = '{step.TABLE}'").fetchall()
+
+
+def test_noop_without_the_grid():
+    con = _connect()
+    _buildings(con, [("way/1", {"building": "house"}, _box(0, 0, 5))])
+    assert step.outputs(con) == []
+
+
+def test_shared_categories_use_the_landuse_tags():
+    """A pub, a shop or a school is the same thing on either lookup: the buildings table only adds building=*."""
+    for name in ("hospitality", "station", "shop", "office", "education", "health", "parking"):
+        assert beahiv_osm_landuse.CATEGORIES[name].items() <= step.CATEGORIES[name].items()
 
 
 @pytest.mark.parametrize(

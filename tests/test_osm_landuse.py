@@ -9,10 +9,8 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 import pytest
-from beahiv import bng_to_cell
 from safer_streets_core.database import duckdb_connector
 
-from safer_streets_tooling.beahiv_grid import MEASURE, ORIENTATION, SIZE
 from safer_streets_tooling.extract import BY_NAME, osm_landuse
 from safer_streets_tooling.extract.base import ExtractContext
 
@@ -116,8 +114,6 @@ def test_buildings_table_has_one_row_per_building(extracted):
         *LEVEL_COLUMNS,
         "name",
         "area_m2",
-        "h3r9_id",
-        "bh350eef_id",
     ]
     assert sorted(df.index) == ["way/8", "way/9"]
     assert (df.loc["way/8", "building"], df.loc["way/8", "shop"], df.loc["way/8", "name"]) == (
@@ -126,16 +122,6 @@ def test_buildings_table_has_one_row_per_building(extracted):
         "Co-op",
     )
     assert df.loc["way/9", "landuse"] == "retail"
-
-
-def test_building_is_tagged_with_the_cells_of_its_centroid(extracted):
-    """Both buildings are SHOP, whose centroid is (430020, 433020): one cell on each grid, the one that point is in."""
-    df = _read(extracted, "osm_buildings")
-    assert set(df.bh350eef_id) == {
-        int(bng_to_cell(430020, 433020, size=SIZE, measure=MEASURE, orientation=ORIENTATION))
-    }
-    assert df.h3r9_id.nunique() == 1 and df.h3r9_id.str.fullmatch("[0-9a-f]{15}").all()
-    assert "bh350eef_id" not in _read(extracted, "osm_landuse").columns  # land use is shared out by area instead
 
 
 def test_every_filter_key_is_kept_not_just_the_first_match(extracted):
