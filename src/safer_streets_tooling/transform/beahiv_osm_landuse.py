@@ -65,32 +65,38 @@ def _available(con: duckdb.DuckDBPyConnection) -> bool:
     return beahiv.available(con) and table_exists(con, SOURCE)
 
 
-def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
-    """Create the lookup: every categorised polygon intersected with every crime cell it overlaps.
+def build_lookup(con: duckdb.DuckDBPyConnection, table: str, features: str, replace: bool) -> None:
+    """Create ``table``: every feature of ``features`` intersected with every crime cell it overlaps.
+
+    ``features`` is a query giving ``osm_id``, ``category`` and ``geom``. Shared with ``beahiv_osm_buildings``, so the
+    two lookups have the same columns and the same measure of overlap.
 
     A table rather than a view (the overlap lookups are views): the intersections are the costly part, and a view
     would recompute them for every read, the parquet write included. Rows for a polygon that only touches a cell's
     edge (zero overlap) are dropped.
     """
-    if not _available(con):
-        return
     beahiv.register_udfs(con)
     con.execute(f"""
-        {create_clause("TABLE", TABLE, replace=replace)} AS
-        WITH landuse AS (
-            SELECT * FROM (SELECT osm_id, {CATEGORY} AS category, geom FROM {SOURCE}) WHERE category IS NOT NULL
-        ),
-        clipped AS (
-            SELECT c.spatial_id, l.osm_id,
-                   100 * ST_Area(ST_Intersection(c.cell_geom, l.geom)) / {CELL_AREA!r} AS overlap_pct,
-                   l.category
+        {create_clause("TABLE", table, replace=replace)} AS
+        WITH clipped AS (
+            SELECT c.spatial_id, f.osm_id,
+                   100 * ST_Area(ST_Intersection(c.cell_geom, f.geom)) / {CELL_AREA!r} AS overlap_pct,
+                   f.category
             FROM ({beahiv.BEAHIV_UNIT.cells}) c
-            JOIN landuse l ON ST_Intersects(c.cell_geom, l.geom)
+            JOIN ({features}) f ON ST_Intersects(c.cell_geom, f.geom)
         )
         SELECT * FROM clipped WHERE overlap_pct > 0
     """)
-    rows, cells = con.execute(f"SELECT COUNT(*), COUNT(DISTINCT spatial_id) FROM {TABLE}").fetchone()  # ty:ignore[not-iterable]
-    print(f"  {TABLE}: {rows:,} overlaps in {cells:,} cells")
+    rows, cells = con.execute(f"SELECT COUNT(*), COUNT(DISTINCT spatial_id) FROM {table}").fetchone()  # ty:ignore[not-iterable]
+    print(f"  {table}: {rows:,} overlaps in {cells:,} cells")
+
+
+def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
+    """Create the lookup from every categorised land-use polygon (see :func:`build_lookup`)."""
+    if not _available(con):
+        return
+    features = f"SELECT * FROM (SELECT osm_id, {CATEGORY} AS category, geom FROM {SOURCE}) WHERE category IS NOT NULL"
+    build_lookup(con, TABLE, features, replace)
 
 
 def outputs(con: duckdb.DuckDBPyConnection) -> list[str]:
