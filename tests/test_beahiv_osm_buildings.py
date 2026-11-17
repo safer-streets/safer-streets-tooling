@@ -1,7 +1,7 @@
-"""Tests for the OSM buildings lookup on the BEAHIV grid: categories, overlap percentages and which cells get rows.
+"""Tests for the OSM buildings lookup on the BEAHIV grid: categories, overlap areas and which cells get rows.
 
 One crime puts one cell on the grid. The footprints are drawn relative to that cell's own outline (beahiv's
-``cell_polygon``), so the expected percentages are exact areas over :data:`CELL_AREA`. Synthetic fixtures only —
+``cell_polygon``), so the expected overlaps are exact areas in m². Synthetic fixtures only —
 offline-safe, mirroring test_beahiv_osm_landuse.
 """
 
@@ -12,7 +12,6 @@ import shapely
 from beahiv import cell_polygon
 from safer_streets_core.database import duckdb_connector, index_geometry_tables
 
-from safer_streets_tooling.beahiv_grid import CELL_AREA
 from safer_streets_tooling.extract import osm_landuse
 from safer_streets_tooling.transform import beahiv, beahiv_counts, beahiv_osm_landuse
 from safer_streets_tooling.transform import beahiv_osm_buildings as step
@@ -80,20 +79,20 @@ def lookup() -> pd.DataFrame:
 
 
 def test_same_columns_as_the_landuse_lookup(lookup):
-    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_pct", "category"]
+    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_area", "category"]
     assert lookup.spatial_id.nunique() == 1  # the only cell with a crime
 
 
-def test_overlap_is_the_percentage_of_the_cell_the_footprint_covers(lookup):
-    """Only the part inside the cell counts: the warehouse straddling the top edge gives half its footprint."""
+def test_overlap_is_the_area_of_the_footprint_inside_the_cell(lookup):
+    """In m², and only the part inside the cell: the warehouse straddling the top edge gives half its footprint."""
     expected = {
-        "way/1": 100 * 10**2 / CELL_AREA,
-        "way/2": 100 * 20**2 / CELL_AREA,
-        "way/3": 100 * 20**2 / CELL_AREA,
-        "way/4": 100 * 20**2 / CELL_AREA,
-        "relation/7": 100 * 20 * 10 / CELL_AREA,
+        "way/1": 10.0**2,
+        "way/2": 20.0**2,
+        "way/3": 20.0**2,
+        "way/4": 20.0**2,
+        "relation/7": 20.0 * 10,
     }
-    assert lookup.set_index("osm_id").overlap_pct.to_dict() == pytest.approx(expected)
+    assert lookup.set_index("osm_id").overlap_area.to_dict() == pytest.approx(expected)
 
 
 def test_every_building_above_ground_has_a_category(lookup):

@@ -16,7 +16,10 @@ lookup (see :mod:`.retail_centre_lookups`): it is opt-in, and every overlapping 
 so which it returns among them is arbitrary.
 
 The components are kept as columns, so a consumer can reassemble or filter them; ``roads`` lists the four
-longest named roads.
+longest named roads. The land the ``character`` is read from is kept in m², like every overlap in this package:
+``urban_overlap_area`` / ``suburban_overlap_area`` (as in ``*_geogs``, NULL when no land cover was loaded) and
+``greenspace_area``, the part of the cell inside the named ``greenspace`` (its sites summed, so not ``*_geogs``'
+largest single site).
 
 Every name source is optional, as it is for the lookups: a missing table or column contributes an empty
 relation, and its clause drops out of the labels.
@@ -42,6 +45,7 @@ from safer_streets_tooling.transform.ons_hierarchy import GEOGRAPHY_MAPPINGS
 
 DATASET = "descriptions"
 
+# The wording thresholds are shares of the cell; the table itself carries areas.
 GREENSPACE_MIN_SHARE = 0.2  # a named greenspace must cover this share of the cell to be mentioned
 GREENSPACE_IN_SHARE = 0.5  # ...and this share to say "in" rather than "by" (or, unbuilt, "Open space")
 
@@ -122,12 +126,12 @@ def _retail(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, geogs: str) -> st
     """
 
 
-def _prop(con: duckdb.DuckDBPyConnection, geogs: str, column: str) -> str:
+def _area(con: duckdb.DuckDBPyConnection, geogs: str, column: str) -> str:
     # a NULL overlap is a structural zero (no land cover of that kind); an absent column means the land
     # cover wasn't loaded, which is unknown rather than zero
     if not column_exists(con, geogs, column):
         return "NULL::DOUBLE"
-    return f"coalesce(h.{column}, 0) / h.cell_area"
+    return f"coalesce(h.{column}, 0)"
 
 
 def _names(key: str) -> str:
@@ -166,17 +170,10 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
         school AS ({_schools(con, unit, geogs)}),
         retail AS ({_retail(con, unit, geogs)}),
         parts AS (
-            SELECT h.spatial_id, lad24cd.lad24nm, msoa21cd.msoa21nm, lsoa21cd.lsoa21nm,
-                   {_prop(con, geogs, "urban_overlap_area")} AS prop_urban,
-                   {_prop(con, geogs, "suburban_overlap_area")} AS prop_suburban,
-                   coalesce(mg.greenspace_area / h.cell_area, 0) AS greenspace_share,
-                   CASE WHEN prop_urban IS NULL THEN NULL
-                        WHEN prop_urban >= 0.5 THEN 'Urban'
-                        WHEN prop_urban + prop_suburban >= 0.5 THEN 'Suburban'
-                        WHEN prop_urban + prop_suburban >= 0.15 THEN 'Edge of built-up area'
-                        -- a park inside a town is not "rural", though it has no built-up land cover
-                        WHEN greenspace_share >= {GREENSPACE_IN_SHARE} THEN 'Open space'
-                        ELSE 'Rural' END AS character,
+            SELECT h.spatial_id, h.cell_area, lad24cd.lad24nm, msoa21cd.msoa21nm, lsoa21cd.lsoa21nm,
+                   {_area(con, geogs, "urban_overlap_area")} AS urban_overlap_area,
+                   {_area(con, geogs, "suburban_overlap_area")} AS suburban_overlap_area,
+                   coalesce(mg.greenspace_area, 0) AS greenspace_area,
                    mr.road, rl.road_pair, rl.roads, mg.greenspace, s.school, rc.retail_centre, rc.retail_class,
                    -- ONS writes some LADs "Bristol, City of", which reads oddly at the end of a location
                    regexp_replace(lad24cd.lad24nm, '^(.*), City of$', 'City of \\1') AS lad_name
@@ -190,16 +187,25 @@ def build_unit(con: duckdb.DuckDBPyConnection, unit: SpatialUnit, replace: bool)
             LEFT JOIN school s ON h.spatial_id = s.spatial_id
             LEFT JOIN retail rc ON h.spatial_id = rc.spatial_id
         ),
+        -- classified here, not in parts, where an unqualified urban_overlap_area would be h's uncoalesced column
         labelled AS (
             SELECT *,
+                CASE WHEN urban_overlap_area IS NULL THEN NULL
+                     WHEN urban_overlap_area >= 0.5 * cell_area THEN 'Urban'
+                     WHEN urban_overlap_area + suburban_overlap_area >= 0.5 * cell_area THEN 'Suburban'
+                     WHEN urban_overlap_area + suburban_overlap_area >= 0.15 * cell_area THEN 'Edge of built-up area'
+                     -- a park inside a town is not "rural", though it has no built-up land cover
+                     WHEN greenspace_area >= {GREENSPACE_IN_SHARE} * cell_area THEN 'Open space'
+                     ELSE 'Rural' END AS character,
                 concat_ws(', ', character, 'on ' || road,
-                    CASE WHEN greenspace_share >= {GREENSPACE_IN_SHARE} THEN 'in ' || greenspace
-                         WHEN greenspace_share >= {GREENSPACE_MIN_SHARE} THEN 'by ' || greenspace END,
+                    CASE WHEN greenspace_area >= {GREENSPACE_IN_SHARE} * cell_area THEN 'in ' || greenspace
+                         WHEN greenspace_area >= {GREENSPACE_MIN_SHARE} * cell_area THEN 'by ' || greenspace END,
                     'near ' || school) AS head,
                 'retail: ' || retail_centre || ' (' || lower(retail_class) || ')' AS retail_clause
             FROM parts
         )
-        SELECT spatial_id, lad24nm, msoa21nm, lsoa21nm, prop_urban, prop_suburban, greenspace_share, character,
+        SELECT spatial_id, lad24nm, msoa21nm, lsoa21nm, urban_overlap_area, suburban_overlap_area, greenspace_area,
+               character,
                road, road_pair, roads, greenspace, school, retail_centre, retail_class,
                concat_ws('. ', nullif(concat_ws('; ', nullif(head, ''), retail_clause), ''),
                          coalesce(msoa21nm, lad24nm)) || '.' AS description,

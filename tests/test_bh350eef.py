@@ -18,7 +18,7 @@ from safer_streets_tooling.extract.bh350eef import (
     MEASURE,
     ORIENTATION,
     SIZE,
-    cell_proportions,
+    cell_overlap_areas,
     extract,
     polyfill_force,
     quad_tiles,
@@ -73,7 +73,7 @@ def test_quad_tiles_returns_whole_geometry_when_small():
 
 
 def test_quad_tiles_partitions_without_gaps_or_overlaps():
-    """Tiles are disjoint and their areas sum back to the original — the property proportions rely on."""
+    """Tiles are disjoint and their areas sum back to the original — the property the overlap areas rely on."""
     geom = shapely.Point(430000, 430000).buffer(5000, quad_segs=64)
     tiles = quad_tiles(geom, max_vertices=20)
     assert len(tiles) > 1
@@ -95,52 +95,52 @@ def test_quad_tiles_empty_geometry():
 
 def test_interior_cells_are_whole_and_edge_cells_are_partial():
     geom = _square(430000, 430000, 5000)
-    cell_ids, proportion, polys = polyfill_force(geom)
+    cell_ids, overlap, polys = polyfill_force(geom)
 
-    assert cell_ids.size == len(proportion) == len(polys)
-    assert proportion.min() > 0.0
-    assert proportion.max() == pytest.approx(1.0)
-    assert (proportion == 1.0).sum() > 0  # interior
-    assert (proportion < 1.0).sum() > 0  # straddling the square's edge
+    assert cell_ids.size == len(overlap) == len(polys)
+    assert overlap.min() > 0.0
+    assert overlap.max() == pytest.approx(HEX_AREA)
+    assert np.isclose(overlap, HEX_AREA, rtol=1e-9).sum() > 0  # interior
+    assert (overlap < HEX_AREA * (1 - 1e-9)).sum() > 0  # straddling the square's edge
 
 
-def test_proportions_reproduce_the_polygon_area():
-    """sum(proportion) * hex area == the polygon's own area: the grid tiles it exactly."""
+def test_overlap_areas_reproduce_the_polygon_area():
+    """sum(overlap_area) == the polygon's own area: the grid tiles it exactly."""
     geom = _square(430000, 430000, 5000)
-    _, proportion, _ = polyfill_force(geom)
-    assert (proportion.sum() * HEX_AREA) == pytest.approx(geom.area, rel=1e-9)
+    _, overlap, _ = polyfill_force(geom)
+    assert overlap.sum() == pytest.approx(geom.area, rel=1e-9)
 
 
-def test_proportions_match_a_direct_clip():
+def test_overlap_areas_match_a_direct_clip():
     """The tiled clip agrees with intersecting each cell against the whole polygon."""
     geom = shapely.union_all([_square(430000, 430000, 3000), _square(432000, 432500, 2000)])
-    cell_ids, proportion, polys = polyfill_force(geom)
+    cell_ids, overlap, polys = polyfill_force(geom)
     cell_polys = np.asarray(polys, dtype=object)
 
-    direct = shapely.area(shapely.intersection(geom, cell_polys)) / shapely.area(cell_polys)
-    assert np.abs(proportion - direct).max() < 1e-9
+    direct = shapely.area(shapely.intersection(geom, cell_polys))
+    assert np.abs(overlap - direct).max() < 1e-9 * HEX_AREA
     assert cell_ids.size == len(direct)
 
 
-def test_cell_proportions_all_inside():
-    """A polygon far larger than the cells leaves every proportion at exactly 1.0."""
+def test_cell_overlap_areas_all_inside():
+    """A polygon far larger than the cells leaves every cell its whole area."""
     geom = _square(400000, 400000, 50000)
     cell_ids = np.asarray(
         bh.polyfill(_square(430000, 430000, 2000), size=SIZE, measure=MEASURE, orientation=ORIENTATION), dtype=np.int64
     )
     cell_polys = np.asarray(bh.cell_polygons(cell_ids), dtype=object)
-    assert (cell_proportions(geom, cell_polys) == 1.0).all()
+    assert (cell_overlap_areas(geom, cell_polys) == shapely.area(cell_polys)).all()
 
 
 def test_polyfill_force_empty_polygon():
-    cell_ids, proportion, polys = polyfill_force(shapely.from_wkt("POLYGON EMPTY"))
+    cell_ids, overlap, polys = polyfill_force(shapely.from_wkt("POLYGON EMPTY"))
     assert cell_ids.size == 0
-    assert proportion.size == 0
+    assert overlap.size == 0
     assert polys == []
 
 
 def test_extract_writes_one_row_per_cell_and_force(tmp_path):
-    """Two adjacent forces: shared boundary cells appear under both, and their proportions sum to 1."""
+    """Two adjacent forces: shared boundary cells appear under both, and their areas sum to the cell's."""
     _write_pfas(
         tmp_path,
         [
@@ -156,7 +156,7 @@ def test_extract_writes_one_row_per_cell_and_force(tmp_path):
     try:
         con.execute(f"CREATE TABLE g AS SELECT * FROM read_parquet('{out.as_posix()}')")
         info = con.execute("PRAGMA table_info('g')").fetchall()
-        assert [r[1] for r in info] == ["spatial_id", "proportion", "pfa24cd", "pfa24nm", "geom"]
+        assert [r[1] for r in info] == ["spatial_id", "overlap_area", "pfa24cd", "pfa24nm", "geom"]
         # a signed integer id, matching bh350eef_crime_counts: every beahiv cell id is below 2**52,
         # so the grid and the counts join without a cast on either side
         assert info[0][2] == "BIGINT"
@@ -165,15 +165,21 @@ def test_extract_writes_one_row_per_cell_and_force(tmp_path):
         assert forces == 2
         assert rows > cells  # the shared boundary is double-counted, one row per force
 
-        assert _row(con, "SELECT count(*) FROM g WHERE proportion <= 0 OR proportion > 1")[0] == 0
-        assert _row(con, "SELECT count(*) FROM g WHERE proportion = 1.0")[0] > 0
+        whole = f"abs(overlap_area - {HEX_AREA}) < {1e-9 * HEX_AREA}"
+        assert (
+            _row(con, f"SELECT count(*) FROM g WHERE overlap_area <= 0 OR (overlap_area > {HEX_AREA} AND NOT {whole})")[
+                0
+            ]
+            == 0
+        )
+        assert _row(con, f"SELECT count(*) FROM g WHERE {whole}")[0] > 0
 
         # a cell touching both forces is split between them, never duplicated
         shared = _row(
             con,
-            "SELECT max(total) FROM (SELECT spatial_id, sum(proportion) total FROM g GROUP BY 1 HAVING count(*) > 1)",
+            "SELECT max(total) FROM (SELECT spatial_id, sum(overlap_area) total FROM g GROUP BY 1 HAVING count(*) > 1)",
         )[0]
-        assert shared == pytest.approx(1.0, abs=1e-9)
+        assert shared == pytest.approx(HEX_AREA, rel=1e-9)
 
         # geometry survives the round trip as the cell's own hexagon
         spatial_id, wkt = _row(con, "SELECT spatial_id, ST_AsText(geom) FROM g LIMIT 1")

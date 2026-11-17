@@ -7,6 +7,49 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## Polygon overlaps in m², never percentages (#45)
+
+**Why**: Overlap measures were mixed. The overlap lookups and `*_geogs` gave m² (`overlap_area`,
+`{prefix}_overlap_area`), but the OSM lookups gave `overlap_pct` (0–100), the descriptions gave `prop_urban`,
+`prop_suburban` and `greenspace_share` (0–1), and the `bh350eef` extract gave `proportion` (0–1). A percentage
+is ambiguous: of the cell or of the polygon? The README and the docstring of the land-use lookup had in fact
+described `overlap_pct` differently.
+
+**What**: Every polygon overlap a table outputs is now an area in m² (planar BNG):
+- `bh350eef_osm_landuse_lookup`, `bh350eef_osm_buildings_lookup`: `overlap_pct` → `overlap_area`, set in the shared
+  `build_lookup`.
+- `bh350eef_descriptions`, `hotspots_descriptions`: `prop_urban` / `prop_suburban` → `urban_overlap_area` /
+  `suburban_overlap_area`; `greenspace_share` → `greenspace_area`.
+- `bh350eef` extract: `proportion` → `overlap_area` (`cell_proportions` → `cell_overlap_areas`).
+
+The rule is written into AGENTS.md (Developer Rules) and README.
+
+**Design decisions**:
+- **m², not a share of the cell.** The share stays one division away (`overlap_area / cell_area`), and an area
+  says what it is. A percentage could also have been made unambiguous by naming (`cell_pct`), but m² matches
+  what the overlap lookups and geogs already carry, so one convention covers every table.
+- **`overlap_area` as the name**, as in the overlap lookups. Where a table has several, `{prefix}_overlap_area`, as
+  in the geogs. The exception is the descriptions' `greenspace_area`: it is the named greenspace's sites summed,
+  which is not the geogs' `greenspace_overlap_area` (its largest single site), so it doesn't take that name.
+- **Thresholds may stay shares.** The descriptions' wording ("Urban" at half the cell, a greenspace mentioned at a
+  fifth) is defined by shares, so `GREENSPACE_*_SHARE` stay as they are. They are now compared as a multiple of
+  `cell_area`, and only the areas are output.
+- **Descriptions classify in a later CTE.** `character` moved from `parts` to `labelled`. In `parts` an unqualified
+  `urban_overlap_area` resolves to `h`'s own uncoalesced column, not the alias, so a cell with no urban land would
+  read NULL ("unknown") instead of 0.
+- **The descriptions' areas kept rather than dropped**, though `urban_overlap_area` / `suburban_overlap_area`
+  repeat the geogs. A consumer of the labels can see why a cell was called "Suburban" without a join.
+- **One PR in three commits** (OSM lookups, descriptions, `bh350eef`) rather than three PRs, so the convention
+  lands in one go; each commit can be reviewed on its own.
+
+**Follow-ups**:
+- `bh350eef` must be re-extracted (no download: it is derived from `police_force_areas`), and the two OSM lookups
+  and the descriptions rebuilt.
+- safer-streets-eda reads the old columns: `overlap_pct` in `osm-landuse.ipynb` and `etl.ipynb`, `greenspace_share`
+  in `hex_labels_batch.py` (its 0.2 threshold becomes `greenspace_area >= 0.2 * cell_area`), and `proportion` in
+  `beahiv-characterisation.ipynb`. peer-hex-explorer reads only `description`, so it is unaffected.
+- The domain feature tables (#37–#43) follow the rule from the start.
+
 ## OSM buildings per BEAHIV cell (`beahiv_osm_buildings`)
 
 **Why**: `osm_buildings` was extracted but nothing used it. A building's use is spread over eight tag columns and
