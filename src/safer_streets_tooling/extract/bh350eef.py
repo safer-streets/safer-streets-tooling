@@ -1,9 +1,10 @@
 """BEAHIV hex grid (350m edge-to-edge, flat) over the police force areas → ``bh350eef.parquet``.
 
 One row per (hex cell, police force area) covering England & Wales, derived from the
-``police_force_areas`` boundaries rather than downloaded. ``proportion`` is the fraction of the cell's
-area lying inside that force, so a cell straddling a boundary appears once per force it touches and
-its proportions sum to 1 (less on a coast, where part of the cell is sea).
+``police_force_areas`` boundaries rather than downloaded. ``overlap_area`` is the area (m²) of the cell
+lying inside that force, so a cell straddling a boundary appears once per force it touches and its
+overlap areas sum to the cell's area (less on a coast, where part of the cell is sea). An area rather
+than a fraction, as for every overlap in this package: divide by the cell's area for its share.
 
 beahiv works natively in British National Grid, so no reprojection happens here. ``spatial_id`` is the
 cell id as a plain ``BIGINT``: every beahiv id is below 2**52, so every one of them fits a signed
@@ -58,8 +59,8 @@ def quad_tiles(geom: BaseGeometry, max_vertices: int = _MAX_TILE_VERTICES) -> li
     return tiles
 
 
-def cell_proportions(polygon: BaseGeometry, cell_polys: np.ndarray) -> np.ndarray:
-    """Fraction of each cell's area falling inside polygon; 1.0 for cells wholly within it.
+def cell_overlap_areas(polygon: BaseGeometry, cell_polys: np.ndarray) -> np.ndarray:
+    """Area (m²) of each cell falling inside polygon; the cell's own area for cells wholly within it.
 
     Two steps. Which cells straddle the boundary is one prepared pass over all of them — a second
     ``polyfill(predicate="full")`` diffed against the overlap set gives the identical answer but costs
@@ -68,24 +69,24 @@ def cell_proportions(polygon: BaseGeometry, cell_polys: np.ndarray) -> np.ndarra
     quadtree tiles instead. The tiles are disjoint, so the per-cell areas simply add.
     """
     shapely.prepare(polygon)
-    proportion = np.ones(len(cell_polys))
+    overlap = shapely.area(cell_polys)
     edge = np.flatnonzero(~shapely.contains_properly(polygon, cell_polys))
     if edge.size:
         tiles = np.array(quad_tiles(polygon), dtype=object)
         cell_i, tile_i = shapely.STRtree(tiles).query(cell_polys[edge], predicate="intersects")
         clipped = np.zeros(edge.size)
         np.add.at(clipped, cell_i, shapely.area(shapely.intersection(cell_polys[edge][cell_i], tiles[tile_i])))
-        proportion[edge] = clipped / shapely.area(cell_polys[edge])
-    return proportion
+        overlap[edge] = clipped
+    return overlap
 
 
 def polyfill_force(polygon: BaseGeometry) -> tuple[np.ndarray, np.ndarray, list[BaseGeometry]]:
-    """Cell ids covering polygon, the proportion of each inside it, and their hex outlines."""
+    """Cell ids covering polygon, the area (m²) of each inside it, and their hex outlines."""
     cell_ids = np.asarray(bh.polyfill(polygon, size=SIZE, measure=MEASURE, orientation=ORIENTATION), dtype=np.int64)
     if cell_ids.size == 0:
         return cell_ids, np.zeros(0), []
     cell_polys = np.asarray(bh.cell_polygons(cell_ids), dtype=object)
-    return cell_ids, cell_proportions(polygon, cell_polys), list(cell_polys)
+    return cell_ids, cell_overlap_areas(polygon, cell_polys), list(cell_polys)
 
 
 def extract(ctx: ExtractContext) -> None:
@@ -102,11 +103,11 @@ def extract(ctx: ExtractContext) -> None:
 
         con.execute(f"""
             CREATE TABLE {KEY} (
-                spatial_id BIGINT, proportion DOUBLE, pfa24cd VARCHAR, pfa24nm VARCHAR, geom GEOMETRY
+                spatial_id BIGINT, overlap_area DOUBLE, pfa24cd VARCHAR, pfa24nm VARCHAR, geom GEOMETRY
             );
         """)
         for pfa24cd, pfa24nm, wkt in forces:
-            cell_ids, proportion, cell_polys = polyfill_force(shapely.from_wkt(wkt))
+            cell_ids, overlap_area, cell_polys = polyfill_force(shapely.from_wkt(wkt))
             print(f"  {pfa24nm}: {cell_ids.size:,} cells")
             # inserted a force at a time off an arrow table: a row-wise executemany over ~1.5m rows
             # is far slower, and cannot infer the parameter type ST_GeomFromText needs
@@ -115,7 +116,7 @@ def extract(ctx: ExtractContext) -> None:
                 pa.table(
                     {
                         "spatial_id": pa.array(cell_ids, type=pa.int64()),
-                        "proportion": pa.array(proportion, type=pa.float64()),
+                        "overlap_area": pa.array(overlap_area, type=pa.float64()),
                         "wkt": pa.array(
                             shapely.to_wkt(np.asarray(cell_polys), rounding_precision=-1), type=pa.string()
                         ),
@@ -125,7 +126,7 @@ def extract(ctx: ExtractContext) -> None:
             con.execute(
                 f"""
                 INSERT INTO {KEY}
-                SELECT spatial_id, proportion, ?, ?, ST_GeomFromText(wkt) FROM force_cells;
+                SELECT spatial_id, overlap_area, ?, ?, ST_GeomFromText(wkt) FROM force_cells;
                 """,
                 [pfa24cd, pfa24nm],
             )
@@ -142,6 +143,6 @@ DATASET = Dataset(
     name=KEY,
     table=KEY,
     extract=extract,
-    description=f"BEAHIV {SIZE}m edge-to-edge flat hex grid over E&W police force areas; spatial_id = cell id, proportion = share of the cell inside that force.",
+    description=f"BEAHIV {SIZE}m edge-to-edge flat hex grid over E&W police force areas; spatial_id = cell id, overlap_area = m² of the cell inside that force.",
     depends_on=("police_force_areas",),
 )

@@ -403,6 +403,10 @@ Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParq
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` when the transform imports it (the coordinates are
 the contract).
 
+Polygon overlaps are areas in m² (planar BNG), never percentages or fractions: `overlap_area` in the
+lookups and the `bh350eef` extract, `{prefix}_overlap_area` in `*_geogs`, and `urban_overlap_area` /
+`suburban_overlap_area` / `greenspace_area` in `*_descriptions`. A percentage leaves open whether it is of the cell or of the polygon; divide by `cell_area` for the share of the cell.
+
 ## Datasets
 
 One module per dataset under [src/safer_streets_tooling/extract/](src/safer_streets_tooling/extract/),
