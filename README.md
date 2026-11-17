@@ -94,24 +94,24 @@ several, found by intersecting the cell with `retail_centres`; a cell overlappin
 the school clause, since schools carry no hotspot-hex tag — which, like every hotspot table, never syncs.
 
 `beahiv_osm_landuse` gives `bh350eef_osm_landuse_lookup`: one row per crime cell and OSM land-use polygon
-overlapping it, with the polygon's `osm_id`, `overlap_pct` (the part of the polygon inside the cell, as a percentage
-of the cell's area) and its land-use `category`. A polygon takes the first of `beahiv_osm_landuse.CATEGORIES` it
+overlapping it, with the polygon's `osm_id`, `overlap_area` (the area, m², of the polygon inside the cell) and its
+land-use `category`. A polygon takes the first of `beahiv_osm_landuse.CATEGORIES` it
 has a tag of: specific uses (`hospitality`, `station`, `parking`, `shop`, `office`, `education`, `health`,
 `pedestrian`, `sport`, `park`, `cemetery`, `transport`) before the zones they sit in (`retail`, `commercial`,
 `industrial`, `residential`, `vacant`, `woodland`, `water`, `moorland`, `agriculture`). Polygons in none are left
-out. Land-use polygons nest (a car park on retail land), so a cell's percentages can sum past 100, and summing
-them per category double counts the nesting.
+out. Land-use polygons nest (a car park on retail land), so a cell's areas can sum past its own, and summing them
+per category double counts the nesting.
 
 `beahiv_osm_buildings` gives `bh350eef_osm_buildings_lookup`, the same table for `osm_buildings`: one row per crime
-cell and OSM building overlapping it, with the building's `osm_id`, `overlap_pct` (the part of the footprint inside
-the cell, as a percentage of the cell's area) and a `category` that condenses the extract's tag columns to one value.
+cell and OSM building overlapping it, with the building's `osm_id`, `overlap_area` (the area, m², of the footprint
+inside the cell) and a `category` that condenses the extract's tag columns to one value.
 A building straddling cells has a row in each. It takes the first of `beahiv_osm_buildings.CATEGORIES` it has a tag
 of, uses before building types (`hospitality`, `station`, `shop`, `office`, `education`, `health`, `worship`,
 `civic`, `leisure`, `parking`, `hotel`, `commercial`, `industrial`, `agricultural`, `residential`, `outbuilding`), so
 a pub in a `building=house` is hospitality. Unlike land use, a building in none is kept, as `unspecified` (a bare
 `building=yes`, about a third of them) or `other`. Buildings below ground by their `layer` / `level` / `tunnel` /
-`location` tags are left out. Footprints barely overlap, so a cell's `overlap_pct` summed per category is close to
-that category's share of the cell. OSM has no buildings at all in places (most housing in some towns), so an absent
+`location` tags are left out. Footprints barely overlap, so a cell's `overlap_area` summed per category is close to
+the area that category covers. OSM has no buildings at all in places (most housing in some towns), so an absent
 row is not an absent building: Verisk `buildings` is the complete layer.
 
 ```mermaid
@@ -510,8 +510,8 @@ each exposing a `STEP`. Each step writes the relations it produces out as parque
 | `beahiv_retail_centre_lookups` *(deprecated, opt-in)* | [beahiv_retail_centre_lookups.py](src/safer_streets_tooling/transform/beahiv_retail_centre_lookups.py) | `beahiv` | `bh350eef_retail_centre_lookup` | `beahiv_counts` |
 | `beahiv_geogs` | [beahiv_geogs.py](src/safer_streets_tooling/transform/beahiv_geogs.py) | `beahiv` | `bh350eef_geogs` | `beahiv_counts`, `beahiv_geo_lookups`, `beahiv_lookups`, `beahiv_retail_centre_lookups` |
 | `beahiv_descriptions` | [beahiv_descriptions.py](src/safer_streets_tooling/transform/beahiv_descriptions.py) | `beahiv` | `bh350eef_descriptions` (`short_location`, `description` + the named components, including `retail_centre`) | `beahiv_lookups`, `beahiv_geogs` |
-| `beahiv_osm_landuse` | [beahiv_osm_landuse.py](src/safer_streets_tooling/transform/beahiv_osm_landuse.py) | `beahiv` | `bh350eef_osm_landuse_lookup` (`spatial_id`, `osm_id`, `overlap_pct`, `category`) | `beahiv_counts` |
-| `beahiv_osm_buildings` | [beahiv_osm_buildings.py](src/safer_streets_tooling/transform/beahiv_osm_buildings.py) | `beahiv` | `bh350eef_osm_buildings_lookup` (`spatial_id`, `osm_id`, `overlap_pct`, `category`) | `beahiv_counts` |
+| `beahiv_osm_landuse` | [beahiv_osm_landuse.py](src/safer_streets_tooling/transform/beahiv_osm_landuse.py) | `beahiv` | `bh350eef_osm_landuse_lookup` (`spatial_id`, `osm_id`, `overlap_area`, `category`) | `beahiv_counts` |
+| `beahiv_osm_buildings` | [beahiv_osm_buildings.py](src/safer_streets_tooling/transform/beahiv_osm_buildings.py) | `beahiv` | `bh350eef_osm_buildings_lookup` (`spatial_id`, `osm_id`, `overlap_area`, `category`) | `beahiv_counts` |
 
 ### Spatial units
 
