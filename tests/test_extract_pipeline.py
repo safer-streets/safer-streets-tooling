@@ -350,6 +350,71 @@ def test_crime_coverage_without_the_force_list_writes_nothing(tmp_path, monkeypa
     assert not (tmp_path / "crime_coverage.parquet").exists()
 
 
+class TestCrimeExtractWritesCoverage:
+    """Rebuilding crime_data rewrites crime_coverage with it, so the two always describe the same release."""
+
+    HEADER = "Crime ID,Month,Reported by,Falls within,Longitude,Latitude,Location,LSOA code,LSOA name,Crime type,Last outcome category,Context\n"
+
+    def _setup(self, tmp_path, monkeypatch):
+        """A freshly downloaded (so not re-checked) archive holding two months for Alpha."""
+        archive = tmp_path / crime.archive_path("latest").name
+        with ZipFile(archive, "w") as z:
+            for month in ("2026-08", "2026-09"):
+                z.writestr(
+                    f"{month}/alpha-street.csv",
+                    self.HEADER + f"x,{month},Alpha,Alpha,-1.5,53.8,On or near X,E01,L,Burglary,,\n",
+                )
+        monkeypatch.setattr(crime, "raw_dir", lambda: tmp_path)
+        monkeypatch.setattr(crime, "data_source", lambda name: {"url": "https://example/latest.zip"})
+        monkeypatch.setattr(crime, "download", _unreachable)
+        monkeypatch.setattr(crime.requests, "head", _unreachable)
+        # last release's coverage table, which must not survive the rebuild
+        pd.DataFrame({"force": ["Alpha"], "month": ["2026-07"]}).to_parquet(tmp_path / "crime_coverage.parquet")
+
+    def test_coverage_matches_the_new_crime_data(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch)
+        _forces_api(monkeypatch, "Alpha", "Charlie")
+        try:
+            crime.extract(_ctx(tmp_path))
+        except (duckdb.HTTPException, duckdb.IOException) as e:  # extension download unavailable
+            pytest.skip(f"extension download unavailable: {e}")
+
+        data_months = set(pd.read_parquet(tmp_path / "crime_data.parquet", columns=["_month"])["_month"])
+        coverage = pd.read_parquet(tmp_path / "crime_coverage.parquet")
+        assert data_months == set(coverage.month) == {"2026-08", "2026-09"}
+        assert set(coverage.force) == {"Alpha", "Charlie"}
+
+    def test_no_force_list_writes_neither(self, tmp_path, monkeypatch):
+        """The force list is fetched before anything is written, so an API outage changes nothing on disk."""
+        self._setup(tmp_path, monkeypatch)
+
+        def boom(*args, **kwargs):
+            raise requests.ConnectionError("no route to host")
+
+        monkeypatch.setattr(crime.requests, "get", boom)
+        with pytest.raises(requests.ConnectionError):
+            crime.extract(_ctx(tmp_path))
+        assert not (tmp_path / "crime_data.parquet").exists()
+        assert set(pd.read_parquet(tmp_path / "crime_coverage.parquet").month) == {"2026-07"}
+
+    def test_failed_coverage_write_removes_the_stale_table(self, tmp_path, monkeypatch):
+        """crime_data is already the new release by then; no coverage table beats one for the last release."""
+        self._setup(tmp_path, monkeypatch)
+        _forces_api(monkeypatch, "Alpha")
+
+        def boom(ctx, listed):
+            raise RuntimeError("coverage failed")
+
+        monkeypatch.setattr(crime, "_write_coverage", boom)
+        try:
+            with pytest.raises(RuntimeError, match="coverage failed"):
+                crime.extract(_ctx(tmp_path))
+        except (duckdb.HTTPException, duckdb.IOException) as e:  # extension download unavailable
+            pytest.skip(f"extension download unavailable: {e}")
+        assert (tmp_path / "crime_data.parquet").exists()
+        assert not (tmp_path / "crime_coverage.parquet").exists()
+
+
 _BOUNDARY_SOURCES = {
     "base_url": "https://ons.example/",
     "layers": {"oa": {"endpoint": "oa/query", "filename": "oa", "table": "output_areas_2021", "id_field": "oa21cd"}},

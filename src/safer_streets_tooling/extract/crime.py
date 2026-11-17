@@ -95,14 +95,20 @@ def _is_stale(url: str, archive: Path) -> bool:
 
 def extract(ctx: ExtractContext) -> None:
     """
-    Write the ``crime_data`` parquet from the police.uk bulk crime archive.
+    Write the ``crime_data`` parquet from the police.uk bulk crime archive, and ``crime_coverage`` from it.
 
     The latest archive is downloaded (cached under the data directory, and reused only while it is
     still the published release — see :func:`_is_stale` — or unconditionally under force_download)
     and every month/force ``*-street.csv`` is read via DuckDB's zipfs. Geometry is added by
     transforming the WGS-84 longitude/latitude to BNG (EPSG:27700); the lon/lat columns are retained
     because the H3 transforms index crimes straight from them.
+
+    ``crime_coverage`` is rewritten here too, so a rebuild of ``crime_data`` can never leave it describing
+    the previous release (the pipeline doesn't cascade a rebuild to dependents). The force list it needs
+    is fetched first, so if police.uk's API is unreachable neither table is written; and should the
+    coverage write itself fail, the old coverage table is removed rather than left stale.
     """
+    forces = _police_forces()
     url = data_source("crime")["url"]
     archive = raw_dir() / archive_path("latest").name
     if ctx.force_download or not archive.exists() or _is_stale(url, archive):
@@ -132,6 +138,12 @@ def extract(ctx: ExtractContext) -> None:
         con.close()
     print(f"  crime_data: {row_count:,} rows")
 
+    try:
+        _write_coverage(ctx, forces)
+    except Exception:
+        ctx.parquet("crime_coverage").unlink(missing_ok=True)
+        raise
+
 
 def _police_forces() -> list[str]:
     """Every force police.uk knows of, by the same name the archive's ``falls_within`` uses.
@@ -156,8 +168,15 @@ def extract_coverage(ctx: ExtractContext) -> None:
     with no crimes, so a gap in the source (a force that did not submit a month, or at all) is a
     queryable ``n_crimes = 0`` rather than an absent row. ``n_located`` counts the crimes with
     coordinates — the ones the transforms can place on a grid.
+
+    :func:`extract` already writes this alongside ``crime_data``; as a dataset of its own it only runs
+    when the parquet is missing or explicitly rebuilt, recomputing it from the ``crime_data`` on disk.
     """
-    listed = _police_forces()
+    _write_coverage(ctx, _police_forces())
+
+
+def _write_coverage(ctx: ExtractContext, listed: list[str]) -> None:
+    """Write ``crime_coverage`` from the ``crime_data`` parquet, given police.uk's force list."""
     crime_pq = ctx.parquet("crime_data")
     con = duckdb_connector(writeable=True)
     try:

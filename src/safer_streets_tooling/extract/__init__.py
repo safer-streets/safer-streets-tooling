@@ -34,7 +34,7 @@ from safer_streets_tooling.extract import (
 from safer_streets_tooling.extract.base import Dataset, ExtractContext
 
 DATASETS: tuple[Dataset, ...] = (
-    *crime.DATASETS,  # crime_data, then crime_coverage summarising it
+    *crime.DATASETS,  # crime_data (which also rewrites crime_coverage), then crime_coverage if missing
     *boundaries.DATASETS,
     greenspace.DATASET,
     land_cover.DATASET,
