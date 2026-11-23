@@ -1,8 +1,8 @@
-"""``bh350eef_osm_buildings_lookup`` — each OpenStreetMap building's share of every BEAHIV cell it overlaps.
+"""``bh350eef_osm_buildings_lookup`` — the area of every BEAHIV cell each OpenStreetMap building covers.
 
 The buildings' counterpart of ``bh350eef_osm_landuse_lookup``, with the same columns: one row per (cell, building)
-with the cell's ``spatial_id``, the building's ``osm_id``, ``overlap_pct`` (the part of the footprint inside the cell,
-as a percentage of the cell's area) and the building's ``category``. A building straddling cells has a row in each.
+with the cell's ``spatial_id``, the building's ``osm_id``, ``overlap_area`` (the area, m², of the footprint inside the
+cell) and the building's ``category``. A building straddling cells has a row in each.
 
 The ``osm_buildings`` extract keeps a building's use spread over eight tag columns (``building``, ``shop``,
 ``office``, ``amenity``, ``railway``, ``public_transport``, ``landuse``, ``leisure``); ``category`` condenses them to
@@ -12,8 +12,8 @@ unlike land use every building has a category: one with no use and no known type
 (``layer``, ``level``, ``tunnel``, ``location``) say where a building is rather than what it is for: a building they
 put below ground has no footprint at street level and is left out.
 
-Footprints barely overlap one another, so unlike land use a cell's ``overlap_pct`` summed per category is close to
-that category's true share of the cell. The cells are the ones carrying crimes (:data:`~.beahiv.BEAHIV_UNIT`), so
+Footprints barely overlap one another, so unlike land use a cell's ``overlap_area`` summed per category is close to
+the area that category truly covers. The cells are the ones carrying crimes (:data:`~.beahiv.BEAHIV_UNIT`), so
 the step waits on ``beahiv_counts``.
 """
 
@@ -129,7 +129,7 @@ STEP = TransformStep(
     grid=Grid.BEAHIV,
     description=(
         "Per BEAHIV cell, every overlapping OpenStreetMap building (osm_id) above ground with its use category "
-        "(its tags condensed to one value) and overlap_pct, the percentage of the cell its footprint covers."
+        "(its tags condensed to one value) and overlap_area, the area of the cell its footprint covers in m²."
     ),
     depends_on=("beahiv_counts",),
     extract_inputs=(SOURCE,),

@@ -118,6 +118,10 @@ Overture S3 is unreachable, mirroring the existing tests.
   **inside their extractor** before being written. DuckDB's GeoParquet writer tags geometry as
   `OGC:CRS84`; that label is harmless and is stripped to a bare `GEOMETRY` when the transform phase
   imports the extract parquet (`index_geometry_tables`). Write geometry with `write_geoparquet`; read it back with `read_geoparquet`.
+- **Polygon overlaps are areas in m², never percentages or fractions.** Name the column `overlap_area`
+  (`{prefix}_overlap_area` when a table carries several). A percentage is ambiguous — of the cell or of the
+  polygon? — so leave the share to the consumer (`overlap_area / cell_area`). Thresholds a step applies
+  internally may be shares, but compare them as a multiple of `cell_area` and output the area.
 - **Adding a dataset is additive.** Write a module under [extract/](src/safer_streets_tooling/extract/)
   exposing `DATASET = Dataset(...)` whose `extract(ctx)` does its work in its own
   `duckdb_connector()` and writes `ctx.parquet(name)`, then register it in

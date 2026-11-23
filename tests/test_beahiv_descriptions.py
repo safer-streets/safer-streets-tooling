@@ -94,13 +94,20 @@ def test_unnamed_greenspace_is_ignored_and_small_named_one_is_not_mentioned(con)
     """g3 covers 90% of the cell but has no name; Castle Park covers 15%, under the 20% threshold."""
     row = _row(con, BUSY)
     assert row["greenspace"] == "Castle Park"
-    assert row["greenspace_share"] == pytest.approx(0.15)
+    assert row["greenspace_area"] == pytest.approx(15000.0)
     assert "Castle Park" not in row["description"]
+
+
+def test_land_is_kept_in_square_metres(con):
+    """The areas the character is read from, in m² like *_geogs; a NULL overlap is no land of that kind."""
+    busy, park = _row(con, BUSY), _row(con, PARK)
+    assert (busy["urban_overlap_area"], busy["suburban_overlap_area"]) == (60000.0, 30000.0)
+    assert (park["urban_overlap_area"], park["suburban_overlap_area"]) == (0.0, 5000.0)
 
 
 def test_park_is_open_space_and_its_split_sites_are_summed(con):
     row = _row(con, PARK)
-    assert row["greenspace_share"] == pytest.approx(0.7)
+    assert row["greenspace_area"] == pytest.approx(70000.0)
     assert row["character"] == "Open space"
     assert row["road_pair"] == "B3000"  # a numbered road with no name still counts
     assert row["description"] == "Open space, on B3000, in Castle Park. Bristol 008."

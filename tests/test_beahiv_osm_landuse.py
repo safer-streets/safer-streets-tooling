@@ -1,7 +1,7 @@
-"""Tests for the OSM land-use lookup on the BEAHIV grid: categories, overlap percentages and which cells get rows.
+"""Tests for the OSM land-use lookup on the BEAHIV grid: categories, overlap areas and which cells get rows.
 
 One crime puts one cell on the grid. The land-use polygons are drawn relative to that cell's own outline (beahiv's
-``cell_polygon``), so the expected percentages are exact areas over :data:`CELL_AREA`. Synthetic fixtures only —
+``cell_polygon``), so the expected overlaps are exact areas in m². Synthetic fixtures only —
 offline-safe, mirroring test_beahiv_unit.
 """
 
@@ -89,18 +89,19 @@ def lookup() -> pd.DataFrame:
 
 
 def test_columns(lookup):
-    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_pct", "category"]
+    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_area", "category"]
     assert lookup.spatial_id.nunique() == 1  # the only cell with a crime
 
 
-def test_overlap_is_the_percentage_of_the_cell_covered(lookup):
+def test_overlap_is_the_area_of_the_cell_covered(lookup):
+    """In m²: the residential polygon covering the whole cell gives the cell's area, not 100."""
     expected = {
-        "way/1": 100.0,
-        "way/2": 100 * 100**2 / CELL_AREA,
-        "way/3": 100 * 50**2 / CELL_AREA,
-        "way/6": 100 * 20**2 / CELL_AREA,
+        "way/1": CELL_AREA,
+        "way/2": 100.0**2,
+        "way/3": 50.0**2,
+        "way/6": 20.0**2,
     }
-    assert lookup.set_index("osm_id").overlap_pct.to_dict() == pytest.approx(expected)
+    assert lookup.set_index("osm_id").overlap_area.to_dict() == pytest.approx(expected)
 
 
 def test_first_matching_category_and_uncategorised_dropped(lookup):
@@ -113,8 +114,8 @@ def test_first_matching_category_and_uncategorised_dropped(lookup):
 
 
 def test_nested_polygons_each_keep_their_share(lookup):
-    """The car park sits on the residential polygon; both keep a row, so a cell's percentages can pass 100."""
-    assert lookup.overlap_pct.sum() > 100
+    """The car park sits on the residential polygon; both keep a row, so a cell's areas can sum past its own."""
+    assert lookup.overlap_area.sum() > CELL_AREA
 
 
 def test_noop_without_the_extract():

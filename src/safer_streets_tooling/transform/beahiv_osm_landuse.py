@@ -1,11 +1,14 @@
-"""``bh350eef_osm_landuse_lookup`` — each OpenStreetMap land-use polygon's share of every BEAHIV cell it overlaps.
+"""``bh350eef_osm_landuse_lookup`` — the area of every BEAHIV cell each OpenStreetMap land-use polygon covers.
 
-One row per (cell, polygon): the cell's ``spatial_id``, the polygon's ``osm_id``, ``overlap_pct`` (the part of the
-polygon inside the cell, as a percentage of the cell's area) and the polygon's land-use ``category``. Polygons in no
-category are left out (private gardens, verges, nature reserves, ...: the ``osm_landuse`` extract still has them).
+One row per (cell, polygon): the cell's ``spatial_id``, the polygon's ``osm_id``, ``overlap_area`` (the area, m², of
+the polygon inside the cell) and the polygon's land-use ``category``. Polygons in no category are left out (private gardens, verges, nature reserves, ...: the ``osm_landuse`` extract still has them).
 
-Land-use polygons nest (a car park on retail land, a pitch in a park), so a cell's ``overlap_pct`` can sum past 100,
-and summing it per category double counts the nesting. An exact per-category share needs the union of the category's
+An area rather than a percentage, as for every overlap in this package (``overlap_area`` in the overlap lookups,
+``{prefix}_overlap_area`` in ``*_geogs``): a percentage leaves open whether it is of the cell or of the polygon. Divide
+by ``cell_area`` (or :data:`~safer_streets_tooling.beahiv_grid.CELL_AREA`) for the share of the cell.
+
+Land-use polygons nest (a car park on retail land, a pitch in a park), so a cell's ``overlap_area`` can sum past its
+area, and summing it per category double counts the nesting. An exact per-category share needs the union of the category's
 polygons in each cell, which this table can't give without the geometry.
 
 The cells are the ones carrying crimes (:data:`~.beahiv.BEAHIV_UNIT`), as for every lookup on this grid, so the step
@@ -16,7 +19,7 @@ cell, and this is a long table on the BEAHIV grid only.
 
 import duckdb
 
-from safer_streets_tooling.beahiv_grid import CELL_AREA, KEY
+from safer_streets_tooling.beahiv_grid import KEY
 from safer_streets_tooling.osm_tags import Tags, category_case
 from safer_streets_tooling.transform import beahiv
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, table_exists
@@ -80,12 +83,12 @@ def build_lookup(con: duckdb.DuckDBPyConnection, table: str, features: str, repl
         {create_clause("TABLE", table, replace=replace)} AS
         WITH clipped AS (
             SELECT c.spatial_id, f.osm_id,
-                   100 * ST_Area(ST_Intersection(c.cell_geom, f.geom)) / {CELL_AREA!r} AS overlap_pct,
+                   ST_Area(ST_Intersection(c.cell_geom, f.geom)) AS overlap_area,
                    f.category
             FROM ({beahiv.BEAHIV_UNIT.cells}) c
             JOIN ({features}) f ON ST_Intersects(c.cell_geom, f.geom)
         )
-        SELECT * FROM clipped WHERE overlap_pct > 0
+        SELECT * FROM clipped WHERE overlap_area > 0
     """)
     rows, cells = con.execute(f"SELECT COUNT(*), COUNT(DISTINCT spatial_id) FROM {table}").fetchone()  # ty:ignore[not-iterable]
     print(f"  {table}: {rows:,} overlaps in {cells:,} cells")
@@ -110,7 +113,7 @@ STEP = TransformStep(
     grid=Grid.BEAHIV,
     description=(
         "Per BEAHIV cell, every overlapping OpenStreetMap land-use polygon (osm_id) with its land-use category and "
-        "overlap_pct, the percentage of the cell it covers (nested polygons can sum past 100)."
+        "overlap_area, the area of the cell it covers in m² (nested polygons can sum past the cell's area)."
     ),
     depends_on=("beahiv_counts",),
     extract_inputs=(SOURCE,),
