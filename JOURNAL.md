@@ -7,7 +7,7 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
-## OSM lookups gain a `subcategory`
+## OSM lookups gain a `subcategory` (#47)
 
 **Why**: `category` in `bh350eef_osm_landuse_lookup` and `bh350eef_osm_buildings_lookup` is deliberately coarse
 (`hospitality` lumps pubs, bars, nightclubs, restaurants and cafés). Analysis needs to split some of them back out
