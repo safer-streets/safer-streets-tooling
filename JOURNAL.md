@@ -38,8 +38,8 @@ identical columns.
   `building=yes` gives NULL rather than `vacant`.
 - **`yes` decides the category but gives way to the next tag for the subcategory.** `shop=yes` (about 2.7k buildings
   and polygons), `office=yes` (about 3.6k) and `leisure=yes` tell us what a feature is used for, so they keep their
-  category, but the value `yes` adds nothing as a subcategory. The skip is in the `THEN`, not the `WHEN`: `shop=yes`
-  + `building=retail` is a shop, subcategory `retail` (the shop category's own `building` tag); `shop=yes` +
+  category, but the value `yes` adds nothing as a subcategory. The skip is in the `THEN`, not the `WHEN`:
+  `shop=yes` + `building=retail` is a shop, subcategory `retail` (the shop category's own `building` tag); `shop=yes` +
   `landuse=commercial` is a shop with none, not `commercial`. In the fallback `yes` is skipped like `NOT_A_VALUE`,
   which also covers the bare `building=yes` that was a special case. Rejected: adding `yes` to `NOT_A_VALUE`, which
   would stop `shop=yes` being a shop (and change the `poi` extract); and a `yes` naming its key (`shop=yes` →
