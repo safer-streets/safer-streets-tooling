@@ -1,7 +1,7 @@
-"""2021 Output Area Classification (CDRC) → ``oac``, ``oac_classification`` and ``oac_pen_portraits`` parquet.
+"""2021 Output Area Classification (CDRC) → ``oac``, ``oac_classification``, ``oac_pen_portraits``, ``oac_embeddings``.
 
-Three attribute-only (no geometry) tables, split so the subgroup names and descriptions are held once
-rather than repeated across every OA:
+Four attribute-only (no geometry) tables, split so the subgroup names, descriptions and embeddings are
+held once rather than repeated across every OA:
 
 - ``oac`` — one row per OA: ``spatial_id`` (the OA21 code) + its OAC ``code``. The code is the full
   hierarchical subgroup code (``1a1`` → group ``1a`` → supergroup ``1``), so the group and supergroup are
@@ -12,6 +12,9 @@ rather than repeated across every OA:
 - ``oac_pen_portraits`` — one row per ``code`` (52): the published pen-portrait description of its
   supergroup, group and subgroup, parsed from the GeoDS pen-portraits PDF. Names are left to
   ``oac_classification`` (the PDF's headings don't all match it, e.g. 1b1). Joined on ``oac.code``.
+- ``oac_embeddings`` — one row per ``code`` (52): a markdown ``text`` of the code's names over their pen
+  portraits, and its Gemini ``embedding`` (unit length, so cosine similarity is a dot product). Needs a
+  ``GEMINI_API_KEY``. Joined on ``oac.code``.
 
 Like ``retail_centres`` / ``land_cover`` the source needs a login (GeoDS), so the two CSVs
 (``oac21ew.csv`` per-OA codes, ``classification_codes_and_names-1.csv`` the code→name lookup) and the
@@ -20,10 +23,15 @@ surrounding whitespace in some codes/names, which is trimmed.
 """
 
 import logging
+import os
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 from pypdf import PdfReader
 from safer_streets_core.database import duckdb_connector, write_geoparquet
 
@@ -187,6 +195,71 @@ def extract_oac_pen_portraits(ctx: ExtractContext) -> None:
     print(f"  oac_pen_portraits: {len(table):,} rows")
 
 
+EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIM = 768
+EMBEDDING_TASK = "RETRIEVAL_DOCUMENT"
+
+
+def embedding_text(row: pd.Series) -> str:
+    """The markdown document embedded for one subgroup: each level's name as a heading over its pen portrait."""
+    return (
+        f"# {row.supergroup_name}\n\n{row.supergroup_description}\n\n"
+        f"## {row.group_name}\n\n{row.group_description}\n\n"
+        f"### {row.subgroup_name}\n\n{row.subgroup_description}"
+    )
+
+
+def embed(texts: list[str], client: genai.Client) -> np.ndarray:
+    """Embed ``texts`` in one request (the API takes up to 100), returning unit-length float32 rows."""
+    contents: list[types.ContentUnion] = [*texts]  # list is invariant, so list[str] isn't accepted as-is
+    result = client.models.embed_content(
+        model=EMBEDDING_MODEL,
+        contents=contents,
+        config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM, task_type=EMBEDDING_TASK),
+    )
+    vectors = np.array([e.values for e in result.embeddings or []], dtype=np.float32)
+    if vectors.shape != (len(texts), EMBEDDING_DIM):
+        raise ValueError(f"expected {len(texts)} embeddings of {EMBEDDING_DIM} dims, got shape {vectors.shape}")
+    # only the full 3072-d output comes normalised; scaling here makes cosine similarity a dot product
+    return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+
+def extract_oac_embeddings(ctx: ExtractContext) -> None:
+    """Write the ``oac_embeddings`` parquet: per subgroup ``code``, the embedded text and its Gemini embedding.
+
+    Reads the names from ``oac_classification`` and the descriptions from ``oac_pen_portraits``. Needs
+    ``GEMINI_API_KEY`` in the environment or a ``.env`` file; without it the dataset is skipped.
+    """
+    load_dotenv()
+    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+        raise RuntimeError("GEMINI_API_KEY is not set (environment or .env), so OAC embeddings can't be generated")
+    names_pq, portraits_pq = ctx.parquet("oac_classification"), ctx.parquet("oac_pen_portraits")
+    print(f"  Embedding oac_pen_portraits with {EMBEDDING_MODEL}…")
+    con = duckdb_connector(writeable=True)
+    try:
+        rows = con.execute(f"""
+            SELECT p.*, c.supergroup_name, c.group_name, c.subgroup_name
+            FROM read_parquet('{portraits_pq}') p
+            LEFT JOIN read_parquet('{names_pq}') c USING (code)
+            ORDER BY code
+        """).df()
+        unnamed = rows.loc[rows.subgroup_name.isna(), "code"].tolist()
+        if unnamed:
+            raise ValueError(f"OAC codes with pen portraits but no oac_classification names: {unnamed}")
+        table = pd.DataFrame({"code": rows.code, "text": rows.apply(embedding_text, axis=1)})
+        table["embedding"] = list(embed(table.text.tolist(), genai.Client()))
+        con.register("oac_embeddings_stg", table)
+        # parquet stores it as a plain list (FLOAT[] on read); the fixed-size cast fails on a wrong length
+        write_geoparquet(
+            con,
+            f"SELECT code, text, embedding::FLOAT[{EMBEDDING_DIM}] AS embedding FROM oac_embeddings_stg",
+            ctx.parquet("oac_embeddings"),
+        )
+    finally:
+        con.close()
+    print(f"  oac_embeddings: {len(table):,} rows")
+
+
 DATASETS: tuple[Dataset, ...] = (
     Dataset(
         name="oac",
@@ -208,5 +281,16 @@ DATASETS: tuple[Dataset, ...] = (
         extract=extract_oac_pen_portraits,
         description="OAC pen-portrait descriptions (GeoDS) of each code's supergroup, group and subgroup.",
         geometry=False,
+    ),
+    Dataset(
+        name="oac_embeddings",
+        table="oac_embeddings",
+        extract=extract_oac_embeddings,
+        description=(
+            f"Unit-length {EMBEDDING_DIM}-d {EMBEDDING_MODEL} ({EMBEDDING_TASK}) embedding of each OAC code's "
+            "names and pen portraits."
+        ),
+        geometry=False,
+        depends_on=("oac_classification", "oac_pen_portraits"),
     ),
 )

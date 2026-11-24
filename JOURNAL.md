@@ -7,18 +7,23 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
-## OAC pen portraits (`oac_pen_portraits`)
+## OAC pen portraits and their embeddings (`oac_pen_portraits`, `oac_embeddings`) (#48)
 
 **Why**: The OAC tables give each OA a code and names, but a name ("Career Progression") says little on its own.
 GeoDS publishes a pen portrait for every supergroup, group and subgroup: a paragraph on household make-up, housing,
-education and work. Having these as a table lets a consumer show them beside a cell's OAC, and lets the next PR
-embed them so subgroups can be compared by what they describe, not by their names.
+education and work. Having these as a table lets a consumer show them beside a cell's OAC. Embedding them lets subgroups be compared by
+what they describe rather than by their names (the safer-streets-eda prototype embedded the names alone).
 
 **What**: A new optional, attribute-only dataset in `extract/oac.py`, `oac_pen_portraits`: one row per subgroup
 `code` (52) with `supergroup_description`, `group_description` and `subgroup_description`. It is parsed from the UK
 OAC 2021/22 pen-portraits PDF (`pen_portraits_ukoac.pdf`, a new `pen_portraits` key in the `oac` source entry),
 downloaded by hand into `raw/` like the other OAC files. `pypdf` is a new dependency. `_source_csv` became
 `_source_file`, as it now finds a PDF too.
+
+A second dataset, `oac_embeddings`, depends on `oac_classification` and `oac_pen_portraits`: per subgroup `code`, a
+markdown `text` (each level's name as a heading over its pen portrait) and its `embedding`, a unit-length 768-d
+`gemini-embedding-001` vector (`RETRIEVAL_DOCUMENT`). It needs `GEMINI_API_KEY`, from the environment or a `.env`
+(`load_dotenv`); without one it raises and is skipped. `google-genai` is a new dependency.
 
 **Design decisions**:
 - **No name columns.** `oac_classification` already holds the names, so the table joins to it on `code`, in keeping
@@ -41,9 +46,31 @@ downloaded by hand into `raw/` like the other OAC files. `pypdf` is a new depend
   subgroup code.
 - **pypdf's warnings are silenced.** The PDF has broken xref offsets that pypdf recovers from, logging one warning
   per object (about 20); the extracted text is unaffected.
+- **One PR for both tables.** The embeddings need the descriptions, so a separate PR would have been stacked on, or
+  waited for, this one.
+- **Embedding settings as in the prototype**: `gemini-embedding-001` at 768 dims, `RETRIEVAL_DOCUMENT`, scaled to
+  unit length (Gemini only normalises its full 3,072-d output), so cosine similarity is a dot product. The model,
+  dims and task are in the table's `description`, so the catalogue says what produced the vectors.
+  `SEMANTIC_SIMILARITY` or `CLUSTERING` would suit comparing subgroups as well; `RETRIEVAL_DOCUMENT` was kept so the
+  vectors match the prototype's.
+- **Names from `oac_classification`, not the PDF's headings**, so the embedded text uses the names the other tables
+  use (1b1 above). A code with a pen portrait but no name raises rather than embedding an incomplete text.
+- **`text` is stored beside the vector**, so what was embedded is on record without rerunning the build.
+- **One request for all 52 texts** (the API takes up to 100), and the shape is checked. The pipeline keeps a cached
+  parquet unless it is rebuilt, so a normal build doesn't call the API again.
+- **The `FLOAT[768]` cast is kept though parquet reads it back as `FLOAT[]`.** Parquet has no fixed-size list, but the
+  cast still fails the write on a wrong-length vector.
+- **No distance table.** The prototype also stored the 52×52 cosine-distance matrix; a consumer computes it from the
+  embeddings in one line.
+- **Checked against the prototype.** Mean cosine distance between subgroups sharing a group, a supergroup, or neither:
+  0.015 / 0.034 / 0.096, against the prototype's 0.016 / 0.034 / 0.097.
 
 **Follow-ups**:
-- Next PR: `oac_embeddings`, Gemini embeddings of each subgroup's names and pen portraits.
+- Subgroups in a group share about two thirds of their embedded text (the supergroup and group portraits), so their
+  distances are small (0.006–0.17 overall). Embedding each level separately, or weighting the subgroup text, would
+  separate siblings more; that changes what the vectors mean, so it is left to a later change.
+- Embeddings are not deterministic across model versions. If Google revises `gemini-embedding-001`, a rebuild gives
+  different vectors; pin a dated model name then.
 - The PDF is a fixed 2025 publication. A revised edition would need its heading spellings and typos re-checked; the
   8/21/52 check catches a missed heading but not changed wording.
 

@@ -18,6 +18,8 @@ dependencies = [
     "quackosm>=0.20.0",
     # reads the OAC pen-portraits PDF (oac_pen_portraits); pure Python, unlike poppler's pdftotext.
     "pypdf>=7.1.1",
+    # Gemini embeddings of the OAC pen portraits (oac_embeddings).
+    "google-genai>=2.7.0",
 ]
 
 [project.scripts]
