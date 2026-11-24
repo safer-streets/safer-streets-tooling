@@ -89,8 +89,17 @@ def lookup() -> pd.DataFrame:
 
 
 def test_columns(lookup):
-    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_area", "category"]
+    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_area", "category", "subcategory"]
     assert lookup.spatial_id.nunique() == 1  # the only cell with a crime
+
+
+def test_subcategory_is_the_value_that_decided_the_category(lookup):
+    assert lookup.set_index("osm_id").subcategory.to_dict() == {
+        "way/1": "residential",
+        "way/2": "parking",  # amenity=parking, not landuse=retail
+        "way/3": "pitch",
+        "way/6": "pedestrian",
+    }
 
 
 def test_overlap_is_the_area_of_the_cell_covered(lookup):
@@ -157,6 +166,27 @@ def test_category(tags, category):
         duckdb.connect().execute(f"SELECT {beahiv_osm_landuse.CATEGORY} FROM (SELECT {cols})", values).fetchall()
     )
     assert result == (category,)
+
+
+@pytest.mark.parametrize(
+    ("tags", "subcategory"),
+    [
+        ({"amenity": "pub", "landuse": "retail"}, "pub"),
+        ({"amenity": "school", "landuse": "education"}, "school"),  # the specific use, not the zone
+        ({"leisure": "playground"}, "playground"),
+        ({"area:highway": "footway"}, "footway"),  # the extract's area_highway column
+        ({"natural": "scrub"}, "scrub"),  # natural is quoted
+        ({"office": "yes", "landuse": "commercial"}, None),  # an office of no known kind, not commercial
+        ({"landuse": "grass"}, None),  # no category
+    ],
+)
+def test_subcategory(tags, subcategory):
+    cols = ", ".join(f"?::VARCHAR AS {col}" for col in COLUMNS[1:-1])
+    values = [tags.get(key) for key in osm_landuse.LANDUSE_TAGS]
+    (result,) = (
+        duckdb.connect().execute(f"SELECT {beahiv_osm_landuse.SUBCATEGORY} FROM (SELECT {cols})", values).fetchall()
+    )
+    assert result == (subcategory,)
 
 
 def test_category_keys_are_extract_columns():
