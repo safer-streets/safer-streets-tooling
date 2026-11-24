@@ -7,6 +7,46 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## OAC pen portraits (`oac_pen_portraits`)
+
+**Why**: The OAC tables give each OA a code and names, but a name ("Career Progression") says little on its own.
+GeoDS publishes a pen portrait for every supergroup, group and subgroup: a paragraph on household make-up, housing,
+education and work. Having these as a table lets a consumer show them beside a cell's OAC, and lets the next PR
+embed them so subgroups can be compared by what they describe, not by their names.
+
+**What**: A new optional, attribute-only dataset in `extract/oac.py`, `oac_pen_portraits`: one row per subgroup
+`code` (52) with `supergroup_description`, `group_description` and `subgroup_description`. It is parsed from the UK
+OAC 2021/22 pen-portraits PDF (`pen_portraits_ukoac.pdf`, a new `pen_portraits` key in the `oac` source entry),
+downloaded by hand into `raw/` like the other OAC files. `pypdf` is a new dependency. `_source_csv` became
+`_source_file`, as it now finds a PDF too.
+
+**Design decisions**:
+- **No name columns.** `oac_classification` already holds the names, so the table joins to it on `code`, in keeping
+  with the module's "held once" split. The PDF's headings also don't all agree with the codes-and-names CSV (1b1 is
+  "Established Suburban Communities" in the PDF, "Younger Established Suburban Communities" in the CSV); leaving
+  names out means there is one source for them.
+- **Wide (one row per subgroup), not long (one row per code at every level, 81 rows).** It matches the grain of
+  `oac_classification` and `oac.code`, so all three descriptions come with one join. Each supergroup and group
+  description is repeated across its subgroups, which is a few kB.
+- **Parse the PDF at extract time rather than commit a CSV.** The raw file is the source of record, as for the other
+  OAC tables, and the parse is checked: it must find exactly 8 supergroups, 21 groups and 52 subgroups or it raises,
+  which skips the optional dataset.
+- **`pypdf`, not `pdftotext`.** The prototype (safer-streets-eda) used poppler's `pdftotext`, a system binary uv
+  can't declare. `pypdf` is a normal dependency. Its text differs in one way: a word hyphenated across a line keeps
+  the hyphen ("Single-" / "person"), so rejoining such lines restores it, where `pdftotext` lost it ("Singleperson").
+  The output was checked against the prototype's table: all 156 descriptions are identical.
+- **Typos in the PDF are fixed** ("andmany", "rentedflats", "relatiove", "nUK born"), listed in `_PDF_TYPOS`.
+- **Headings are matched loosely.** Besides "1a1: Name" the PDF has "3c1: – Name", "4b4 - Name", "5a1 – Name" and
+  "6c1 Name". A body line can start with digits ("45 or over"), so a bare-space heading is only accepted with a full
+  subgroup code.
+- **pypdf's warnings are silenced.** The PDF has broken xref offsets that pypdf recovers from, logging one warning
+  per object (about 20); the extracted text is unaffected.
+
+**Follow-ups**:
+- Next PR: `oac_embeddings`, Gemini embeddings of each subgroup's names and pen portraits.
+- The PDF is a fixed 2025 publication. A revised edition would need its heading spellings and typos re-checked; the
+  8/21/52 check catches a missed heading but not changed wording.
+
 ## Polygon overlaps in m², never percentages (#45)
 
 **Why**: Overlap measures were mixed. The overlap lookups and `*_geogs` gave m² (`overlap_area`,

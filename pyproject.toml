@@ -16,6 +16,8 @@ dependencies = [
     # edge-to-edge measure; ids from 0.0.x are a different grid and do not decode.
     "beahiv[arrow]>=0.1.0",
     "quackosm>=0.20.0",
+    # reads the OAC pen-portraits PDF (oac_pen_portraits); pure Python, unlike poppler's pdftotext.
+    "pypdf>=7.1.1",
 ]
 
 [project.scripts]

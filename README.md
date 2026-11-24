@@ -140,6 +140,7 @@ flowchart LR
    imd_scores_pct
    oac
    oac_classification
+   oac_pen_portraits
    workplace_population
    residential_population
    bh350eef
@@ -289,7 +290,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
-    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,bh350eef,hotspots extract;
+    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,oac_pen_portraits,workplace_population,residential_population,bh350eef,hotspots extract;
     class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions,bh350eef_osm_landuse_lookup,bh350eef_osm_buildings_lookup transform;
     class h3_retail_centres_lookup,hotspots_retail_centre_lookup,bh350eef_retail_centre_lookup deprecated;
 ```
@@ -433,7 +434,7 @@ absence). Registry order respects `depends_on`:
 | `cctv` | [cctv.py](src/safer_streets_tooling/extract/cctv.py) | no | — |
 | `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network). Only schools that take pupils aged 13+ (GIAS `statutoryhighage > 12`) are kept, Welsh schools are filtered by name instead — see [Welsh schools](#welsh-schools-are-filtered-by-name) |
 | `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
-| `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
+| `oac`, `oac_classification`, `oac_pen_portraits` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — (all three from files downloaded by hand from GeoDS into `raw/`; `oac_pen_portraits` is parsed from the pen-portraits PDF, one row per subgroup `code` with its supergroup, group and subgroup descriptions) |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
 | `residential_population` | [residential_population.py](src/safer_streets_tooling/extract/residential_population.py) | no | — |
 | `bh350eef` | [bh350eef.py](src/safer_streets_tooling/extract/bh350eef.py) | no | `police_force_areas` (the grid is derived from the force boundaries) |
