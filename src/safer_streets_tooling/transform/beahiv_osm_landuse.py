@@ -1,7 +1,10 @@
 """``bh350eef_osm_landuse_lookup`` — the area of every BEAHIV cell each OpenStreetMap land-use polygon covers.
 
 One row per (cell, polygon): the cell's ``spatial_id``, the polygon's ``osm_id``, ``overlap_area`` (the area, m², of
-the polygon inside the cell) and the polygon's land-use ``category``. Polygons in no category are left out (private gardens, verges, nature reserves, ...: the ``osm_landuse`` extract still has them).
+the polygon inside the cell), the polygon's land-use ``category`` and its ``subcategory``: the value of the tag that
+put it in that category (``amenity=pub`` gives ``pub``, ``leisure=playground`` gives ``playground``), so a consumer
+can split a category back out. Polygons in no category are left out (private gardens, verges, nature reserves, ...:
+the ``osm_landuse`` extract still has them).
 
 An area rather than a percentage, as for every overlap in this package (``overlap_area`` in the overlap lookups,
 ``{prefix}_overlap_area`` in ``*_geogs``): a percentage leaves open whether it is of the cell or of the polygon. Divide
@@ -20,7 +23,7 @@ cell, and this is a long table on the BEAHIV grid only.
 import duckdb
 
 from safer_streets_tooling.beahiv_grid import KEY
-from safer_streets_tooling.osm_tags import Tags, category_case
+from safer_streets_tooling.osm_tags import Tags, category_case, subcategory_case
 from safer_streets_tooling.transform import beahiv
 from safer_streets_tooling.transform.base import Grid, TransformStep, create_clause, table_exists
 
@@ -60,8 +63,14 @@ CATEGORIES: dict[str, Tags] = {
     "agriculture": {"landuse": ["farmland", "meadow", "farmyard", "orchard", "animal_keeping", "vineyard"]},
 }
 
-# the extract's column for a tag (area:highway -> area_highway), quoted because natural is an SQL keyword
-CATEGORY = category_case(CATEGORIES, lambda key: '"{}"'.format(key.replace(":", "_")))
+
+def _column(key: str) -> str:
+    """The extract's column for a tag (area:highway -> area_highway), quoted because natural is an SQL keyword."""
+    return '"{}"'.format(key.replace(":", "_"))
+
+
+CATEGORY = category_case(CATEGORIES, _column)
+SUBCATEGORY = subcategory_case(CATEGORIES, _column)
 
 
 def _available(con: duckdb.DuckDBPyConnection) -> bool:
@@ -71,8 +80,9 @@ def _available(con: duckdb.DuckDBPyConnection) -> bool:
 def build_lookup(con: duckdb.DuckDBPyConnection, table: str, features: str, replace: bool) -> None:
     """Create ``table``: every feature of ``features`` intersected with every crime cell it overlaps.
 
-    ``features`` is a query giving ``osm_id``, ``category`` and ``geom``. Shared with ``beahiv_osm_buildings``, so the
-    two lookups have the same columns and the same measure of overlap.
+    ``features`` is a query giving ``osm_id``, ``category``, ``subcategory`` and ``geom``. Shared with
+    ``beahiv_osm_buildings``, so the two lookups have the same columns and the same measure of overlap; the columns
+    are named rather than passed through so that neither lookup can grow one the other lacks.
 
     A table rather than a view (the overlap lookups are views): the intersections are the costly part, and a view
     would recompute them for every read, the parquet write included. Rows for a polygon that only touches a cell's
@@ -84,7 +94,7 @@ def build_lookup(con: duckdb.DuckDBPyConnection, table: str, features: str, repl
         WITH clipped AS (
             SELECT c.spatial_id, f.osm_id,
                    ST_Area(ST_Intersection(c.cell_geom, f.geom)) AS overlap_area,
-                   f.category
+                   f.category, f.subcategory
             FROM ({beahiv.BEAHIV_UNIT.cells}) c
             JOIN ({features}) f ON ST_Intersects(c.cell_geom, f.geom)
         )
@@ -98,7 +108,10 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create the lookup from every categorised land-use polygon (see :func:`build_lookup`)."""
     if not _available(con):
         return
-    features = f"SELECT * FROM (SELECT osm_id, {CATEGORY} AS category, geom FROM {SOURCE}) WHERE category IS NOT NULL"
+    features = (
+        f"SELECT * FROM (SELECT osm_id, {CATEGORY} AS category, {SUBCATEGORY} AS subcategory, geom FROM {SOURCE}) "
+        "WHERE category IS NOT NULL"
+    )
     build_lookup(con, TABLE, features, replace)
 
 
@@ -112,8 +125,9 @@ STEP = TransformStep(
     outputs=outputs,
     grid=Grid.BEAHIV,
     description=(
-        "Per BEAHIV cell, every overlapping OpenStreetMap land-use polygon (osm_id) with its land-use category and "
-        "overlap_area, the area of the cell it covers in m² (nested polygons can sum past the cell's area)."
+        "Per BEAHIV cell, every overlapping OpenStreetMap land-use polygon (osm_id) with its land-use category, "
+        "subcategory (the value of the tag that decided it) and overlap_area, the area of the cell it covers in m² (nested polygons can sum past the "
+        "cell's area)."
     ),
     depends_on=("beahiv_counts",),
     extract_inputs=(SOURCE,),

@@ -2,7 +2,7 @@
 
 The buildings' counterpart of ``bh350eef_osm_landuse_lookup``, with the same columns: one row per (cell, building)
 with the cell's ``spatial_id``, the building's ``osm_id``, ``overlap_area`` (the area, m², of the footprint inside the
-cell) and the building's ``category``. A building straddling cells has a row in each.
+cell), the building's ``category`` and ``subcategory``. A building straddling cells has a row in each.
 
 The ``osm_buildings`` extract keeps a building's use spread over eight tag columns (``building``, ``shop``,
 ``office``, ``amenity``, ``railway``, ``public_transport``, ``landuse``, ``leisure``); ``category`` condenses them to
@@ -12,6 +12,13 @@ unlike land use every building has a category: one with no use and no known type
 (``layer``, ``level``, ``tunnel``, ``location``) say where a building is rather than what it is for: a building they
 put below ground has no footprint at street level and is left out.
 
+``subcategory`` is the value of the tag that decided the category (``amenity=pub`` and ``building=pub`` both give
+``pub``; ``building=terrace`` gives ``terrace``). An ``unspecified`` or ``other`` building takes the first use tag it
+has instead (``building=yes`` + ``amenity=shelter`` gives ``shelter``), else its ``building`` value. A value of
+``yes`` decides a category (``shop=yes`` is a shop) but says nothing of what kind, so the subcategory comes from the
+category's next tag (``shop=yes`` + ``building=retail`` gives ``retail``), or is NULL: a bare ``building=yes`` has
+none.
+
 Footprints barely overlap one another, so unlike land use a cell's ``overlap_area`` summed per category is close to
 the area that category truly covers. The cells are the ones carrying crimes (:data:`~.beahiv.BEAHIV_UNIT`), so
 the step waits on ``beahiv_counts``.
@@ -20,7 +27,7 @@ the step waits on ``beahiv_counts``.
 import duckdb
 
 from safer_streets_tooling.beahiv_grid import KEY
-from safer_streets_tooling.osm_tags import Tags, category_case
+from safer_streets_tooling.osm_tags import Tags, category_case, first_value, subcategory_case
 from safer_streets_tooling.transform import beahiv
 from safer_streets_tooling.transform.base import Grid, TransformStep, table_exists
 from safer_streets_tooling.transform.beahiv_osm_landuse import CATEGORIES as LANDUSE_CATEGORIES
@@ -92,11 +99,20 @@ CATEGORIES: dict[str, Tags] = {
 UNSPECIFIED = "unspecified"
 OTHER = "other"
 
-# quoted, as in the extract: level and location are SQL keywords
+# The tags saying what a building is used for, in the order an uncategorised building takes its subcategory from
+USE_TAGS = ("amenity", "shop", "office", "leisure", "railway", "public_transport", "landuse")
+
+
+def _column(key: str) -> str:
+    """Quoted, as in the extract: level and location are SQL keywords."""
+    return f'"{key}"'
+
+
 CATEGORY = (
-    f"coalesce({category_case(CATEGORIES, lambda key: f'"{key}"')}, "
+    f"coalesce({category_case(CATEGORIES, _column)}, "
     f"CASE WHEN building = 'yes' THEN '{UNSPECIFIED}' ELSE '{OTHER}' END)"
 )
+SUBCATEGORY = subcategory_case(CATEGORIES, _column, otherwise=first_value((*USE_TAGS, "building"), _column))
 
 # Below ground by any of its level tags: an underground car park or ticket hall has no footprint at street level.
 # layer and level are free text ("-1", "-1;0", "B1"); only a plain negative number counts.
@@ -114,7 +130,10 @@ def build(con: duckdb.DuckDBPyConnection, replace: bool) -> None:
     """Create the lookup from every building above ground (see :func:`.beahiv_osm_landuse.build_lookup`)."""
     if not _available(con):
         return
-    features = f"SELECT osm_id, {CATEGORY} AS category, geom FROM {SOURCE} WHERE NOT ({UNDERGROUND})"
+    features = (
+        f"SELECT osm_id, {CATEGORY} AS category, {SUBCATEGORY} AS subcategory, geom FROM {SOURCE} "
+        f"WHERE NOT ({UNDERGROUND})"
+    )
     build_lookup(con, TABLE, features, replace)
 
 
@@ -129,7 +148,8 @@ STEP = TransformStep(
     grid=Grid.BEAHIV,
     description=(
         "Per BEAHIV cell, every overlapping OpenStreetMap building (osm_id) above ground with its use category "
-        "(its tags condensed to one value) and overlap_area, the area of the cell its footprint covers in m²."
+        "(its tags condensed to one value), subcategory (the value of the tag that decided it) and overlap_area, the area of the cell its footprint "
+        "covers in m²."
     ),
     depends_on=("beahiv_counts",),
     extract_inputs=(SOURCE,),

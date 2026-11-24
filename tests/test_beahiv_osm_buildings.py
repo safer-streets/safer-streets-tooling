@@ -79,8 +79,19 @@ def lookup() -> pd.DataFrame:
 
 
 def test_same_columns_as_the_landuse_lookup(lookup):
-    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_area", "category"]
+    assert list(lookup.columns) == ["spatial_id", "osm_id", "overlap_area", "category", "subcategory"]
     assert lookup.spatial_id.nunique() == 1  # the only cell with a crime
+
+
+def test_subcategory_is_the_value_that_decided_the_category(lookup):
+    subcategory = lookup.set_index("osm_id").subcategory
+    assert subcategory.dropna().to_dict() == {
+        "way/1": "house",
+        "way/2": "pub",  # amenity=pub, not building=house
+        "way/4": "bridge",  # other: its building value
+        "relation/7": "warehouse",
+    }
+    assert subcategory.isna()["way/3"]  # a bare building=yes says nothing more
 
 
 def test_overlap_is_the_area_of_the_footprint_inside_the_cell(lookup):
@@ -159,6 +170,39 @@ def test_category(tags, category):
     cols = ", ".join(f'?::VARCHAR AS "{key}"' for key in TAGS)
     values = [tags.get(key) for key in TAGS]
     assert duckdb.connect().execute(f"SELECT {step.CATEGORY} FROM (SELECT {cols})", values).fetchall() == [(category,)]
+
+
+@pytest.mark.parametrize(
+    ("tags", "subcategory"),
+    [
+        ({"building": "house", "amenity": "pub"}, "pub"),
+        ({"building": "pub"}, "pub"),  # the same pub, tagged by its building type
+        ({"building": "apartments", "shop": "convenience"}, "convenience"),
+        ({"building": "terrace"}, "terrace"),
+        ({"building": "yes", "amenity": "restaurant", "landuse": "retail"}, "restaurant"),
+        # unspecified / other: the first use tag, else the building value unless it is yes
+        ({"building": "yes", "amenity": "shelter"}, "shelter"),
+        ({"building": "yes", "railway": "signal_box"}, "signal_box"),
+        ({"building": "yes", "office": "vacant"}, None),  # NOT_A_VALUE says nothing
+        ({"building": "retail", "shop": "yes"}, "retail"),  # shop=yes decides the category, building=retail the kind
+        ({"building": "apartments", "shop": "yes"}, None),  # a shop of no known kind: apartments is residential's tag
+        ({"building": "yes", "shop": "yes"}, None),
+        ({"building": "yes", "amenity": "yes"}, None),
+        ({"building": "ruins", "amenity": "toilets"}, "toilets"),
+        ({"building": "ruins"}, "ruins"),
+        ({"building": "yes"}, None),
+    ],
+)
+def test_subcategory(tags, subcategory):
+    cols = ", ".join(f'?::VARCHAR AS "{key}"' for key in TAGS)
+    values = [tags.get(key) for key in TAGS]
+    assert duckdb.connect().execute(f"SELECT {step.SUBCATEGORY} FROM (SELECT {cols})", values).fetchall() == [
+        (subcategory,)
+    ]
+
+
+def test_use_tags_are_extract_columns():
+    assert set(step.USE_TAGS) <= set(TAGS)
 
 
 @pytest.mark.parametrize(

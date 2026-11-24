@@ -7,6 +7,60 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## OSM lookups gain a `subcategory` (#47)
+
+**Why**: `category` in `bh350eef_osm_landuse_lookup` and `bh350eef_osm_buildings_lookup` is deliberately coarse
+(`hospitality` lumps pubs, bars, nightclubs, restaurants and cafés). Analysis needs to split some of them back out
+(a pub is not a café for crime purposes) without re-joining to the extract on `osm_id`.
+
+**What**: Both lookups gain a `subcategory` column after `category`: the value of the tag that decided the category
+(`amenity=pub` → `pub`, `building=pub` → `pub`, `shop=supermarket` → `supermarket`, `building=terrace` →
+`terrace`). A new `osm_tags.subcategory_case` builds it from the same `CATEGORIES` dicts as `category_case`. An
+`unspecified` / `other` building, which no rule decided, takes its first use tag (`osm_tags.first_value` over
+`USE_TAGS`), else its `building` value. A value of `yes` (`osm_tags.NO_DETAIL`) decides a category but never
+becomes a subcategory: the category's next tag does, if any. Set in the shared `build_lookup`, so both tables keep
+identical columns.
+
+**Design decisions**:
+- **The deciding tag, not a raw tag column.** The first draft added the raw `amenity` column. It only explains a
+  category when amenity is what decided it: it is NULL for a `building=pub`, and says nothing of a
+  `shop=supermarket` or `building=terrace`. The deciding tag covers every category, and the raw tags stay one join
+  away in the extracts.
+- **Agreement with `category` by construction.** `subcategory_case` reuses `category_case`'s `WHEN`s (one per
+  category, in order); each `THEN` takes the first of that category's tags with a value that says what kind. A tag
+  of another category is never used. An alternative, a hand-written `{category: key}` map, would be a second rule set
+  to keep in step. The cost: within a category the dict's key order now matters (specific use before zone, e.g.
+  `amenity` before `landuse` in `education`), which the existing dicts already follow.
+- **Value only, not `key=value`.** Rejected `amenity=pub` style as harder to filter on; the price is that a value
+  doesn't say which key supplied it (`building=retail` and `landuse=retail` both give `retail`, though in different
+  categories on the buildings table, `shop` and `commercial`, so `category` + `subcategory` together disambiguate).
+- **Fallback skips `NOT_A_VALUE`** (`no` / `vacant` / `disused`), as the category rule does: `office=vacant` on a
+  `building=yes` gives NULL rather than `vacant`.
+- **`yes` decides the category but gives way to the next tag for the subcategory.** `shop=yes` (about 2.7k buildings
+  and polygons), `office=yes` (about 3.6k) and `leisure=yes` tell us what a feature is used for, so they keep their
+  category, but the value `yes` adds nothing as a subcategory. The skip is in the `THEN`, not the `WHEN`:
+  `shop=yes` + `building=retail` is a shop, subcategory `retail` (the shop category's own `building` tag); `shop=yes` +
+  `landuse=commercial` is a shop with none, not `commercial`. In the fallback `yes` is skipped like `NOT_A_VALUE`,
+  which also covers the bare `building=yes` that was a special case. Rejected: adding `yes` to `NOT_A_VALUE`, which
+  would stop `shop=yes` being a shop (and change the `poi` extract); and a `yes` naming its key (`shop=yes` →
+  `shop`), which would only repeat the category. The fallback (`otherwise`) is the `CASE`'s `ELSE`, so it applies
+  only to a feature in no category: an earlier draft `coalesce`d it, which let `building=retail` + `shop=yes` reach
+  the fallback.
+- **Bare `building=yes` footprints are kept** (5.46M, category `unspecified`, NULL subcategory): dropping them would
+  stop a cell's summed footprint measuring its built cover.
+- **Name the columns in `build_lookup` rather than passing `f.*` through.** A pass-through would let each lookup add
+  its own columns; the two tables are documented as having the same schema, and naming the columns keeps that a
+  property of the shared function, not a convention.
+- **The land-use filter is unchanged.** Polygons in no category are still left out: `subcategory` refines a
+  category, it doesn't widen what the table covers.
+
+**Follow-ups**:
+- The `poi` extract keeps its raw tag columns and could take a `subcategory` too, from the same helper, if consumers
+  want one shape across the three tables.
+- The transform cache is by mtime only, so a cached lookup built before this change is reloaded without
+  `subcategory`: delete the two `bh350eef_osm_*_lookup.parquet` (or `--all`) to rebuild. A step version or SQL hash
+  recorded with its outputs would make code changes invalidate the cache.
+
 ## Polygon overlaps in m², never percentages (#45)
 
 **Why**: Overlap measures were mixed. The overlap lookups and `*_geogs` gave m² (`overlap_area`,
