@@ -140,6 +140,8 @@ flowchart LR
    imd_scores_pct
    oac
    oac_classification
+   bh350eef_oa21
+   bh350eef_oac
    workplace_population
    residential_population
    bh350eef
@@ -180,6 +182,9 @@ flowchart LR
     open_roads --> schools
     local_authority_districts --> imd_scores_pct
     output_areas_2021 --> buildings
+    output_areas_2021 --> bh350eef_oa21
+    bh350eef_oa21 --> bh350eef_oac
+    oac -.-> bh350eef_oac
     osm_landuse --> osm_buildings
     osm_landuse --> poi
 
@@ -289,7 +294,7 @@ flowchart LR
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
-    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,workplace_population,residential_population,bh350eef,hotspots extract;
+    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,bh350eef_oa21,bh350eef_oac,workplace_population,residential_population,bh350eef,hotspots extract;
     class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions,bh350eef_osm_landuse_lookup,bh350eef_osm_buildings_lookup transform;
     class h3_retail_centres_lookup,hotspots_retail_centre_lookup,bh350eef_retail_centre_lookup deprecated;
 ```
@@ -399,6 +404,32 @@ replaced Overture Maps places (see JOURNAL.md).
 OSM coverage of the `streetlights` and `cctv` layers is uneven — see
 [Data-quality caveats](#data-quality-caveats) below.
 
+### OAC on the BEAHIV grid
+
+Two attribute-only extracts put the 2021 Output Area Classification on the BEAHIV grid, for every cell an
+output area touches (~1.44m cells, not just the crime cells the BEAHIV transform steps use — hence an
+extract rather than a transform step):
+
+- `bh350eef_oa21` — one row per (cell, OA): `spatial_id`, `oa21cd` and `overlap_area`, the m² of the OA
+  inside the cell, from the same polyfill + clip `bh350eef` applies to the force boundaries.
+- `bh350eef_oac` — one row per cell: `spatial_id`, its OAC subgroup `code` (decode it with
+  `oac_classification`; the group and supergroup are prefixes), `diversity` and `n_oa`.
+
+A cell's OAC input vector is the overlap-area-weighted mean of its OAs' vectors (asinh +
+range-standardised, 60 variables), classified **top-down** against the Preview OAC k-means centroids:
+the nearest supergroup, then the nearest group within it, then the nearest subgroup within that. This is
+how the published labels were made, and on the OA vectors it reproduces every published E&W label; the
+extract checks that against `oac` when that table is present and fails if any label differs.
+`diversity` uses the vectors only, not labels: the weighted mean pairwise distance between the cell's OA
+vectors (0 for a cell inside one OA). Area weights treat an OA's population as spread evenly over it, so
+a cell overlapping only the empty part of an OA (e.g. a care home's grounds) can still score high.
+
+The OA vectors come from the safer-streets fork of the UK OAC repository rather than the upstream one:
+upstream's E&W inputs were recalculated after the clustering and reproduce only 70–81% of the published
+subgroups, depending on the rule, so the fork's E&W rows are the Preview inputs the labels were actually built from
+([safer-streets/Output_Area_Classification#1](https://github.com/safer-streets/Output_Area_Classification/issues/1)).
+Both sources are public and pinned to commits in `config/data_sources.json` (`oac_vectors`).
+
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` when the transform imports it (the coordinates are
 the contract).
@@ -434,6 +465,7 @@ absence). Registry order respects `depends_on`:
 | `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network). Only schools that take pupils aged 13+ (GIAS `statutoryhighage > 12`) are kept, Welsh schools are filtered by name instead — see [Welsh schools](#welsh-schools-are-filtered-by-name) |
 | `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
 | `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
+| `bh350eef_oa21`, `bh350eef_oac` | [bh350eef_oac.py](src/safer_streets_tooling/extract/bh350eef_oac.py) | no | `bh350eef_oa21` on `output_areas_2021`; `bh350eef_oac` on `bh350eef_oa21`, and on `oac` only to check its labels when that table exists — see [OAC on the BEAHIV grid](#oac-on-the-beahiv-grid) |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
 | `residential_population` | [residential_population.py](src/safer_streets_tooling/extract/residential_population.py) | no | — |
 | `bh350eef` | [bh350eef.py](src/safer_streets_tooling/extract/bh350eef.py) | no | `police_force_areas` (the grid is derived from the force boundaries) |

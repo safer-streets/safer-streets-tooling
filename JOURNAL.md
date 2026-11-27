@@ -7,6 +7,62 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
+## OAC on the BEAHIV grid (`bh350eef_oa21`, `bh350eef_oac`)
+
+**Why**: The OAC labels OAs, but the analysis unit is the BEAHIV cell. A cell needs its own OAC subgroup,
+consistent with the published classification, and a measure of how mixed the OAs it covers are. The
+working version was `oa-classification.ipynb` in safer-streets-eda; this moves it into the pipeline.
+
+**What**: A new module, `extract/bh350eef_oac.py`, with two attribute-only datasets:
+- `bh350eef_oa21`: one row per (cell, OA) with `overlap_area` (m²). Each OA goes through `bh350eef`'s
+  `polyfill_force`, so the clip is the one already used for the grid.
+- `bh350eef_oac`: one row per cell with `code` (OAC subgroup), `diversity` and `n_oa`.
+
+The OA vectors and the Preview centroids are downloaded from pinned GitHub commits (`oac_vectors` in
+`config/data_sources.json`) and cached in `raw`.
+
+*Real run* (national, 188,880 OAs, under an 8 GB memory cap): `bh350eef_oa21` takes 88 s and gives 2,541,160
+rows; `bh350eef_oac` takes 7 s and gives 1,438,812 cells (the notebook's count), with a 3.6 GB peak. All 188,880
+published OA labels are reproduced. 52 subgroups appear. Half the cells lie inside one OA (diversity 0); the
+maximum is 1.73, for comparison with ~1.57 between two random OAs nationally.
+
+**Design decisions**:
+- **An extract, not a transform step.** The BEAHIV transform cells are the crime cells only. The OAC is
+  wanted for every cell an OA touches, and `bh350eef` already sets the precedent of a grid table derived from
+  boundaries in the extract phase.
+- **The fork's vectors, not upstream's.** The upstream repo's published E&W labels are the Preview OAC,
+  copied unchanged, but its E&W inputs were recalculated afterwards and reproduce only 70–81% of them. Our
+  fork replaces the E&W rows with the Preview inputs (safer-streets/Output_Area_Classification#1, #2), which
+  reproduce 100%. Scotland/NI rows are dropped: no OA there is on the grid, and they lack v40/v41.
+- **Top-down classification.** The Preview OAC was k-means at each level within the parent, so assigning a
+  vector to the nearest supergroup, then group, then subgroup reproduces the labels exactly. A flat
+  nearest-subgroup rule agrees for only ~82% of OAs on the same inputs.
+- **A cell vector is the overlap-weighted mean of its OAs' vectors**, then classified. Averaging the
+  transformed vectors (rather than pooling raw counts and transforming) matches how the centroids
+  themselves are formed, and needs no raw counts or the unpublished Preview min/max.
+- **Diversity from the vectors only**: the weighted mean pairwise distance, sum_ij w_i w_j |x_i - x_j|.
+  Alternatives considered in the notebook: the weighted variance (the same with squared distances) let a
+  single extreme OA dominate (a care home's OA scored highest nationally); measures over the labels (entropy,
+  Rao's Q, a hierarchy-weighted Gini-Simpson) were rejected because OAC labels both split near-identical OAs
+  that sit near a boundary and lump socially mixed ones (Pimlico: one supergroup, but council estates beside
+  private flats). The pairs are enumerated as rows (r, r+k) of the cell-sorted overlaps, one vectorised pass
+  per offset, chunked to bound memory.
+- **Area weights.** They assume an OA's population is spread evenly. Building-based resident weights (each
+  OA's residents shared over its residential floor area, as `population_counts` does with building counts)
+  fix the care-home case but were left for now.
+- **Self-check against `oac`.** `bh350eef_oac` depends on `oac` only so it runs after it; when the parquet
+  exists, classifying the OA vectors must reproduce every published label or the extract fails. A failed
+  upstream node still lets its dependents run, so a missing `oac` (a manual GeoDS download) just skips the
+  check.
+- **`code`**, as in `oac`, so the result joins straight onto `oac_classification`.
+
+**Follow-ups**:
+- Resident weights from `buildings` (floor area rather than counts, so a tower block isn't one home), for
+  the diversity and possibly the label.
+- `v23` ("Other religion") in the Preview E&W rows is all non-Christian religions; `v42` (SIR) uses a
+  different age standardisation from the Final S/NI rows. Neither affects the E&W classification, but a
+  consumer reading the vectors should know.
+
 ## Polygon overlaps in m², never percentages (#45)
 
 **Why**: Overlap measures were mixed. The overlap lookups and `*_geogs` gave m² (`overlap_area`,

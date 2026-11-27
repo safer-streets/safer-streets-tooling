@@ -9,6 +9,7 @@ it below.
 
 from safer_streets_tooling.extract import (
     bh350eef,
+    bh350eef_oac,
     boundaries,
     buildings,
     cctv,
@@ -52,6 +53,7 @@ DATASETS: tuple[Dataset, ...] = (
     schools.DATASET,  # depends on open_roads
     imd.DATASET,  # depends on local_authority_districts
     *oac.DATASETS,
+    *bh350eef_oac.DATASETS,  # bh350eef_oa21 (from output_areas_2021), then bh350eef_oac (checked against oac)
     workplace_population.DATASET,
     residential_population.DATASET,
     bh350eef.DATASET,  # depends on police_force_areas
