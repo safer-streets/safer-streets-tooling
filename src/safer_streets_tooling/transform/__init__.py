@@ -22,6 +22,7 @@ from safer_streets_tooling.transform import (
     beahiv_geo_lookups,
     beahiv_geogs,
     beahiv_lookups,
+    beahiv_oac,
     beahiv_osm_buildings,
     beahiv_osm_landuse,
     beahiv_retail_centre_lookups,
@@ -69,6 +70,7 @@ STEPS: tuple[TransformStep, ...] = (
     beahiv_descriptions.STEP,  # depends on beahiv_geogs + beahiv_lookups: names for every cell
     beahiv_osm_landuse.STEP,  # depends on beahiv_counts: OSM land-use polygons per BEAHIV cell, with the area each covers
     beahiv_osm_buildings.STEP,  # depends on beahiv_counts: OSM buildings per BEAHIV cell, with the area each covers
+    beahiv_oac.STEP,  # independent: every cell an OA touches (from the bh350eef extract), not just the crime cells
 )
 
 

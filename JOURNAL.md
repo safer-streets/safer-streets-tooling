@@ -7,36 +7,52 @@ Write the entry as part of the change, not after the fact.
 
 <!-- New entries go directly below this line. -->
 
-## OAC on the BEAHIV grid (`bh350eef_oa21`, `bh350eef_oac`)
+## OAC on the BEAHIV grid (`oac_features`, `oac_centroids`; `beahiv_oac` → `bh350eef_oa21`, `bh350eef_oac`)
 
 **Why**: The OAC labels OAs, but the analysis unit is the BEAHIV cell. A cell needs its own OAC subgroup,
 consistent with the published classification, and a measure of how mixed the OAs it covers are. The
 working version was `oa-classification.ipynb` in safer-streets-eda; this moves it into the pipeline.
 
-**What**: A new module, `extract/bh350eef_oac.py`, with two attribute-only datasets:
-- `bh350eef_oa21`: one row per (cell, OA) with `overlap_area` (m²). Each OA goes through `bh350eef`'s
-  `polyfill_force`, so the clip is the one already used for the grid.
-- `bh350eef_oac`: one row per cell with `code` (OAC subgroup), `diversity` and `n_oa`.
+**What**:
+- `extract/oac.py` gains two attribute-only tables, downloaded from public repositories pinned to commits
+  (`oac` in `config/data_sources.json`) and cached in `raw`:
+  - `oac_features`: each E&W OA's 60 classification inputs (`v01`–`v60`, asinh + range-standardised).
+  - `oac_centroids`: the k-means centroid of every supergroup, group and subgroup, one row per `code`.
+- A new `Grid.BEAHIV` transform step, `beahiv_oac`, builds:
+  - `bh350eef_oa21`: one row per (cell, OA) with `overlap_area` (m²), a spatial join of the `bh350eef`
+    extract's cells against `output_areas_2021`.
+  - `bh350eef_oac`: one row per cell with `code` (OAC subgroup), `diversity` and `n_oa`.
 
-The OA vectors and the Preview centroids are downloaded from pinned GitHub commits (`oac_vectors` in
-`config/data_sources.json`) and cached in `raw`.
-
-*Real run* (national, 188,880 OAs, under an 8 GB memory cap): `bh350eef_oa21` takes 88 s and gives 2,541,160
-rows; `bh350eef_oac` takes 7 s and gives 1,438,812 cells (the notebook's count), with a 3.6 GB peak. All 188,880
-published OA labels are reproduced. 52 subgroups appear. Half the cells lie inside one OA (diversity 0); the
-maximum is 1.73, for comparison with ~1.57 between two random OAs nationally.
+*Real run* (national, the transform's 4 threads, under a 10 GB memory cap): the two extracts take seconds
+(188,880 feature rows; 81 centroids = 8 + 21 + 52). The step takes 22 s with a 4.1 GB peak: 2,541,154
+overlaps and 1,438,807 cells. All 188,880 published OA labels are reproduced. 52 subgroups appear. Half the
+cells lie inside one OA (diversity 0); the maximum is 1.73, against ~1.57 between two random OAs nationally.
+The results match the notebook exactly.
 
 **Design decisions**:
-- **An extract, not a transform step.** The BEAHIV transform cells are the crime cells only. The OAC is
-  wanted for every cell an OA touches, and `bh350eef` already sets the precedent of a grid table derived from
-  boundaries in the extract phase.
-- **The fork's vectors, not upstream's.** The upstream repo's published E&W labels are the Preview OAC,
+- **Inputs in the `oac` extract, the grid work in a transform step.** The features and centroids are
+  properties of the OAC, alongside its labels and names; projecting them onto a grid is transform work.
+  The step reads only extracted tables, so it never downloads.
+- **Every cell an OA touches, not just the crime cells.** The OAC describes where people live, which
+  matters for cells without crime too. The cells come from the `bh350eef` extract (the whole grid), so the
+  step needs neither `beahiv_counts` nor the BEAHIV UDFs and depends on no other step. Its cells are
+  therefore a superset of `bh350eef_geogs`'s.
+- **The overlaps as an SQL spatial join**, like the other lookups, rather than polyfilling each OA in
+  Python (the first draft of this PR): 14 s against 88 s, and areas identical to 1e-11 m². The join can only
+  find cells the `bh350eef` extract has, which is built from the force boundaries; 5 coastal cells where an
+  OA pokes past them (6,181 m² in all) are missed. `bh350eef` has a row per (cell, force), so `ANY_VALUE`
+  keeps one area for a cell straddling two forces.
+- **Classification and diversity in numpy**, on the step's cursor, with the result registered back as a
+  table. They're vector arithmetic over 60 variables, which as SQL would mean generated 60-term
+  expressions.
+- **The fork's features, not upstream's.** The upstream repo's published E&W labels are the Preview OAC,
   copied unchanged, but its E&W inputs were recalculated afterwards and reproduce only 70–81% of them. Our
   fork replaces the E&W rows with the Preview inputs (safer-streets/Output_Area_Classification#1, #2), which
   reproduce 100%. Scotland/NI rows are dropped: no OA there is on the grid, and they lack v40/v41.
 - **Top-down classification.** The Preview OAC was k-means at each level within the parent, so assigning a
   vector to the nearest supergroup, then group, then subgroup reproduces the labels exactly. A flat
-  nearest-subgroup rule agrees for only ~82% of OAs on the same inputs.
+  nearest-subgroup rule agrees for only ~82% of OAs on the same inputs. One centroid table holds all three
+  levels; a code's length gives its level and its prefix its parent.
 - **A cell vector is the overlap-weighted mean of its OAs' vectors**, then classified. Averaging the
   transformed vectors (rather than pooling raw counts and transforming) matches how the centroids
   themselves are formed, and needs no raw counts or the unpublished Preview min/max.
@@ -50,10 +66,9 @@ maximum is 1.73, for comparison with ~1.57 between two random OAs nationally.
 - **Area weights.** They assume an OA's population is spread evenly. Building-based resident weights (each
   OA's residents shared over its residential floor area, as `population_counts` does with building counts)
   fix the care-home case but were left for now.
-- **Self-check against `oac`.** `bh350eef_oac` depends on `oac` only so it runs after it; when the parquet
-  exists, classifying the OA vectors must reproduce every published label or the extract fails. A failed
-  upstream node still lets its dependents run, so a missing `oac` (a manual GeoDS download) just skips the
-  check.
+- **Self-check against `oac`.** When `oac` is present, classifying the OA features must reproduce every
+  published label or the step fails. `oac` is in `extract_inputs`, so a refreshed `oac` re-runs the check; a
+  missing one (a manual GeoDS download) just skips it.
 - **`code`**, as in `oac`, so the result joins straight onto `oac_classification`.
 
 **Follow-ups**:
@@ -61,7 +76,7 @@ maximum is 1.73, for comparison with ~1.57 between two random OAs nationally.
   the diversity and possibly the label.
 - `v23` ("Other religion") in the Preview E&W rows is all non-Christian religions; `v42` (SIR) uses a
   different age standardisation from the Final S/NI rows. Neither affects the E&W classification, but a
-  consumer reading the vectors should know.
+  consumer reading `oac_features` should know.
 
 ## Polygon overlaps in m², never percentages (#45)
 

@@ -140,8 +140,8 @@ flowchart LR
    imd_scores_pct
    oac
    oac_classification
-   bh350eef_oa21
-   bh350eef_oac
+   oac_features
+   oac_centroids
    workplace_population
    residential_population
    bh350eef
@@ -174,6 +174,8 @@ flowchart LR
    bh350eef_descriptions
    bh350eef_osm_landuse_lookup
    bh350eef_osm_buildings_lookup
+   bh350eef_oa21
+   bh350eef_oac
 
    direction LR
 
@@ -182,9 +184,6 @@ flowchart LR
     open_roads --> schools
     local_authority_districts --> imd_scores_pct
     output_areas_2021 --> buildings
-    output_areas_2021 --> bh350eef_oa21
-    bh350eef_oa21 --> bh350eef_oac
-    oac -.-> bh350eef_oac
     osm_landuse --> osm_buildings
     osm_landuse --> poi
 
@@ -289,13 +288,19 @@ flowchart LR
     osm_landuse --> bh350eef_osm_landuse_lookup
     bh350eef_crime_counts --> bh350eef_osm_buildings_lookup
     osm_buildings --> bh350eef_osm_buildings_lookup
+    bh350eef --> bh350eef_oa21
+    output_areas_2021 --> bh350eef_oa21
+    bh350eef_oa21 --> bh350eef_oac
+    oac_features --> bh350eef_oac
+    oac_centroids --> bh350eef_oac
+    oac -.-> bh350eef_oac
 
     %% colour by phase, tuned for dark backgrounds (white text on saturated fills, light strokes)
     classDef extract fill:#1f6feb,stroke:#79c0ff,stroke-width:1px,color:#ffffff;
     classDef transform fill:#8957e5,stroke:#d2a8ff,stroke-width:1px,color:#ffffff;
     classDef deprecated fill:#6e7681,stroke:#d2a8ff,stroke-width:1px,stroke-dasharray:4 3,color:#ffffff;
-    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,bh350eef_oa21,bh350eef_oac,workplace_population,residential_population,bh350eef,hotspots extract;
-    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions,bh350eef_osm_landuse_lookup,bh350eef_osm_buildings_lookup transform;
+    class crime_data,crime_coverage,police_force_areas,local_authority_districts,msoa_2021,lsoa_2021,output_areas_2021,open_greenspace,land_cover,osm_landuse,osm_buildings,buildings,retail_centres,open_roads,poi,naptan,station_usage,food_outlets,streetlights,cctv,schools,imd_scores_pct,oac,oac_classification,oac_features,oac_centroids,workplace_population,residential_population,bh350eef,hotspots extract;
+    class h3r9_crime_counts,geog_crime_counts,beahiv_counts_other,h3r9_streetlight_counts,h3r9_building_counts,h3r9_population_counts,h3r9_geogs,hotspot_counts,hotspot_geo_lookups,hotspot_lookups,hotspots_geogs,hotspots_descriptions,bh350eef_crime_counts,beahiv_geo_lookups,beahiv_lookups,bh350eef_geogs,bh350eef_descriptions,bh350eef_osm_landuse_lookup,bh350eef_osm_buildings_lookup,bh350eef_oa21,bh350eef_oac transform;
     class h3_retail_centres_lookup,hotspots_retail_centre_lookup,bh350eef_retail_centre_lookup deprecated;
 ```
 
@@ -406,29 +411,33 @@ OSM coverage of the `streetlights` and `cctv` layers is uneven — see
 
 ### OAC on the BEAHIV grid
 
-Two attribute-only extracts put the 2021 Output Area Classification on the BEAHIV grid, for every cell an
-output area touches (~1.44m cells, not just the crime cells the BEAHIV transform steps use — hence an
-extract rather than a transform step):
+The `oac` extract group has four attribute-only tables. `oac` (the label per OA) and `oac_classification`
+(the names per code) are manual GeoDS downloads. `oac_features` (each E&W OA's 60 classification inputs,
+asinh + range-standardised) and `oac_centroids` (the k-means centroid of every supergroup, group and
+subgroup, one row per code) are downloaded from public repositories pinned in `config/data_sources.json`.
+
+The published E&W labels are the interim Preview OAC's, copied unchanged into the final OAC, so the
+centroids are the Preview's and the features come from the safer-streets fork of the final OAC repository,
+whose E&W rows were replaced with the Preview inputs: upstream's own E&W inputs were recalculated after
+the clustering and reproduce only 70–81% of the published subgroups, depending on the rule
+([safer-streets/Output_Area_Classification#1](https://github.com/safer-streets/Output_Area_Classification/issues/1)).
+
+The `beahiv_oac` transform step puts the classification on the BEAHIV grid, for every cell an output area
+touches (~1.44m cells from the `bh350eef` extract, not just the crime cells the other BEAHIV steps use):
 
 - `bh350eef_oa21` — one row per (cell, OA): `spatial_id`, `oa21cd` and `overlap_area`, the m² of the OA
-  inside the cell, from the same polyfill + clip `bh350eef` applies to the force boundaries.
+  inside the cell.
 - `bh350eef_oac` — one row per cell: `spatial_id`, its OAC subgroup `code` (decode it with
   `oac_classification`; the group and supergroup are prefixes), `diversity` and `n_oa`.
 
-A cell's OAC input vector is the overlap-area-weighted mean of its OAs' vectors (asinh +
-range-standardised, 60 variables), classified **top-down** against the Preview OAC k-means centroids:
-the nearest supergroup, then the nearest group within it, then the nearest subgroup within that. This is
-how the published labels were made, and on the OA vectors it reproduces every published E&W label; the
-extract checks that against `oac` when that table is present and fails if any label differs.
-`diversity` uses the vectors only, not labels: the weighted mean pairwise distance between the cell's OA
-vectors (0 for a cell inside one OA). Area weights treat an OA's population as spread evenly over it, so
-a cell overlapping only the empty part of an OA (e.g. a care home's grounds) can still score high.
-
-The OA vectors come from the safer-streets fork of the UK OAC repository rather than the upstream one:
-upstream's E&W inputs were recalculated after the clustering and reproduce only 70–81% of the published
-subgroups, depending on the rule, so the fork's E&W rows are the Preview inputs the labels were actually built from
-([safer-streets/Output_Area_Classification#1](https://github.com/safer-streets/Output_Area_Classification/issues/1)).
-Both sources are public and pinned to commits in `config/data_sources.json` (`oac_vectors`).
+A cell's vector is the overlap-area-weighted mean of its OAs' features, classified **top-down** against
+`oac_centroids`: the nearest supergroup, then the nearest group within it, then the nearest subgroup
+within that. This is how the published labels were made, and on the OA features it reproduces every
+published E&W label; the step checks that against `oac` when that table is present and fails if any label
+differs. `diversity` uses the vectors only, not labels: the weighted mean pairwise distance between the
+cell's OA vectors (0 for a cell inside one OA). Area weights treat an OA's population as spread evenly
+over it, so a cell overlapping only the empty part of an OA (e.g. a care home's grounds) can still score
+high.
 
 Geometry is British National Grid (EPSG:27700) by convention; the DuckDB GeoParquet writer tags it
 `OGC:CRS84`, which is stripped to a bare `GEOMETRY` when the transform imports it (the coordinates are
@@ -464,8 +473,7 @@ absence). Registry order respects `depends_on`:
 | `cctv` | [cctv.py](src/safer_streets_tooling/extract/cctv.py) | no | — |
 | `schools` | [schools.py](src/safer_streets_tooling/extract/schools.py) | no | `open_roads` (walk-isochrone network). Only schools that take pupils aged 13+ (GIAS `statutoryhighage > 12`) are kept, Welsh schools are filtered by name instead — see [Welsh schools](#welsh-schools-are-filtered-by-name) |
 | `imd_scores_pct` | [imd.py](src/safer_streets_tooling/extract/imd.py) | no | `local_authority_districts` (Welsh LA-name→code lookup) |
-| `oac`, `oac_classification` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — |
-| `bh350eef_oa21`, `bh350eef_oac` | [bh350eef_oac.py](src/safer_streets_tooling/extract/bh350eef_oac.py) | no | `bh350eef_oa21` on `output_areas_2021`; `bh350eef_oac` on `bh350eef_oa21`, and on `oac` only to check its labels when that table exists — see [OAC on the BEAHIV grid](#oac-on-the-beahiv-grid) |
+| `oac`, `oac_classification`, `oac_features`, `oac_centroids` | [oac.py](src/safer_streets_tooling/extract/oac.py) | no | — (the labels and names are manual GeoDS downloads; the features and centroids are downloaded — see [OAC on the BEAHIV grid](#oac-on-the-beahiv-grid)) |
 | `workplace_population` | [workplace_population.py](src/safer_streets_tooling/extract/workplace_population.py) | no | — |
 | `residential_population` | [residential_population.py](src/safer_streets_tooling/extract/residential_population.py) | no | — |
 | `bh350eef` | [bh350eef.py](src/safer_streets_tooling/extract/bh350eef.py) | no | `police_force_areas` (the grid is derived from the force boundaries) |
@@ -548,6 +556,7 @@ each exposing a `STEP`. Each step writes the relations it produces out as parque
 | `beahiv_descriptions` | [beahiv_descriptions.py](src/safer_streets_tooling/transform/beahiv_descriptions.py) | `beahiv` | `bh350eef_descriptions` (`short_location`, `description` + the named components, including `retail_centre`) | `beahiv_lookups`, `beahiv_geogs` |
 | `beahiv_osm_landuse` | [beahiv_osm_landuse.py](src/safer_streets_tooling/transform/beahiv_osm_landuse.py) | `beahiv` | `bh350eef_osm_landuse_lookup` (`spatial_id`, `osm_id`, `overlap_area`, `category`) | `beahiv_counts` |
 | `beahiv_osm_buildings` | [beahiv_osm_buildings.py](src/safer_streets_tooling/transform/beahiv_osm_buildings.py) | `beahiv` | `bh350eef_osm_buildings_lookup` (`spatial_id`, `osm_id`, `overlap_area`, `category`) | `beahiv_counts` |
+| `beahiv_oac` | [beahiv_oac.py](src/safer_streets_tooling/transform/beahiv_oac.py) | `beahiv` | `bh350eef_oa21` (`spatial_id`, `oa21cd`, `overlap_area`), `bh350eef_oac` (`spatial_id`, `code`, `diversity`, `n_oa`) — every cell an OA touches, not just the crime cells; see [OAC on the BEAHIV grid](#oac-on-the-beahiv-grid) | — |
 
 ### Spatial units
 
