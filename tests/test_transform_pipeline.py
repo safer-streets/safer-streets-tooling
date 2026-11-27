@@ -95,6 +95,7 @@ def test_grids_narrow_the_pipeline_to_those_families():
         "beahiv_descriptions",
         "beahiv_osm_landuse",
         "beahiv_osm_buildings",
+        "beahiv_oac",
     }
     assert beahiv_only.nodes["beahiv_lookups"].dependency_ids == ("beahiv_counts",)
 
