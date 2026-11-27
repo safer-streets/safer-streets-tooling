@@ -14,8 +14,8 @@ consistent with the published classification, and a measure of how mixed the OAs
 working version was `oa-classification.ipynb` in safer-streets-eda; this moves it into the pipeline.
 
 **What**:
-- `extract/oac.py` gains two attribute-only tables, downloaded from public repositories pinned to commits
-  (`oac` in `config/data_sources.json`) and cached in `raw`:
+- `extract/oac.py` gains two attribute-only tables, downloaded from the safer-streets fork of the OAC
+  repository pinned to one commit (`oac` in `config/data_sources.json`) and cached in `raw`:
   - `oac_features`: each E&W OA's 60 classification inputs (`v01`–`v60`, asinh + range-standardised).
   - `oac_centroids`: the k-means centroid of every supergroup, group and subgroup, one row per `code`.
 - A new `Grid.BEAHIV` transform step, `beahiv_oac`, builds:
@@ -49,6 +49,11 @@ The results match the notebook exactly.
   copied unchanged, but its E&W inputs were recalculated afterwards and reproduce only 70–81% of them. Our
   fork replaces the E&W rows with the Preview inputs (safer-streets/Output_Area_Classification#1, #2), which
   reproduce 100%. Scotland/NI rows are dropped: no OA there is on the grid, and they lack v40/v41.
+- **Centroids from the fork too, not the Preview repo.** The Preview centroids were first downloaded from
+  jakubwyszomierski/OAC2021-2; the fork now vendors them unchanged in `data/preview/`
+  (safer-streets/Output_Area_Classification#3; byte-identical to OAC2021-2 at `c058eee`). All four URLs now
+  pin the same fork commit, so one repository we control is the only source, and the inputs can't drift
+  apart. The file names are unchanged, so cached raw copies are still used.
 - **Top-down classification.** The Preview OAC was k-means at each level within the parent, so assigning a
   vector to the nearest supergroup, then group, then subgroup reproduces the labels exactly. A flat
   nearest-subgroup rule agrees for only ~82% of OAs on the same inputs. One centroid table holds all three

@@ -19,13 +19,13 @@ Like ``retail_centres`` / ``land_cover`` the labels need a login (GeoDS), so the
 downloaded manually into the data directory's ``raw`` folder. Both have stray surrounding whitespace in
 some codes/names, which is trimmed.
 
-The features and centroids are open and downloaded (pinned in the catalogue). The published E&W labels
-are the interim Preview OAC's, copied unchanged into the final OAC, so both come from the Preview: the
-centroids from its repository (jakubwyszomierski/OAC2021-2), and the features from the safer-streets fork
-of the final OAC repository, whose E&W rows were replaced with the Preview inputs — the final repo's own
-E&W inputs were recalculated after the clustering and don't reproduce the labels
-(safer-streets/Output_Area_Classification#1). Scotland/NI rows are dropped: they lack two of the
-variables, and no OA there is in ``output_areas_2021``.
+The features and centroids are open and downloaded from the safer-streets fork of the final OAC
+repository (pinned in the catalogue). The published E&W labels are the interim Preview OAC's, copied
+unchanged into the final OAC, so both come from the Preview: the centroids are the Preview's, vendored
+unchanged in the fork from its repository (jakubwyszomierski/OAC2021-2), and the fork's E&W feature rows
+were replaced with the Preview inputs — the final repo's own E&W inputs were recalculated after the
+clustering and don't reproduce the labels (safer-streets/Output_Area_Classification#1). Scotland/NI rows
+are dropped: they lack two of the variables, and no OA there is in ``output_areas_2021``.
 """
 
 import re

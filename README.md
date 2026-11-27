@@ -414,11 +414,13 @@ OSM coverage of the `streetlights` and `cctv` layers is uneven — see
 The `oac` extract group has four attribute-only tables. `oac` (the label per OA) and `oac_classification`
 (the names per code) are manual GeoDS downloads. `oac_features` (each E&W OA's 60 classification inputs,
 asinh + range-standardised) and `oac_centroids` (the k-means centroid of every supergroup, group and
-subgroup, one row per code) are downloaded from public repositories pinned in `config/data_sources.json`.
+subgroup, one row per code) are both downloaded from the safer-streets fork of the final OAC repository,
+pinned to one commit in `config/data_sources.json`.
 
 The published E&W labels are the interim Preview OAC's, copied unchanged into the final OAC, so the
-centroids are the Preview's and the features come from the safer-streets fork of the final OAC repository,
-whose E&W rows were replaced with the Preview inputs: upstream's own E&W inputs were recalculated after
+centroids are the Preview's (vendored unchanged in the fork from
+[jakubwyszomierski/OAC2021-2](https://github.com/jakubwyszomierski/OAC2021-2)) and the fork's E&W feature
+rows were replaced with the Preview inputs: upstream's own E&W inputs were recalculated after
 the clustering and reproduce only 70–81% of the published subgroups, depending on the rule
 ([safer-streets/Output_Area_Classification#1](https://github.com/safer-streets/Output_Area_Classification/issues/1)).
 
